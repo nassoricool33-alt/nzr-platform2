@@ -4,6 +4,8 @@ const RATE_LIMIT = 20;
 const WINDOW_MS = 60 * 1000;
 
 const ALLOWED_ORIGINS = [
+  'https://nzr-platform2.vercel.app',
+  'https://nzr-platform2-git-main-nassoricool33-alt.vercel.app',
   'https://nzr-platform.vercel.app',
   'http://localhost:3000',
 ];
