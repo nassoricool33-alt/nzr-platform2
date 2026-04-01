@@ -26,56 +26,42 @@ function checkRateLimit(ip) {
   return true;
 }
 
-function setSecurityHeaders(res) {
-  res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.setHeader('X-Frame-Options', 'DENY');
-  res.setHeader('X-XSS-Protection', '1; mode=block');
-  res.setHeader('Referrer-Policy', 'no-referrer');
-}
-
 module.exports = function handler(req, res) {
   const origin = req.headers.origin;
   if (origin && ALLOWED_ORIGINS.includes(origin)) {
     res.setHeader('Access-Control-Allow-Origin', origin);
+  } else {
+    res.setHeader('Access-Control-Allow-Origin', '*');
   }
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-  setSecurityHeaders(res);
+  res.setHeader('X-Content-Type-Options', 'nosniff');
 
   if (req.method === 'OPTIONS') return res.status(200).end();
+  if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
-  if (req.method !== 'GET') {
-    return res.status(405).json({ error: 'Method not allowed' });
-  }
-
-  const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
+  const ip = req.headers['x-forwarded-for'] || 'unknown';
   if (!checkRateLimit(ip)) {
-    return res.status(429).json({ error: 'Too many requests. Please wait a moment.' });
+    return res.status(429).json({ error: 'Too many requests. Please wait.' });
   }
 
-  const { searchParams } = new URL(req.url, 'http://localhost');
-  const rawSymbol = searchParams.get('symbol') || '';
-  const symbol = rawSymbol.toUpperCase().replace(/[^A-Z0-9.\-]/g, '').slice(0, 10);
+  const symbol = (req.query.symbol || '').replace(/[^A-Z0-9.\-]/g, '').slice(0, 10).toUpperCase();
 
-  if (!symbol) {
-    return res.status(400).json({ error: 'Symbol is required' });
-  }
+  if (!symbol) return res.status(400).json({ error: 'Symbol is required' });
 
   const key = process.env.FINNHUB_API_KEY;
-  if (!key) {
-    return res.status(500).json({ error: 'Market data service not configured' });
-  }
+  if (!key) return res.status(500).json({ error: 'Market data service not configured' });
 
-  const url = `https://finnhub.io/api/v1/quote?symbol=${symbol}&token=${key}`;
+  const url = 'https://finnhub.io/api/v1/quote?symbol=' + symbol + '&token=' + key;
 
-  https.get(url, (apiRes) => {
+  https.get(url, function(apiRes) {
     let data = '';
-    apiRes.on('data', chunk => data += chunk);
-    apiRes.on('end', () => {
+    apiRes.on('data', function(chunk) { data += chunk; });
+    apiRes.on('end', function() {
       try {
         const d = JSON.parse(data);
-        if (!d || d.c === undefined || d.c === 0) {
-          return res.status(404).json({ error: 'No data found for symbol: ' + symbol });
+        if (!d || !d.c || d.c === 0) {
+          return res.status(404).json({ error: 'No data for: ' + symbol });
         }
         return res.status(200).json({
           price: d.c,
@@ -86,12 +72,10 @@ module.exports = function handler(req, res) {
           change: ((d.c - d.pc) / d.pc) * 100
         });
       } catch (e) {
-        console.error(JSON.stringify({ timestamp: new Date().toISOString(), error: 'Parse error', endpoint: '/api/quote' }));
-        return res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
+        return res.status(500).json({ error: 'Failed to parse market data' });
       }
     });
-  }).on('error', (e) => {
-    console.error(JSON.stringify({ timestamp: new Date().toISOString(), error: e.message, endpoint: '/api/quote' }));
-    return res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
+  }).on('error', function(e) {
+    return res.status(500).json({ error: 'Failed to fetch market data' });
   });
 };
