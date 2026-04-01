@@ -1087,9 +1087,11 @@ function buildChart(candles,ticker){
 }
 
 async function runAnalyze(){
+  console.log('[NZR] runAnalyze() called');
   /* Fix 2: Strip anything that isn't A-Z, 0-9, dot, or hyphen; max 10 chars */
   const rawTicker=document.getElementById('az-ticker').value.trim().toUpperCase();
   const ticker=rawTicker.replace(/[^A-Z0-9.\-]/g,'').slice(0,10);
+  console.log('[NZR] rawTicker:', rawTicker, '| sanitized ticker:', ticker);
   if(!ticker)return;
   const btn=document.getElementById('az-btn');btn.disabled=true;
   const panel=document.getElementById('az-result');
@@ -1105,8 +1107,10 @@ async function runAnalyze(){
   /* Fix 4: 30-second timeout */
   const controller=new AbortController();
   const timeoutId=setTimeout(()=>controller.abort(),30000);
+  const requestBody={model:'deepseek-chat',max_tokens:1000,messages:[{role:'user',content:prompt}]};
+  console.log('[NZR] Sending POST /api/analyze | ticker:',ticker,'| timeframe:',activeTf,'| body:', JSON.stringify(requestBody));
   try{
-    const resp=await fetch('/api/analyze',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({model:'deepseek-chat',max_tokens:1000,messages:[{role:'user',content:prompt}]}),signal:controller.signal});
+    const resp=await fetch('/api/analyze',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(requestBody),signal:controller.signal});
     clearTimeout(timeoutId);
     if(!resp.ok)throw new Error('server');
     const data=await resp.json();

@@ -53,8 +53,9 @@ module.exports = function handler(req, res) {
     return res.status(429).json({ error: 'Too many requests. Please wait a moment.' });
   }
 
-  const rawSymbol = req.query.symbol || '';
-  const symbol = rawSymbol.replace(/[^A-Z0-9.\-]/g, '').slice(0, 10);
+  const { searchParams } = new URL(req.url, 'http://localhost');
+  const rawSymbol = searchParams.get('symbol') || '';
+  const symbol = rawSymbol.toUpperCase().replace(/[^A-Z0-9.\-]/g, '').slice(0, 10);
 
   if (!symbol) {
     return res.status(400).json({ error: 'Symbol is required' });
