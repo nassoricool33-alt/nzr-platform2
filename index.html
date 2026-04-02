@@ -7,6 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com"/>
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=Space+Mono:wght@400;700&family=Inter:wght@300;400;500&display=swap" rel="stylesheet"/>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{
@@ -551,18 +552,54 @@ footer{background:var(--navy);border-top:2px solid var(--navy);padding:20px 0;ma
 .toast-msg{font-size:11px;color:var(--text2)}
 .toast-gold{border-left:3px solid var(--gold)}.toast-green{border-left:3px solid var(--green)}.toast-red{border-left:3px solid var(--red)}
 
-/* ── LOGIN ── */
-#login-screen{position:fixed;inset:0;z-index:10000;background:var(--navy);display:flex;align-items:center;justify-content:center;padding:24px}
-.login-box{max-width:420px;width:100%;text-align:center}
-.login-hex{width:64px;height:64px;background:var(--gold);clip-path:polygon(50% 0%,100% 25%,100% 75%,50% 100%,0% 75%,0% 25%);display:flex;align-items:center;justify-content:center;font-family:var(--font-display);font-weight:800;font-size:28px;color:var(--navy);margin:0 auto 24px}
-.login-title{font-family:var(--font-display);font-size:36px;font-weight:800;letter-spacing:3px;color:var(--gold);margin-bottom:4px}
-.login-sub{font-family:var(--font-mono);font-size:10px;color:rgba(255,255,255,.35);letter-spacing:3px;text-transform:uppercase;margin-bottom:40px}
-.login-label{font-family:var(--font-mono);font-size:10px;color:rgba(255,255,255,.45);letter-spacing:2px;text-transform:uppercase;display:block;text-align:left;margin-bottom:8px}
-.login-input{width:100%;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.14);border-radius:var(--r);padding:14px 16px;color:#fff;font-family:var(--font-mono);font-size:16px;letter-spacing:4px;outline:none;margin-bottom:16px;text-align:center;transition:all .2s}
-.login-input:focus{border-color:var(--gold);box-shadow:0 0 0 2px rgba(184,150,12,.2)}
-.login-btn{width:100%;background:var(--gold);color:var(--navy);font-family:var(--font-display);font-weight:700;font-size:14px;letter-spacing:2px;padding:14px;border-radius:var(--r);border:none;cursor:pointer;transition:all .2s;text-transform:uppercase;margin-bottom:12px}
-.login-btn:hover{background:#cca818;transform:translateY(-1px)}
-.login-err{font-family:var(--font-mono);font-size:11px;color:#f87171;min-height:18px}
+/* ── AUTH SCREEN ── */
+#auth-screen{position:fixed;inset:0;z-index:10000;background:linear-gradient(135deg,var(--navy) 0%,#1a2f4a 60%,#0d2840 100%);display:flex;align-items:center;justify-content:center;padding:24px}
+.auth-bg{width:100%;max-width:420px}
+.auth-card{background:#fff;border-radius:16px;padding:36px;box-shadow:0 24px 80px rgba(0,0,0,.35);position:relative;overflow:hidden}
+.auth-card::before{content:'';position:absolute;top:0;left:0;right:0;height:4px;background:linear-gradient(90deg,var(--navy),var(--gold))}
+.auth-logo-wrap{text-align:center;margin-bottom:24px}
+.auth-hex{width:52px;height:52px;background:var(--navy);clip-path:polygon(50% 0%,100% 25%,100% 75%,50% 100%,0% 75%,0% 25%);display:flex;align-items:center;justify-content:center;font-family:var(--font-display);font-weight:800;font-size:22px;color:var(--gold);margin:0 auto 12px}
+.auth-brand{font-family:var(--font-display);font-size:26px;font-weight:800;letter-spacing:4px;color:var(--navy);margin-bottom:3px}
+.auth-tagline{font-family:var(--font-mono);font-size:9px;color:var(--text3);letter-spacing:2px;text-transform:uppercase}
+.auth-mode-tabs{display:flex;background:var(--bg2);border-radius:8px;padding:3px;margin-bottom:18px;gap:3px}
+.auth-tab{flex:1;background:none;border:none;padding:8px;font-family:var(--font-display);font-size:12px;font-weight:600;color:var(--text2);cursor:pointer;border-radius:6px;transition:all .2s}
+.auth-tab.active{background:#fff;color:var(--navy);box-shadow:0 1px 4px rgba(0,0,0,.1)}
+.auth-error{background:#fef2f2;border:1px solid rgba(196,18,48,.2);border-radius:6px;padding:8px 12px;font-family:var(--font-mono);font-size:11px;color:var(--red);margin-bottom:10px;display:none;line-height:1.5}
+.auth-success{background:#f0fdf4;border:1px solid rgba(10,124,62,.2);border-radius:6px;padding:8px 12px;font-family:var(--font-mono);font-size:11px;color:var(--green);margin-bottom:10px;display:none;line-height:1.5}
+.auth-label{font-family:var(--font-mono);font-size:9px;color:var(--text3);letter-spacing:1.5px;text-transform:uppercase;display:block;margin-bottom:5px;margin-top:12px}
+.auth-input{width:100%;background:var(--bg2);border:1.5px solid var(--border);border-radius:8px;padding:10px 14px;color:var(--text);font-family:var(--font-body);font-size:14px;outline:none;transition:all .2s}
+.auth-input:focus{border-color:var(--navy);box-shadow:0 0 0 3px rgba(10,22,40,.07);background:#fff}
+.auth-btn{width:100%;background:var(--navy);color:#fff;font-family:var(--font-display);font-weight:700;font-size:13px;letter-spacing:1.5px;padding:13px;border-radius:8px;border:none;cursor:pointer;transition:all .2s;text-transform:uppercase;margin-top:16px;display:flex;align-items:center;justify-content:center;gap:8px;min-height:48px}
+.auth-btn:hover{background:#1a2f4a;transform:translateY(-1px);box-shadow:0 4px 16px rgba(10,22,40,.2)}
+.auth-btn:disabled{opacity:.6;cursor:not-allowed;transform:none}
+.auth-spinner{width:16px;height:16px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite;flex-shrink:0}
+.auth-divider{display:flex;align-items:center;gap:12px;margin:14px 0;color:var(--text3);font-family:var(--font-mono);font-size:10px;letter-spacing:1px}
+.auth-divider::before,.auth-divider::after{content:'';flex:1;height:1px;background:var(--border)}
+.auth-google-btn{width:100%;background:#fff;border:1.5px solid var(--border);border-radius:8px;padding:11px;font-family:var(--font-body);font-size:13px;font-weight:500;color:var(--text);cursor:pointer;display:flex;align-items:center;justify-content:center;gap:10px;transition:all .2s;min-height:44px}
+.auth-google-btn:hover{border-color:var(--border2);box-shadow:0 2px 8px rgba(0,0,0,.08)}
+
+/* ── USER MENU ── */
+.user-menu{position:relative;flex-shrink:0}
+.user-avatar{width:32px;height:32px;border-radius:50%;background:var(--navy);color:var(--gold);font-family:var(--font-display);font-weight:800;font-size:13px;display:flex;align-items:center;justify-content:center;cursor:pointer;border:2px solid var(--border);transition:all .2s;letter-spacing:0}
+.user-avatar:hover{border-color:var(--gold);transform:scale(1.05)}
+.user-dropdown{position:absolute;top:42px;right:0;background:#fff;border:1px solid var(--border);border-radius:var(--rl);box-shadow:var(--shadow-md);min-width:200px;z-index:300;display:none;overflow:hidden}
+.user-dropdown.open{display:block;animation:toastIn .2s ease}
+.ud-header{padding:12px 16px;border-bottom:1px solid var(--border);background:var(--panel2)}
+.ud-email{font-family:var(--font-mono);font-size:10px;color:var(--text3);word-break:break-all;margin-top:2px}
+.ud-name{font-family:var(--font-display);font-size:13px;font-weight:700;color:var(--navy)}
+.ud-signout{width:100%;background:none;border:none;padding:10px 16px;font-family:var(--font-display);font-size:12px;font-weight:600;color:var(--red);cursor:pointer;text-align:left;transition:background .2s;display:flex;align-items:center;gap:8px}
+.ud-signout:hover{background:var(--red-dim)}
+
+/* ── LEADERBOARD ── */
+.lb-row{display:grid;grid-template-columns:60px 1fr 80px 80px 60px 100px;align-items:center;padding:10px 18px;border-bottom:1px solid var(--border);transition:background .2s}
+.lb-row:hover{background:var(--bg2)}
+.lb-row.lb-header{padding:8px 18px;background:var(--panel2)}
+.lb-row.current-user{background:var(--gold-dim)!important;border-left:3px solid var(--gold)}
+.lb-rank-cell{display:flex;align-items:center;gap:6px;font-family:var(--font-mono);font-size:13px;font-weight:700;color:var(--text3)}
+.lb-name{font-family:var(--font-display);font-size:13px;font-weight:700;color:var(--navy)}
+.lb-cell{font-family:var(--font-mono);font-size:11px;color:var(--text);text-align:right}
+.lb-pnl{font-family:var(--font-mono);font-size:12px;font-weight:700;text-align:right}
+.lb-you{font-family:var(--font-mono);font-size:9px;color:var(--gold);border:1px solid rgba(184,150,12,.3);border-radius:99px;padding:1px 6px;margin-left:6px;vertical-align:middle}
 
 /* ── DISCLAIMER ── */
 #disclaimer-modal{position:fixed;inset:0;z-index:9999;background:rgba(10,22,40,.88);display:flex;align-items:center;justify-content:center;padding:24px}
@@ -615,16 +652,39 @@ footer{background:var(--navy);border-top:2px solid var(--navy);padding:20px 0;ma
 </head>
 <body>
 
-<!-- Login Screen -->
-<div id="login-screen">
-  <div class="login-box">
-    <div class="login-hex">N</div>
-    <div class="login-title">NZR</div>
-    <div class="login-sub">AI Trading Intelligence · Members Only</div>
-    <label class="login-label" for="login-pw">Access Password</label>
-    <input class="login-input" id="login-pw" type="password" placeholder="••••••••" onkeydown="if(event.key==='Enter')checkLogin()"/>
-    <button class="login-btn" onclick="checkLogin()">ACCESS PLATFORM ↗</button>
-    <div class="login-err" id="login-err"></div>
+<!-- Auth Screen -->
+<div id="auth-screen">
+  <div class="auth-bg">
+    <div class="auth-card">
+      <div class="auth-logo-wrap">
+        <div class="auth-hex">N</div>
+        <div class="auth-brand">NZR</div>
+        <div class="auth-tagline">AI Trading Intelligence</div>
+      </div>
+      <div class="auth-mode-tabs">
+        <button class="auth-tab active" id="signin-tab" onclick="switchAuthMode('signin')">Sign In</button>
+        <button class="auth-tab" id="signup-tab" onclick="switchAuthMode('signup')">Sign Up</button>
+      </div>
+      <div id="auth-error" class="auth-error"></div>
+      <div id="auth-success" class="auth-success"></div>
+      <div id="signup-name-group" style="display:none">
+        <label class="auth-label">Full Name</label>
+        <input class="auth-input" id="auth-name" type="text" placeholder="Your full name" autocomplete="name"/>
+      </div>
+      <label class="auth-label">Email Address</label>
+      <input class="auth-input" id="auth-email" type="email" placeholder="you@example.com" autocomplete="email"/>
+      <label class="auth-label">Password</label>
+      <input class="auth-input" id="auth-password" type="password" placeholder="••••••••" autocomplete="current-password"/>
+      <button class="auth-btn" id="auth-submit-btn" onclick="handleAuthSubmit()">
+        <span id="auth-btn-text">SIGN IN</span>
+        <span id="auth-btn-spinner" class="auth-spinner" style="display:none"></span>
+      </button>
+      <div class="auth-divider"><span>OR</span></div>
+      <button class="auth-google-btn" onclick="signInWithGoogle()">
+        <svg width="18" height="18" viewBox="0 0 18 18"><path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.875 2.684-6.615z"/><path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z"/><path fill="#FBBC05" d="M3.964 10.71A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.042l3.007-2.332z"/><path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.958L3.964 6.29C4.672 4.163 6.656 3.58 9 3.58z"/></svg>
+        Continue with Google
+      </button>
+    </div>
   </div>
 </div>
 
@@ -642,6 +702,7 @@ footer{background:var(--navy);border-top:2px solid var(--navy);padding:20px 0;ma
 
 <div class="toast-container" id="toasts"></div>
 
+<div id="main-app" style="display:none">
 <nav>
   <div class="nav-inner">
     <div class="logo" onclick="showPage('dashboard')">
@@ -660,6 +721,7 @@ footer{background:var(--navy);border-top:2px solid var(--navy);padding:20px 0;ma
       <button class="nl" onclick="showPage('chat')">AI Chat</button>
       <button class="nl" onclick="showPage('guides')">Guides</button>
       <button class="nl" onclick="showPage('screener')">Screener</button>
+      <button class="nl" onclick="showPage('leaderboard')">Leaderboard</button>
     </div>
     <div class="nav-right">
       <div class="market-status">
@@ -670,6 +732,16 @@ footer{background:var(--navy);border-top:2px solid var(--navy);padding:20px 0;ma
       <button class="hamburger" onclick="toggleMobileNav()" aria-label="Menu">
         <div class="hb-line"></div><div class="hb-line"></div><div class="hb-line"></div>
       </button>
+      <div class="user-menu" id="user-menu" style="display:none">
+        <div class="user-avatar" id="user-avatar" onclick="toggleUserDropdown()">?</div>
+        <div class="user-dropdown" id="user-dropdown">
+          <div class="ud-header">
+            <div class="ud-name" id="ud-name">—</div>
+            <div class="ud-email" id="ud-email">—</div>
+          </div>
+          <button class="ud-signout" onclick="signOut()">⊗ Sign Out</button>
+        </div>
+      </div>
     </div>
   </div>
 </nav>
@@ -685,6 +757,7 @@ footer{background:var(--navy);border-top:2px solid var(--navy);padding:20px 0;ma
   <button class="nl" onclick="showPage('chat');closeMobileNav()">AI Chat</button>
   <button class="nl" onclick="showPage('guides');closeMobileNav()">Guides</button>
   <button class="nl" onclick="showPage('screener');closeMobileNav()">Screener</button>
+  <button class="nl" onclick="showPage('leaderboard');closeMobileNav()">Leaderboard</button>
 </div>
 
 <div class="flash-bar">
@@ -1043,13 +1116,182 @@ footer{background:var(--navy);border-top:2px solid var(--navy);padding:20px 0;ma
 </div>
 </div>
 
+<!-- LEADERBOARD -->
+<div id="page-leaderboard" class="page z1">
+<div class="wrap" style="padding-top:32px;padding-bottom:60px">
+  <div class="sec-eye">// COMMUNITY PERFORMANCE</div>
+  <div class="sec-title">Trading <span>Leaderboard</span></div>
+  <div class="card">
+    <div class="card-head">
+      <div class="card-title"><div class="card-icon ci-gold">🏆</div>Top Traders by P&amp;L</div>
+      <span style="font-family:var(--font-mono);font-size:9px;color:var(--text3)">ALL TIME · LIVE</span>
+    </div>
+    <div class="lb-row lb-header">
+      <div class="wl-header-cell">RANK</div>
+      <div class="wl-header-cell">TRADER</div>
+      <div class="wl-header-cell" style="text-align:right">TRADES</div>
+      <div class="wl-header-cell" style="text-align:right">WIN %</div>
+      <div class="wl-header-cell" style="text-align:right">WINS</div>
+      <div class="wl-header-cell" style="text-align:right">TOTAL P&amp;L</div>
+    </div>
+    <div id="lb-body"><div style="padding:40px;text-align:center;color:var(--text3);font-family:var(--font-mono);font-size:11px">⬡ Log a trade to join the leaderboard</div></div>
+  </div>
+</div>
+</div>
+
 <footer><div class="wrap"><div class="fi">
   <div class="fb">NZR</div>
   <div class="fc">© 2026 NZR AI Trading Intelligence v2<br>Maximum edge. Maximum profit.</div>
   <div class="fd">⚠ Educational only. Not financial advice. All trading involves substantial risk of loss.</div>
 </div></div></footer>
+</div><!-- /#main-app -->
 
 <script>
+/* ══ SUPABASE CLIENT ══ */
+const _SB = window.supabase.createClient(
+  'https://chfdvmtnditebmlmyihr.supabase.co',
+  'sb_publishable_javjCOOGKWg5T8zoS3BWWQ_LHf_vHCW'
+);
+let _currentUser = null;
+
+/* ══ AUTH FUNCTIONS ══ */
+function switchAuthMode(mode){
+  document.getElementById('signin-tab').classList.toggle('active',mode==='signin');
+  document.getElementById('signup-tab').classList.toggle('active',mode==='signup');
+  document.getElementById('signup-name-group').style.display=mode==='signup'?'block':'none';
+  document.getElementById('auth-btn-text').textContent=mode==='signup'?'CREATE ACCOUNT':'SIGN IN';
+  document.getElementById('auth-password').autocomplete=mode==='signup'?'new-password':'current-password';
+  clearAuthMessages();
+}
+function showAuthError(msg){const el=document.getElementById('auth-error');el.textContent=msg;el.style.display='block';}
+function showAuthSuccess(msg){const el=document.getElementById('auth-success');el.textContent=msg;el.style.display='block';}
+function clearAuthMessages(){document.getElementById('auth-error').style.display='none';document.getElementById('auth-success').style.display='none';}
+
+async function handleAuthSubmit(){
+  const isSignup=document.getElementById('signup-tab').classList.contains('active');
+  const email=document.getElementById('auth-email').value.trim();
+  const password=document.getElementById('auth-password').value;
+  const btn=document.getElementById('auth-submit-btn');
+  const spinner=document.getElementById('auth-btn-spinner');
+  const btnText=document.getElementById('auth-btn-text');
+  clearAuthMessages();
+  if(!email||!password){showAuthError('Please enter your email and password.');return;}
+  btn.disabled=true;spinner.style.display='inline-block';btnText.style.display='none';
+  if(isSignup){
+    const name=document.getElementById('auth-name').value.trim();
+    await signUpWithEmail(email,password,name);
+  }else{
+    await signInWithEmail(email,password);
+  }
+  btn.disabled=false;spinner.style.display='none';btnText.style.display='inline';
+}
+
+async function signInWithEmail(email,password){
+  const{error}=await _SB.auth.signInWithPassword({email,password});
+  if(error){showAuthError(error.message);}
+}
+
+async function signUpWithEmail(email,password,fullName){
+  const{data,error}=await _SB.auth.signUp({
+    email,password,
+    options:{data:{full_name:fullName||email.split('@')[0]}}
+  });
+  if(error){showAuthError(error.message);return;}
+  if(data.user&&!data.session){
+    showAuthSuccess('✓ Check your email to confirm your account, then sign in.');
+    switchAuthMode('signin');
+  }
+}
+
+async function signInWithGoogle(){
+  const{error}=await _SB.auth.signInWithOAuth({
+    provider:'google',
+    options:{redirectTo:window.location.href}
+  });
+  if(error){showAuthError(error.message);}
+}
+
+async function signOut(){
+  await _SB.auth.signOut();
+  _currentUser=null;
+  toggleUserDropdown(false);
+  showAuthUI();
+  toast('Signed out','See you next time!','gold');
+}
+
+function getUser(){return _currentUser;}
+
+function showApp(){
+  document.getElementById('main-app').style.display='block';
+  document.getElementById('auth-screen').style.display='none';
+  if(!sessionStorage.getItem('nzr-disc')){document.getElementById('disclaimer-modal').style.display='flex';}
+}
+
+function showAuthUI(){
+  document.getElementById('main-app').style.display='none';
+  document.getElementById('auth-screen').style.display='flex';
+}
+
+function updateUserMenu(user){
+  if(!user){document.getElementById('user-menu').style.display='none';return;}
+  const name=user.user_metadata?.full_name||user.email.split('@')[0];
+  document.getElementById('user-avatar').textContent=name.charAt(0).toUpperCase();
+  document.getElementById('ud-name').textContent=name;
+  document.getElementById('ud-email').textContent=user.email;
+  document.getElementById('user-menu').style.display='block';
+}
+
+function toggleUserDropdown(forceClose){
+  const dd=document.getElementById('user-dropdown');
+  if(forceClose===false||dd.classList.contains('open')){dd.classList.remove('open');}
+  else{dd.classList.add('open');}
+}
+
+document.addEventListener('click',e=>{
+  const menu=document.getElementById('user-menu');
+  if(menu&&!menu.contains(e.target))toggleUserDropdown(false);
+});
+
+/* Auth state listener — fires on sign in, sign out, token refresh */
+_SB.auth.onAuthStateChange((event,session)=>{
+  if(session?.user){
+    _currentUser=session.user;
+    updateUserMenu(session.user);
+    showApp();
+    refreshWatchlist();
+    refreshPortfolio();
+    renderJournal();
+  }else{
+    _currentUser=null;
+    updateUserMenu(null);
+    showAuthUI();
+  }
+});
+
+/* Enter key on auth form */
+document.addEventListener('keydown',e=>{
+  if(e.key==='Enter'&&document.getElementById('auth-screen').style.display!=='none'){
+    handleAuthSubmit();
+  }
+});
+
+/* Check existing session on load */
+(async()=>{
+  try{
+    const{data:{session}}=await _SB.auth.getSession();
+    if(session?.user){
+      _currentUser=session.user;
+      updateUserMenu(session.user);
+      showApp();
+    }else{
+      showAuthUI();
+    }
+  }catch(e){
+    console.error('Supabase session check failed:',e);
+    showAuthUI();
+  }
+})();
+
 /* ══ CLOCK & MARKET STATUS ══ */
 function updateClock(){
   const now=new Date();
@@ -1089,6 +1331,7 @@ function showPage(id){
   if(id==='watchlist')refreshWatchlist();
   if(id==='portfolio')refreshPortfolio();
   if(id==='screener')renderScreener();
+  if(id==='leaderboard')loadLeaderboard();
 }
 
 /* ══ TOAST ══ */
@@ -1691,34 +1934,44 @@ function switchChartTf(tf,btn){
 }
 
 /* ══ WATCHLIST ══ */
-let watchlist=JSON.parse(localStorage.getItem('nzr_watchlist')||'[]');
+let watchlist=[];
 let alertCounts=0;
 document.getElementById('wl-input').addEventListener('keydown',e=>{if(e.key==='Enter')addToWatchlist();});
 
-function addToWatchlist(){
+async function addToWatchlist(){
   const sym=document.getElementById('wl-input').value.trim().toUpperCase();
-  if(!sym||watchlist.find(w=>w.sym===sym))return;
-  watchlist.push({sym,alert:null,name:''});
-  localStorage.setItem('nzr_watchlist',JSON.stringify(watchlist));
+  if(!sym)return;
+  const user=getUser();
+  if(!user){toast('Sign in required','Please sign in to use your watchlist','red');return;}
+  if(watchlist.find(w=>w.sym===sym)){toast('Already watching',`${sym} is already in your watchlist`,'gold');return;}
+  const{error}=await _SB.from('watchlist').insert({user_id:user.id,sym,alert_price:null});
+  if(error){toast('Error',error.message,'red');return;}
   document.getElementById('wl-input').value='';
-  refreshWatchlist();
+  await refreshWatchlist();
   toast('Added to Watchlist',`${sym} is now being monitored`,'gold');
 }
 
-function removeFromWatchlist(sym){
-  watchlist=watchlist.filter(w=>w.sym!==sym);
-  localStorage.setItem('nzr_watchlist',JSON.stringify(watchlist));
-  refreshWatchlist();
+async function removeFromWatchlist(sym){
+  const user=getUser();if(!user)return;
+  const{error}=await _SB.from('watchlist').delete().eq('user_id',user.id).eq('sym',sym);
+  if(error){toast('Error',error.message,'red');return;}
+  await refreshWatchlist();
 }
 
-function setAlert(sym,val){
-  const item=watchlist.find(w=>w.sym===sym);
-  if(item){item.alert=val?parseFloat(val):null;localStorage.setItem('nzr_watchlist',JSON.stringify(watchlist));}
+async function setAlert(sym,val){
+  const user=getUser();if(!user)return;
+  await _SB.from('watchlist').update({alert_price:val?parseFloat(val):null}).eq('user_id',user.id).eq('sym',sym);
+  watchlist=watchlist.map(w=>w.sym===sym?{...w,alert:val?parseFloat(val):null}:w);
 }
 
 async function refreshWatchlist(){
   const body=document.getElementById('wl-body');
   const empty=document.getElementById('wl-empty');
+  const user=getUser();
+  if(!user){body.innerHTML='';empty.style.display='block';return;}
+  const{data,error}=await _SB.from('watchlist').select('*').eq('user_id',user.id).order('created_at',{ascending:true});
+  if(error){toast('Watchlist error',error.message,'red');return;}
+  watchlist=(data||[]).map(r=>({sym:r.sym,alert:r.alert_price}));
   if(!watchlist.length){body.innerHTML='';empty.style.display='block';return;}
   empty.style.display='none';alertCounts=0;
   const rows=await Promise.all(watchlist.map(async w=>{
@@ -1746,9 +1999,9 @@ async function refreshWatchlist(){
 setInterval(()=>{if(watchlist.length)refreshWatchlist();},60000);
 
 /* ══ PORTFOLIO ══ */
-let portfolio=JSON.parse(localStorage.getItem('nzr_portfolio')||'[]');
+let portfolio=[];
 
-function addPosition(){
+async function addPosition(){
   const errEl=document.getElementById('pf-error');errEl.textContent='';
   const sym=document.getElementById('pf-ticker').value.trim().toUpperCase();
   const sharesRaw=document.getElementById('pf-shares').value.trim();
@@ -1757,45 +2010,57 @@ function addPosition(){
   if(!sym){errEl.textContent='⚠ Enter a ticker symbol';return;}
   if(!sharesRaw||isNaN(shares)||shares<=0){errEl.textContent='⚠ Enter a valid number of shares';return;}
   if(!costRaw||isNaN(cost)||cost<=0){errEl.textContent='⚠ Enter a valid average cost price';return;}
+  const user=getUser();
+  if(!user){errEl.textContent='⚠ Please sign in to track your portfolio';return;}
   const btn=document.getElementById('pf-btn');btn.textContent='ADDING...';btn.disabled=true;
-  const existing=portfolio.find(p=>p.sym===sym);
+  // Upsert: average down if symbol already exists
+  const{data:existing}=await _SB.from('portfolio').select('*').eq('user_id',user.id).eq('sym',sym).maybeSingle();
   if(existing){
     const total=existing.shares+shares;
-    existing.avgCost=((existing.avgCost*existing.shares)+(cost*shares))/total;
-    existing.shares=total;
-  }else{portfolio.push({sym,shares,avgCost:cost});}
-  try{localStorage.setItem('nzr_portfolio',JSON.stringify(portfolio));}catch(e){}
+    const newCost=((existing.avg_cost*existing.shares)+(cost*shares))/total;
+    const{error}=await _SB.from('portfolio').update({shares:total,avg_cost:newCost}).eq('id',existing.id);
+    if(error){errEl.textContent='⚠ '+error.message;btn.textContent='+ ADD POSITION';btn.disabled=false;return;}
+  }else{
+    const{error}=await _SB.from('portfolio').insert({user_id:user.id,sym,shares,avg_cost:cost});
+    if(error){errEl.textContent='⚠ '+error.message;btn.textContent='+ ADD POSITION';btn.disabled=false;return;}
+  }
   document.getElementById('pf-ticker').value='';
   document.getElementById('pf-shares').value='';
   document.getElementById('pf-cost').value='';
   btn.textContent='+ ADD POSITION';btn.disabled=false;
-  refreshPortfolio();
+  await refreshPortfolio();
   toast('Position Added',`${shares} shares of ${sym} @ ${fmt$(cost)}`,'green');
 }
 
-function removePosition(sym){
-  portfolio=portfolio.filter(p=>p.sym!==sym);
-  try{localStorage.setItem('nzr_portfolio',JSON.stringify(portfolio));}catch(e){}
-  refreshPortfolio();
+async function removePosition(sym){
+  const user=getUser();if(!user)return;
+  const{error}=await _SB.from('portfolio').delete().eq('user_id',user.id).eq('sym',sym);
+  if(error){toast('Error',error.message,'red');return;}
+  await refreshPortfolio();
 }
 
 async function refreshPortfolio(){
   const body=document.getElementById('port-body');
   const empty=document.getElementById('port-empty');
+  const user=getUser();
+  if(!user){body.innerHTML='';empty.style.display='block';updatePortSummary(0,0,0);return;}
+  const{data,error}=await _SB.from('portfolio').select('*').eq('user_id',user.id).order('created_at',{ascending:true});
+  if(error){toast('Portfolio error',error.message,'red');return;}
+  portfolio=data||[];
   if(!portfolio.length){body.innerHTML='';empty.style.display='block';updatePortSummary(0,0,0);return;}
   empty.style.display='none';
   let totalValue=0,totalCost=0;
   const rows=await Promise.all(portfolio.map(async p=>{
     const d=await fetchQuote(p.sym);
-    const curPrice=d?d.price:p.avgCost;
-    const value=curPrice*p.shares,cost=p.avgCost*p.shares,pnl=value-cost,pnlPct=(pnl/cost)*100;
+    const curPrice=d?d.price:p.avg_cost;
+    const value=curPrice*p.shares,cost=p.avg_cost*p.shares,pnl=value-cost,pnlPct=(pnl/cost)*100;
     totalValue+=value;totalCost+=cost;
     const up=pnl>=0;
     return`<div class="pt-row">
       <div class="pt-sym">${p.sym}</div>
       <div class="pt-name">${p.sym}</div>
       <div class="pt-cell" style="text-align:right">${p.shares.toFixed(2)}</div>
-      <div class="pt-cell" style="text-align:right">${fmt$(p.avgCost)}</div>
+      <div class="pt-cell" style="text-align:right">${fmt$(p.avg_cost)}</div>
       <div class="pt-cell" style="text-align:right">${fmt$(curPrice)}</div>
       <div class="pt-cell" style="text-align:right">${fmt$(value)}</div>
       <div class="pt-cell" style="text-align:right;color:${up?'var(--green)':'var(--red)'}">${fmt$(pnl)}<br><span style="font-size:10px">${fmtPct(pnlPct)}</span></div>
@@ -1822,12 +2087,11 @@ function updatePortSummary(val,cost,pnl){
   document.getElementById('dash-pnl-badge').className='sc-badge '+(pnl>=0?'badge-up':'badge-dn');
 }
 setInterval(()=>{if(portfolio.length)refreshPortfolio();},120000);
-refreshPortfolio();
 
 /* ══ JOURNAL ══ */
-let journal=JSON.parse(localStorage.getItem('nzr_journal')||'[]');
+let journal=[];
 
-function logTrade(){
+async function logTrade(){
   const errEl=document.getElementById('jf-error');errEl.textContent='';
   const sym=document.getElementById('jf-ticker').value.trim().toUpperCase();
   const entryRaw=document.getElementById('jf-entry').value.trim();
@@ -1840,55 +2104,62 @@ function logTrade(){
   if(!entryRaw||isNaN(entry)||entry<=0){errEl.textContent='⚠ Enter a valid entry price';return;}
   if(!exitRaw||isNaN(exit)||exit<=0){errEl.textContent='⚠ Enter a valid exit price';return;}
   if(!sharesRaw||isNaN(shares)||shares<=0){errEl.textContent='⚠ Enter a valid number of shares';return;}
+  const user=getUser();
+  if(!user){errEl.textContent='⚠ Please sign in to log trades';return;}
   const btn=document.getElementById('jf-btn');btn.textContent='SAVING...';btn.disabled=true;
-  const pnl=(exit-entry)*shares,pnlPct=((exit-entry)/entry)*100;
-  journal.unshift({date:new Date().toLocaleDateString(),sym,entry,exit,shares,pnl,pnlPct,setup,notes:notes||'—',win:pnl>=0,id:Date.now()});
-  try{localStorage.setItem('nzr_journal',JSON.stringify(journal));}catch(e){}
-  document.getElementById('jf-ticker').value='';
-  document.getElementById('jf-entry').value='';
-  document.getElementById('jf-exit').value='';
-  document.getElementById('jf-shares').value='';
-  document.getElementById('jf-notes').value='';
+  const pnl=(exit-entry)*shares,pnl_pct=((exit-entry)/entry)*100;
+  const{error}=await _SB.from('journal').insert({
+    user_id:user.id,sym,
+    entry_price:entry,exit_price:exit,shares,pnl,pnl_pct,
+    setup,notes:notes||'—',win:pnl>=0,
+    trade_date:new Date().toLocaleDateString()
+  });
+  if(error){errEl.textContent='⚠ '+error.message;btn.textContent='LOG TRADE';btn.disabled=false;return;}
+  ['jf-ticker','jf-entry','jf-exit','jf-shares','jf-notes'].forEach(id=>document.getElementById(id).value='');
   btn.textContent='LOG TRADE';btn.disabled=false;
-  renderJournal();
+  await renderJournal();
   toast('Trade Logged',`${sym}: ${pnl>=0?'+':''}${fmt$(pnl)}`,(pnl>=0?'green':'red'));
 }
 
-function renderJournal(){
+async function renderJournal(){
   const list=document.getElementById('journal-list');
   const empty=document.getElementById('journal-empty');
-  if(!journal.length){list.innerHTML='';empty.style.display='block';updateJournalStats();return;}
+  const user=getUser();
+  if(!user){list.innerHTML='';empty.style.display='block';updateJournalStats([]);return;}
+  const{data,error}=await _SB.from('journal').select('*').eq('user_id',user.id).order('created_at',{ascending:false});
+  if(error){toast('Journal error',error.message,'red');return;}
+  journal=data||[];
+  if(!journal.length){list.innerHTML='';empty.style.display='block';updateJournalStats([]);return;}
   empty.style.display='none';
   list.innerHTML=journal.map(t=>`
     <div class="jl-row">
-      <div class="jl-cell">${t.date}</div>
+      <div class="jl-cell">${t.trade_date||t.created_at?.slice(0,10)||'—'}</div>
       <div class="jl-sym">${t.sym}</div>
-      <div class="jl-cell" style="text-align:right">${fmt$(t.entry)}</div>
-      <div class="jl-cell" style="text-align:right">${fmt$(t.exit)}</div>
+      <div class="jl-cell" style="text-align:right">${fmt$(t.entry_price)}</div>
+      <div class="jl-cell" style="text-align:right">${fmt$(t.exit_price)}</div>
       <div class="jl-cell" style="text-align:right">${t.shares}</div>
       <div class="jl-cell ${t.win?'jl-win':'jl-loss'}" style="text-align:right">${fmt$(t.pnl)}</div>
-      <div class="jl-cell ${t.win?'jl-win':'jl-loss'}" style="text-align:right">${fmtPct(t.pnlPct)}</div>
+      <div class="jl-cell ${t.win?'jl-win':'jl-loss'}" style="text-align:right">${fmtPct(t.pnl_pct)}</div>
       <div class="jl-note">${t.setup}</div>
       <div style="font-family:var(--font-mono);font-size:10px;padding:2px 8px;border-radius:99px;display:inline-block;${t.win?'background:var(--green-dim);color:var(--green)':'background:var(--red-dim);color:var(--red)'}">${t.win?'WIN':'LOSS'}</div>
     </div>`).join('');
-  updateJournalStats();
+  updateJournalStats(journal);
 }
 
-function updateJournalStats(){
-  const wins=journal.filter(t=>t.win).length;
-  const totalPnl=journal.reduce((a,t)=>a+t.pnl,0);
-  const wr=journal.length?(wins/journal.length*100).toFixed(1):0;
-  const winT=journal.filter(t=>t.win),lossT=journal.filter(t=>!t.win);
+function updateJournalStats(data){
+  const wins=data.filter(t=>t.win).length;
+  const totalPnl=data.reduce((a,t)=>a+t.pnl,0);
+  const wr=data.length?(wins/data.length*100).toFixed(1):0;
+  const winT=data.filter(t=>t.win),lossT=data.filter(t=>!t.win);
   const avgWin=winT.length?winT.reduce((a,t)=>a+t.pnl,0)/winT.length:0;
   const avgLoss=lossT.length?lossT.reduce((a,t)=>a+t.pnl,0)/lossT.length:0;
-  document.getElementById('js-total').textContent=journal.length;
+  document.getElementById('js-total').textContent=data.length;
   const wrEl=document.getElementById('js-wr');
   wrEl.textContent=wr+'%';wrEl.style.color=wr>=50?'var(--green)':'var(--red)';
   const pnlEl=document.getElementById('js-pnl');
   pnlEl.textContent=fmt$(totalPnl);pnlEl.style.color=totalPnl>=0?'var(--green)':'var(--red)';
   document.getElementById('js-avg').textContent=`W:${fmt$(avgWin)} / L:${fmt$(avgLoss)}`;
 }
-renderJournal();
 
 /* ══ MARKETS ══ */
 const MKT_SYMS=[{sym:'SPY',name:'S&P 500',sub:'US Large Cap'},{sym:'QQQ',name:'NASDAQ 100',sub:'Tech Index'},{sym:'DIA',name:'Dow Jones',sub:'US Blue Chip'},{sym:'IWM',name:'Russell 2000',sub:'Small Cap'}];
@@ -2163,32 +2434,64 @@ function renderScreener(){
   });
 }
 
-/* ══ LOGIN ══ */
-function checkLogin(){
-  const pw=document.getElementById('login-pw').value;
-  const errEl=document.getElementById('login-err');
-  if(pw==='NZR2026'){
-    sessionStorage.setItem('nzr-auth','1');
-    document.getElementById('login-screen').style.display='none';
-    if(!sessionStorage.getItem('nzr-disc')){document.getElementById('disclaimer-modal').style.display='flex';}
-  }else{
-    errEl.textContent='⚠ Incorrect password. Please try again.';
-    document.getElementById('login-pw').value='';
-    document.getElementById('login-pw').focus();
-  }
-}
-document.getElementById('login-pw').addEventListener('keydown',e=>{if(e.key==='Enter')checkLogin();});
-
 /* ══ DISCLAIMER ══ */
 function acceptDisclaimer(){
   sessionStorage.setItem('nzr-disc','1');
   document.getElementById('disclaimer-modal').style.display='none';
 }
 
-/* ══ SESSION INIT ══ */
-if(sessionStorage.getItem('nzr-auth')==='1'){
-  document.getElementById('login-screen').style.display='none';
-  if(!sessionStorage.getItem('nzr-disc')){document.getElementById('disclaimer-modal').style.display='flex';}
+/* ══ LEADERBOARD ══ */
+async function loadLeaderboard(){
+  const body=document.getElementById('lb-body');
+  const user=getUser();
+  body.innerHTML='<div style="padding:40px;text-align:center;color:var(--text3);font-family:var(--font-mono);font-size:11px"><div class="spin" style="margin:0 auto 12px"></div>Loading leaderboard...</div>';
+  // Fetch all journal rows (public leaderboard)
+  const{data,error}=await _SB.from('journal').select('user_id,pnl,win');
+  if(error){
+    body.innerHTML=`<div style="padding:40px;text-align:center;color:var(--red);font-family:var(--font-mono);font-size:11px">⚠ ${error.message}</div>`;
+    return;
+  }
+  if(!data||!data.length){
+    body.innerHTML='<div style="padding:40px;text-align:center;color:var(--text3);font-family:var(--font-mono);font-size:11px">No trades logged yet. Be the first on the leaderboard!</div>';
+    return;
+  }
+  // Group by user_id
+  const grouped={};
+  data.forEach(t=>{
+    if(!grouped[t.user_id])grouped[t.user_id]={user_id:t.user_id,trades:0,wins:0,totalPnl:0};
+    grouped[t.user_id].trades++;
+    if(t.win)grouped[t.user_id].wins++;
+    grouped[t.user_id].totalPnl+=t.pnl;
+  });
+  // Fetch profiles for display names
+  const userIds=Object.keys(grouped);
+  let profiles={};
+  if(userIds.length){
+    const{data:pData}=await _SB.from('profiles').select('id,full_name,email').in('id',userIds);
+    (pData||[]).forEach(p=>{profiles[p.id]=p;});
+  }
+  // Sort by total P&L descending, take top 10
+  const ranked=Object.values(grouped)
+    .map(g=>({
+      ...g,
+      winRate:g.trades?g.wins/g.trades*100:0,
+      name:profiles[g.user_id]?.full_name||profiles[g.user_id]?.email?.split('@')[0]||'Trader #'+g.user_id.slice(0,6)
+    }))
+    .sort((a,b)=>b.totalPnl-a.totalPnl)
+    .slice(0,10);
+  const medals=['🥇','🥈','🥉'];
+  body.innerHTML=ranked.map((r,i)=>{
+    const isMe=user&&r.user_id===user.id;
+    const up=r.totalPnl>=0;
+    return`<div class="lb-row${isMe?' current-user':''}">
+      <div class="lb-rank-cell">${i<3?`<span style="font-size:18px">${medals[i]}</span>`:`<span>#${i+1}</span>`}</div>
+      <div class="lb-name">${r.name}${isMe?'<span class="lb-you">YOU</span>':''}</div>
+      <div class="lb-cell">${r.trades}</div>
+      <div class="lb-cell" style="color:${r.winRate>=50?'var(--green)':'var(--red)'}">${r.winRate.toFixed(1)}%</div>
+      <div class="lb-cell" style="color:var(--green)">${r.wins}</div>
+      <div class="lb-pnl" style="color:${up?'var(--green)':'var(--red)'}">${fmt$(r.totalPnl)}</div>
+    </div>`;
+  }).join('');
 }
 
 /* ══ INIT ══ */
