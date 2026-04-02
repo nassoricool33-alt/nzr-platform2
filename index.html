@@ -1944,7 +1944,7 @@ async function addToWatchlist(){
   const user=getUser();
   if(!user){toast('Sign in required','Please sign in to use your watchlist','red');return;}
   if(watchlist.find(w=>w.sym===sym)){toast('Already watching',`${sym} is already in your watchlist`,'gold');return;}
-  const{error}=await _SB.from('watchlist').insert({user_id:user.id,sym,alert_price:null});
+  const{error}=await _SB.from('watchlist').insert({user_id:user.id,symbol:sym,alert_price:null});
   if(error){toast('Error',error.message,'red');return;}
   document.getElementById('wl-input').value='';
   await refreshWatchlist();
@@ -1953,14 +1953,14 @@ async function addToWatchlist(){
 
 async function removeFromWatchlist(sym){
   const user=getUser();if(!user)return;
-  const{error}=await _SB.from('watchlist').delete().eq('user_id',user.id).eq('sym',sym);
+  const{error}=await _SB.from('watchlist').delete().eq('user_id',user.id).eq('symbol',sym);
   if(error){toast('Error',error.message,'red');return;}
   await refreshWatchlist();
 }
 
 async function setAlert(sym,val){
   const user=getUser();if(!user)return;
-  await _SB.from('watchlist').update({alert_price:val?parseFloat(val):null}).eq('user_id',user.id).eq('sym',sym);
+  await _SB.from('watchlist').update({alert_price:val?parseFloat(val):null}).eq('user_id',user.id).eq('symbol',sym);
   watchlist=watchlist.map(w=>w.sym===sym?{...w,alert:val?parseFloat(val):null}:w);
 }
 
@@ -1971,7 +1971,7 @@ async function refreshWatchlist(){
   if(!user){body.innerHTML='';empty.style.display='block';return;}
   const{data,error}=await _SB.from('watchlist').select('*').eq('user_id',user.id).order('created_at',{ascending:true});
   if(error){toast('Watchlist error',error.message,'red');return;}
-  watchlist=(data||[]).map(r=>({sym:r.sym,alert:r.alert_price}));
+  watchlist=(data||[]).map(r=>({sym:r.symbol,alert:r.alert_price}));
   if(!watchlist.length){body.innerHTML='';empty.style.display='block';return;}
   empty.style.display='none';alertCounts=0;
   const rows=await Promise.all(watchlist.map(async w=>{
@@ -2014,14 +2014,14 @@ async function addPosition(){
   if(!user){errEl.textContent='⚠ Please sign in to track your portfolio';return;}
   const btn=document.getElementById('pf-btn');btn.textContent='ADDING...';btn.disabled=true;
   // Upsert: average down if symbol already exists
-  const{data:existing}=await _SB.from('portfolio').select('*').eq('user_id',user.id).eq('sym',sym).maybeSingle();
+  const{data:existing}=await _SB.from('portfolio').select('*').eq('user_id',user.id).eq('symbol',sym).maybeSingle();
   if(existing){
     const total=existing.shares+shares;
     const newCost=((existing.avg_cost*existing.shares)+(cost*shares))/total;
     const{error}=await _SB.from('portfolio').update({shares:total,avg_cost:newCost}).eq('id',existing.id);
     if(error){errEl.textContent='⚠ '+error.message;btn.textContent='+ ADD POSITION';btn.disabled=false;return;}
   }else{
-    const{error}=await _SB.from('portfolio').insert({user_id:user.id,sym,shares,avg_cost:cost});
+    const{error}=await _SB.from('portfolio').insert({user_id:user.id,symbol:sym,shares,avg_cost:cost});
     if(error){errEl.textContent='⚠ '+error.message;btn.textContent='+ ADD POSITION';btn.disabled=false;return;}
   }
   document.getElementById('pf-ticker').value='';
@@ -2034,7 +2034,7 @@ async function addPosition(){
 
 async function removePosition(sym){
   const user=getUser();if(!user)return;
-  const{error}=await _SB.from('portfolio').delete().eq('user_id',user.id).eq('sym',sym);
+  const{error}=await _SB.from('portfolio').delete().eq('user_id',user.id).eq('symbol',sym);
   if(error){toast('Error',error.message,'red');return;}
   await refreshPortfolio();
 }
@@ -2109,7 +2109,7 @@ async function logTrade(){
   const btn=document.getElementById('jf-btn');btn.textContent='SAVING...';btn.disabled=true;
   const pnl=(exit-entry)*shares,pnl_pct=((exit-entry)/entry)*100;
   const{error}=await _SB.from('journal').insert({
-    user_id:user.id,sym,
+    user_id:user.id,symbol:sym,
     entry_price:entry,exit_price:exit,shares,pnl,pnl_pct,
     setup,notes:notes||'—',win:pnl>=0,
     trade_date:new Date().toLocaleDateString()
@@ -2134,7 +2134,7 @@ async function renderJournal(){
   list.innerHTML=journal.map(t=>`
     <div class="jl-row">
       <div class="jl-cell">${t.trade_date||t.created_at?.slice(0,10)||'—'}</div>
-      <div class="jl-sym">${t.sym}</div>
+      <div class="jl-sym">${t.symbol}</div>
       <div class="jl-cell" style="text-align:right">${fmt$(t.entry_price)}</div>
       <div class="jl-cell" style="text-align:right">${fmt$(t.exit_price)}</div>
       <div class="jl-cell" style="text-align:right">${t.shares}</div>
