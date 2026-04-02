@@ -1107,14 +1107,14 @@ async function runAnalyze(){
   /* Fix 4: 30-second timeout */
   const controller=new AbortController();
   const timeoutId=setTimeout(()=>controller.abort(),30000);
-  const requestBody={model:'deepseek-chat',max_tokens:1000,messages:[{role:'user',content:prompt}]};
+  const requestBody={messages:[{role:'user',content:prompt}]};
   console.log('[NZR] Sending POST /api/analyze | ticker:',ticker,'| timeframe:',activeTf,'| body:', JSON.stringify(requestBody));
   try{
     const resp=await fetch('/api/analyze',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(requestBody),signal:controller.signal});
     clearTimeout(timeoutId);
     if(!resp.ok)throw new Error('server');
     const data=await resp.json();
-    const raw=(data.content||[]).map(b=>b.text||'').join('').trim();
+    const raw=data.content[0].text.trim();
     let r;
     try{r=JSON.parse(raw.replace(/^```[a-z]*\n?/,'').replace(/```$/,'').trim());}
     catch(e){throw new Error('parse');}
