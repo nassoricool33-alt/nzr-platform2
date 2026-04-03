@@ -1331,7 +1331,7 @@ document.addEventListener('keydown',e=>{
 function updateClock(){
   const now=new Date();
   document.getElementById('clock').textContent=' · '+now.toLocaleTimeString('en-US',{timeZone:'America/New_York',hour:'2-digit',minute:'2-digit',second:'2-digit'})+' ET';
-  const open=isOpen();
+  const open=getMarketStatus();
   const dot=document.getElementById('ms-dot');
   const lbl=document.getElementById('ms-text');
   if(dot&&lbl){
@@ -1340,7 +1340,8 @@ function updateClock(){
     lbl.textContent=open?'MARKET OPEN':'MARKET CLOSED';
   }
 }
-setInterval(updateClock,1000);updateClock();
+setInterval(updateClock,1000);
+updateClock();
 
 /* ══ MOBILE NAV ══ */
 function toggleMobileNav(){document.getElementById('mobile-nav').classList.toggle('open');}
@@ -1403,19 +1404,16 @@ async function fetchQuote(sym){
 /* ══ HELPERS ══ */
 function fmt$(n){return n==null?'—':'$'+Number(n).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}
 function fmtPct(n){if(n==null)return'—';return(n>=0?'+':'')+n.toFixed(2)+'%'}
-function isOpen(){
-  const parts=new Intl.DateTimeFormat('en-US',{
-    timeZone:'America/New_York',
-    weekday:'short',
-    hour:'numeric',
-    minute:'numeric',
-    hour12:false
-  }).formatToParts(new Date());
-  const get=type=>parts.find(p=>p.type===type).value;
-  const weekday=get('weekday');
-  if(weekday==='Sat'||weekday==='Sun')return false;
-  const mins=parseInt(get('hour'),10)*60+parseInt(get('minute'),10);
-  return mins>=570&&mins<960;
+function getMarketStatus(){
+  const now=new Date();
+  const et=new Date(now.toLocaleString('en-US',{timeZone:'America/New_York'}));
+  const day=et.getDay();
+  const timeInMinutes=et.getHours()*60+et.getMinutes();
+  const marketOpen=9*60+30;
+  const marketClose=16*60;
+  const isWeekday=day>=1&&day<=5;
+  const isDuringHours=timeInMinutes>=marketOpen&&timeInMinutes<marketClose;
+  return isWeekday&&isDuringHours;
 }
 
 /* ══ FLASH NEWS ══ */
