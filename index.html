@@ -1404,12 +1404,18 @@ async function fetchQuote(sym){
 function fmt$(n){return n==null?'—':'$'+Number(n).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}
 function fmtPct(n){if(n==null)return'—';return(n>=0?'+':'')+n.toFixed(2)+'%'}
 function isOpen(){
-  const now=new Date();
-  const day=now.toLocaleDateString('en-US',{timeZone:'America/New_York',weekday:'short'});
-  if(day==='Sat'||day==='Sun')return false;
-  const et=now.toLocaleTimeString('en-US',{timeZone:'America/New_York',hour:'2-digit',minute:'2-digit',hour12:false});
-  const[h,m]=et.split(':').map(Number);
-  return(h*60+m)>=570&&(h*60+m)<960;
+  const parts=new Intl.DateTimeFormat('en-US',{
+    timeZone:'America/New_York',
+    weekday:'short',
+    hour:'numeric',
+    minute:'numeric',
+    hour12:false
+  }).formatToParts(new Date());
+  const get=type=>parts.find(p=>p.type===type).value;
+  const weekday=get('weekday');
+  if(weekday==='Sat'||weekday==='Sun')return false;
+  const mins=parseInt(get('hour'),10)*60+parseInt(get('minute'),10);
+  return mins>=570&&mins<960;
 }
 
 /* ══ FLASH NEWS ══ */
