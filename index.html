@@ -341,6 +341,27 @@ nav{position:sticky;top:0;z-index:200;background:#fff;border-bottom:2px solid va
 .az-news-txt{font-size:11px;color:var(--text2);line-height:1.5}
 .disc{font-family:var(--font-mono);font-size:9px;color:var(--text3);margin-top:14px;padding-top:12px;border-top:1px solid var(--border);line-height:1.7}
 
+/* ── INDICATORS CARD ── */
+.ind-card{background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);padding:14px;margin-bottom:10px}
+.ind-card-hd{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
+.ind-card-title{font-family:var(--font-mono);font-size:8px;color:var(--text3);letter-spacing:2px;text-transform:uppercase}
+.ind-src{font-family:var(--font-mono);font-size:8px;color:var(--text3);letter-spacing:1px}
+.ind-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
+@media(max-width:520px){.ind-grid{grid-template-columns:1fr}}
+.ind-block{background:var(--panel);border:1px solid var(--border);border-radius:var(--r);padding:10px 12px}
+.ind-lbl{font-family:var(--font-mono);font-size:9px;color:var(--text3);letter-spacing:1px;text-transform:uppercase;margin-bottom:6px}
+.ind-val{font-family:var(--font-mono);font-size:15px;font-weight:700;color:var(--text);margin-bottom:5px}
+.ind-sig{font-family:var(--font-mono);font-size:9px;font-weight:700;padding:2px 8px;border-radius:99px;display:inline-block;letter-spacing:.5px}
+.ind-sig.bull{color:var(--green);background:var(--green-dim)}
+.ind-sig.bear{color:var(--red);background:var(--red-dim)}
+.ind-sig.neu{color:var(--gold);background:var(--gold-dim)}
+.ind-sub{font-family:var(--font-mono);font-size:10px;color:var(--text3);margin-top:5px}
+.ind-bb-row{display:flex;justify-content:space-between;align-items:center;padding:3px 0;border-bottom:1px solid var(--border)}
+.ind-bb-row:last-child{border-bottom:none}
+.ind-bb-lbl{font-family:var(--font-mono);font-size:9px;color:var(--text3)}
+.ind-bb-val{font-family:var(--font-mono);font-size:11px;font-weight:700;color:var(--text)}
+.ind-loading{color:var(--text3);font-family:var(--font-mono);font-size:10px;padding:10px 0;text-align:center;grid-column:1/-1}
+
 /* ── WATCHLIST ── */
 .wl-input-row{display:flex;gap:8px;padding:12px 18px;border-bottom:1px solid var(--border)}
 .wl-input{flex:1;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);padding:8px 12px;color:var(--text);font-family:var(--font-mono);font-size:13px;font-weight:700;letter-spacing:1px;text-transform:uppercase;outline:none;transition:all .2s}
@@ -1716,6 +1737,7 @@ async function runAnalyze(){
   const hasLive=live&&live.price;
   const liveChgPct=hasLive?((live.price-live.prevClose)/live.prevClose*100):null;
   panel.innerHTML=`<div class="rp-loading"><div class="spin"></div><div class="spin-label">AI ANALYZING ${ticker} · ${tfLabels[activeTf].toUpperCase()}</div></div>`;
+  const indPromise=fetch('/api/indicators?symbol='+encodeURIComponent(ticker)).then(r=>r.ok?r.json():null).catch(()=>null);
   const priceCtx=hasLive?`LIVE MARKET DATA:\nCurrent: $${live.price.toFixed(2)}\nOpen: $${(live.open||live.price).toFixed(2)}\nHigh: $${(live.high||live.price).toFixed(2)}\nLow: $${(live.low||live.price).toFixed(2)}\nPrev Close: $${live.prevClose.toFixed(2)}\nChange: ${liveChgPct>=0?'+':''}${liveChgPct.toFixed(2)}%`:'No live price — use best known estimate.';
   const prompt=`You are NZR, an elite AI trading analyst. Analyze "${ticker}" for "${tfLabels[activeTf]}". Date: ${new Date().toDateString()}.\n\n${priceCtx}\n\nReturn ONLY raw JSON no markdown:\n{"valid":true,"ticker":"${ticker}","company":"Full name","timeframe":"${tfLabels[activeTf]}","signals":{"trend":"Bullish|Bearish|Neutral","momentum":"Strong|Moderate|Weak","volume":"High|Average|Low","risk":"High|Medium|Low"},"nzrScore":82,"entry":"specific price","target":"specific price","stop":"specific price","summary":"4 sentences: technical picture, key levels, catalysts/risks, trade thesis.","indicators":"2 sentences on RSI MACD VWAP readings.","bestFor":"trader type","edge":"one compelling reason","sentiment":{"bullish":65,"neutral":20,"bearish":15},"prediction":{"bear":"price","base":"price","bull":"price","bearConf":25,"baseConf":50,"bullConf":25},"news":["relevant market context 1","relevant context 2","relevant context 3"]}\nIf invalid: {"valid":false,"error":"reason"}`;
   const controller=new AbortController();
@@ -1882,6 +1904,15 @@ async function runAnalyze(){
       </div>
       <div class="ablock"><div class="ablock-lbl">Analysis</div><div class="ablock-txt" id="rp-t-sum"></div></div>
       <div class="ablock"><div class="ablock-lbl">Technical Indicators</div><div class="ablock-txt" id="rp-t-ind"></div></div>
+      <div class="ind-card">
+        <div class="ind-card-hd">
+          <div class="ind-card-title">Live Technical Indicators</div>
+          <div class="ind-src" id="rp-ind-date">Alpha Vantage</div>
+        </div>
+        <div class="ind-grid" id="rp-ind-grid">
+          <div class="ind-loading">Fetching live indicators...</div>
+        </div>
+      </div>
       <div class="ablock"><div class="ablock-lbl">Market Context &amp; News</div><div class="az-news" id="rp-t-news"></div></div>
       <div class="ablock"><div class="ablock-lbl">Best For</div><div class="ablock-txt" id="rp-t-best"></div></div>
       <div class="disc">⚠ NZR AI analysis is educational only. Not financial advice. All trading involves risk of loss.</div>
@@ -1902,6 +1933,45 @@ async function runAnalyze(){
     document.getElementById('rp-t-sum').textContent=r.summary;
     document.getElementById('rp-t-ind').textContent=r.indicators;
     document.getElementById('rp-t-best').textContent=r.bestFor;
+    /* Populate live indicators card */
+    indPromise.then(ind=>{
+      const grid=document.getElementById('rp-ind-grid');
+      if(!grid)return;
+      if(!ind||ind.error){grid.innerHTML='<div class="ind-loading">Indicators unavailable</div>';return;}
+      document.getElementById('rp-ind-date').textContent='as of '+ind.date;
+      const rsiCls=ind.rsi.signal==='Overbought'?'bear':ind.rsi.signal==='Oversold'?'bull':'neu';
+      const macdCls=ind.macd.signal_label==='Bullish'?'bull':'bear';
+      grid.innerHTML='';
+      /* RSI block */
+      const rsiB=document.createElement('div');rsiB.className='ind-block';
+      const rsiLbl=document.createElement('div');rsiLbl.className='ind-lbl';rsiLbl.textContent='RSI (14)';
+      const rsiV=document.createElement('div');rsiV.className='ind-val';rsiV.textContent=ind.rsi.value.toFixed(2);
+      const rsiS=document.createElement('div');rsiS.className='ind-sig '+rsiCls;rsiS.textContent=ind.rsi.signal;
+      rsiB.appendChild(rsiLbl);rsiB.appendChild(rsiV);rsiB.appendChild(rsiS);
+      grid.appendChild(rsiB);
+      /* MACD block */
+      const macdB=document.createElement('div');macdB.className='ind-block';
+      const macdLbl=document.createElement('div');macdLbl.className='ind-lbl';macdLbl.textContent='MACD';
+      const macdV=document.createElement('div');macdV.className='ind-val';macdV.textContent=ind.macd.macd.toFixed(4);
+      const macdS=document.createElement('div');macdS.className='ind-sig '+macdCls;macdS.textContent=ind.macd.signal_label;
+      const macdH=document.createElement('div');macdH.className='ind-sub';macdH.textContent='Hist: '+(ind.macd.histogram>=0?'+':'')+ind.macd.histogram.toFixed(4);
+      macdB.appendChild(macdLbl);macdB.appendChild(macdV);macdB.appendChild(macdS);macdB.appendChild(macdH);
+      grid.appendChild(macdB);
+      /* Bollinger Bands block */
+      const bbB=document.createElement('div');bbB.className='ind-block';
+      const bbLbl=document.createElement('div');bbLbl.className='ind-lbl';bbLbl.textContent='Bollinger Bands';
+      const mkBBRow=(label,val)=>{
+        const row=document.createElement('div');row.className='ind-bb-row';
+        const l=document.createElement('span');l.className='ind-bb-lbl';l.textContent=label;
+        const v=document.createElement('span');v.className='ind-bb-val';v.textContent='$'+val.toFixed(2);
+        row.appendChild(l);row.appendChild(v);return row;
+      };
+      bbB.appendChild(bbLbl);
+      bbB.appendChild(mkBBRow('Upper',ind.bbands.upper));
+      bbB.appendChild(mkBBRow('Middle',ind.bbands.middle));
+      bbB.appendChild(mkBBRow('Lower',ind.bbands.lower));
+      grid.appendChild(bbB);
+    });
     const newsBox=document.getElementById('rp-t-news');
     (r.news||[]).forEach(n=>{
       const wrap=document.createElement('div');wrap.className='az-news-item';
