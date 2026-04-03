@@ -43,13 +43,15 @@ module.exports = async function handler(req, res) {
   if (!symbol) return res.status(400).json({error: 'Symbol required'});
 
   try {
-    const [rsiData, macdData, bbandsData] = await Promise.all([
+    const [rsiData, macdData, bbandsData, sma50Data, sma200Data] = await Promise.all([
       fetchAV('function=RSI&symbol=' + symbol + '&interval=daily&time_period=14&series_type=close&apikey=' + key),
       fetchAV('function=MACD&symbol=' + symbol + '&interval=daily&series_type=close&apikey=' + key),
       fetchAV('function=BBANDS&symbol=' + symbol + '&interval=daily&time_period=20&series_type=close&apikey=' + key),
+      fetchAV('function=SMA&symbol=' + symbol + '&interval=daily&time_period=50&series_type=close&apikey=' + key),
+      fetchAV('function=SMA&symbol=' + symbol + '&interval=daily&time_period=200&series_type=close&apikey=' + key),
     ]);
 
-    if (rsiData.Note || rsiData.Information || macdData.Note || macdData.Information || bbandsData.Note || bbandsData.Information) {
+    if (rsiData.Note || rsiData.Information || macdData.Note || macdData.Information || bbandsData.Note || bbandsData.Information || sma50Data.Note || sma50Data.Information || sma200Data.Note || sma200Data.Information) {
       return res.status(429).json({error: 'Alpha Vantage rate limit reached. Please wait and try again.'});
     }
 
@@ -76,12 +78,34 @@ module.exports = async function handler(req, res) {
     const bbMiddle = parseFloat(bbEntry['Real Middle Band']);
     const bbLower = parseFloat(bbEntry['Real Lower Band']);
 
+    const sma50Series = sma50Data['Technical Analysis: SMA'];
+    const sma200Series = sma200Data['Technical Analysis: SMA'];
+    let goldenCross = null;
+    if (sma50Series && sma200Series) {
+      const sma50Keys = Object.keys(sma50Series);
+      const sma200Keys = Object.keys(sma200Series);
+      const sma50Now = parseFloat(sma50Series[sma50Keys[0]]['SMA']);
+      const sma200Now = parseFloat(sma200Series[sma200Keys[0]]['SMA']);
+      const sma50Prev = sma50Keys[1] ? parseFloat(sma50Series[sma50Keys[1]]['SMA']) : null;
+      const sma200Prev = sma200Keys[1] ? parseFloat(sma200Series[sma200Keys[1]]['SMA']) : null;
+      // Detect fresh crossover: lines swapped sides between yesterday and today
+      const crossedGolden = sma50Prev !== null && sma200Prev !== null && sma50Prev <= sma200Prev && sma50Now > sma200Now;
+      const crossedDeath  = sma50Prev !== null && sma200Prev !== null && sma50Prev >= sma200Prev && sma50Now < sma200Now;
+      let signal;
+      if (crossedGolden)      signal = 'Golden Cross';
+      else if (crossedDeath)  signal = 'Death Cross';
+      else if (sma50Now > sma200Now) signal = 'Golden Cross';
+      else                           signal = 'Death Cross';
+      goldenCross = {sma50: sma50Now, sma200: sma200Now, signal};
+    }
+
     return res.status(200).json({
       symbol,
       date: rsiDate,
       rsi: {value: rsiVal, signal: rsiSignal},
       macd: {macd: macdVal, signal: macdSignalVal, histogram: macdHist, signal_label: macdLabel},
       bbands: {upper: bbUpper, middle: bbMiddle, lower: bbLower},
+      golden_cross: goldenCross,
     });
   } catch (e) {
     return res.status(500).json({error: 'Failed to fetch indicators'});

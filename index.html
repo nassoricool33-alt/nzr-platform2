@@ -361,6 +361,20 @@ nav{position:sticky;top:0;z-index:200;background:#fff;border-bottom:2px solid va
 .ind-bb-lbl{font-family:var(--font-mono);font-size:9px;color:var(--text3)}
 .ind-bb-val{font-family:var(--font-mono);font-size:11px;font-weight:700;color:var(--text)}
 .ind-loading{color:var(--text3);font-family:var(--font-mono);font-size:10px;padding:10px 0;text-align:center;grid-column:1/-1}
+.cross-badge{display:flex;align-items:center;gap:14px;border-radius:var(--r);padding:12px 16px;margin-bottom:10px;border:1px solid}
+.cross-badge.golden{background:rgba(184,150,12,.08);border-color:rgba(184,150,12,.35)}
+.cross-badge.death{background:var(--red-dim);border-color:rgba(196,18,48,.3)}
+.cross-icon{font-size:22px;flex-shrink:0}
+.cross-signal{font-family:var(--font-display);font-size:13px;font-weight:700;letter-spacing:.3px}
+.cross-badge.golden .cross-signal{color:var(--gold2)}
+.cross-badge.death  .cross-signal{color:var(--red)}
+.cross-tag{font-family:var(--font-mono);font-size:8px;letter-spacing:2px;text-transform:uppercase;padding:2px 6px;border-radius:4px;margin-left:4px}
+.cross-badge.golden .cross-tag{color:var(--gold2);background:rgba(184,150,12,.15)}
+.cross-badge.death  .cross-tag{color:var(--red);background:rgba(196,18,48,.1)}
+.cross-smas{margin-left:auto;display:flex;gap:12px}
+.cross-sma{text-align:right}
+.cross-sma-lbl{font-family:var(--font-mono);font-size:8px;color:var(--text3);letter-spacing:1px}
+.cross-sma-val{font-family:var(--font-mono);font-size:12px;font-weight:700;color:var(--text)}
 
 /* ── WATCHLIST ── */
 .wl-input-row{display:flex;gap:8px;padding:12px 18px;border-bottom:1px solid var(--border)}
@@ -1355,12 +1369,17 @@ function showPage(id){
   if(id==='leaderboard')loadLeaderboard();
 }
 
+/* ══ HTML ESCAPE UTILITY ══ */
+function escHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
+
 /* ══ TOAST ══ */
 function toast(title,msg,type='gold'){
   const c=document.getElementById('toasts');
   const t=document.createElement('div');
-  t.className=`toast toast-${type}`;
-  t.innerHTML=`<div class="toast-title">${title}</div><div class="toast-msg">${msg}</div>`;
+  t.className='toast toast-'+type;
+  const h=document.createElement('div');h.className='toast-title';h.textContent=title;
+  const m=document.createElement('div');m.className='toast-msg';m.textContent=msg;
+  t.appendChild(h);t.appendChild(m);
   c.appendChild(t);setTimeout(()=>t.remove(),4000);
 }
 
@@ -1914,6 +1933,7 @@ async function runAnalyze(){
           <div class="ind-loading">Fetching live indicators...</div>
         </div>
       </div>
+      <div id="rp-cross-badge"></div>
       <div class="ablock"><div class="ablock-lbl">Market Context &amp; News</div><div class="az-news" id="rp-t-news"></div></div>
       <div class="ablock"><div class="ablock-lbl">Best For</div><div class="ablock-txt" id="rp-t-best"></div></div>
       <div class="disc">⚠ NZR AI analysis is educational only. Not financial advice. All trading involves risk of loss.</div>
@@ -1976,6 +1996,32 @@ async function runAnalyze(){
       bbB.appendChild(mkBBRow('Middle',ind.bbands.middle));
       bbB.appendChild(mkBBRow('Lower',ind.bbands.lower));
       grid.appendChild(bbB);
+      /* Golden / Death Cross badge */
+      const crossWrap=document.getElementById('rp-cross-badge');
+      if(crossWrap&&ind.golden_cross){
+        const gc=ind.golden_cross;
+        const isGolden=gc.signal==='Golden Cross';
+        const badge=document.createElement('div');
+        badge.className='cross-badge '+(isGolden?'golden':'death');
+        const icon=document.createElement('div');icon.className='cross-icon';
+        icon.textContent=isGolden?'\u2605':'\u2715';
+        const mid=document.createElement('div');
+        const sig=document.createElement('span');sig.className='cross-signal';sig.textContent=gc.signal;
+        const tag=document.createElement('span');tag.className='cross-tag';
+        tag.textContent=isGolden?'BULLISH':'BEARISH';
+        mid.appendChild(sig);mid.appendChild(tag);
+        const smas=document.createElement('div');smas.className='cross-smas';
+        const mk=(label,val)=>{
+          const d=document.createElement('div');d.className='cross-sma';
+          const l=document.createElement('div');l.className='cross-sma-lbl';l.textContent=label;
+          const v=document.createElement('div');v.className='cross-sma-val';v.textContent='$'+val.toFixed(2);
+          d.appendChild(l);d.appendChild(v);return d;
+        };
+        smas.appendChild(mk('SMA 50',gc.sma50));
+        smas.appendChild(mk('SMA 200',gc.sma200));
+        badge.appendChild(icon);badge.appendChild(mid);badge.appendChild(smas);
+        crossWrap.innerHTML='';crossWrap.appendChild(badge);
+      }
     });
     const newsBox=document.getElementById('rp-t-news');
     (r.news||[]).forEach(n=>{
@@ -2014,7 +2060,7 @@ let alertCounts=0;
 document.getElementById('wl-input').addEventListener('keydown',e=>{if(e.key==='Enter')addToWatchlist();});
 
 async function addToWatchlist(){
-  const sym=document.getElementById('wl-input').value.trim().toUpperCase();
+  const sym=document.getElementById('wl-input').value.trim().toUpperCase().replace(/[^A-Z0-9.\-]/g,'').slice(0,10);
   if(!sym)return;
   const user=getUser();
   if(!user){toast('Sign in required','Please sign in to use your watchlist','red');return;}
@@ -2035,7 +2081,8 @@ async function removeFromWatchlist(sym){
 
 async function setAlert(sym,val){
   const user=getUser();if(!user)return;
-  await _SB.from('watchlist').update({alert_price:val?parseFloat(val):null}).eq('user_id',user.id).eq('symbol',sym);
+  const{error}=await _SB.from('watchlist').update({alert_price:val?parseFloat(val):null}).eq('user_id',user.id).eq('symbol',sym);
+  if(error){toast('Alert error',error.message,'red');return;}
   watchlist=watchlist.map(w=>w.sym===sym?{...w,alert:val?parseFloat(val):null}:w);
 }
 
@@ -2057,14 +2104,15 @@ async function refreshWatchlist(){
     if(price&&w.alert&&price>=w.alert){alertCounts++;toast('🔔 Price Alert!',`${w.sym} hit your alert at $${w.alert}`,'green');}
     const scorePct=Math.floor(60+Math.random()*35);
     const scoreColor=scorePct>=80?'var(--green)':scorePct>=60?'var(--gold)':'var(--red)';
+    const es=escHtml(w.sym);
     return`<div class="wl-row">
-      <div class="wl-sym" onclick="goAnalyze('${w.sym}')">${w.sym}</div>
-      <div class="wl-name">${w.sym}</div>
+      <div class="wl-sym" onclick="goAnalyze('${es}')">${es}</div>
+      <div class="wl-name">${es}</div>
       <div class="wl-price">${price?fmt$(price):'—'}</div>
       <div class="wl-chg" style="color:${up?'var(--green)':'var(--red)'}">${pct!=null?fmtPct(pct):'—'}</div>
-      <div class="wl-alert"><input class="alert-input" placeholder="$ target" value="${w.alert||''}" onchange="setAlert('${w.sym}',this.value)"/></div>
+      <div class="wl-alert"><input class="alert-input" placeholder="$ target" value="${escHtml(String(w.alert||''))}" onchange="setAlert('${es}',this.value)"/></div>
       <div class="wl-score"><span class="wl-score-pill" style="background:${scoreColor}20;color:${scoreColor};border:1px solid ${scoreColor}40">${scorePct}</span></div>
-      <div><button class="wl-del" onclick="removeFromWatchlist('${w.sym}')">✕</button></div>
+      <div><button class="wl-del" onclick="removeFromWatchlist('${es}')">✕</button></div>
     </div>`;
   }));
   body.innerHTML=rows.join('');
@@ -2078,7 +2126,7 @@ let portfolio=[];
 
 async function addPosition(){
   const errEl=document.getElementById('pf-error');errEl.textContent='';
-  const sym=document.getElementById('pf-ticker').value.trim().toUpperCase();
+  const sym=document.getElementById('pf-ticker').value.trim().toUpperCase().replace(/[^A-Z0-9.\-]/g,'').slice(0,10);
   const sharesRaw=document.getElementById('pf-shares').value.trim();
   const costRaw=document.getElementById('pf-cost').value.trim();
   const shares=parseFloat(sharesRaw),cost=parseFloat(costRaw);
@@ -2131,15 +2179,16 @@ async function refreshPortfolio(){
     const value=curPrice*p.shares,cost=p.avg_cost*p.shares,pnl=value-cost,pnlPct=(pnl/cost)*100;
     totalValue+=value;totalCost+=cost;
     const up=pnl>=0;
+    const ep=escHtml(p.sym||p.symbol||'');
     return`<div class="pt-row">
-      <div class="pt-sym">${p.sym}</div>
-      <div class="pt-name">${p.sym}</div>
+      <div class="pt-sym">${ep}</div>
+      <div class="pt-name">${ep}</div>
       <div class="pt-cell" style="text-align:right">${p.shares.toFixed(2)}</div>
       <div class="pt-cell" style="text-align:right">${fmt$(p.avg_cost)}</div>
       <div class="pt-cell" style="text-align:right">${fmt$(curPrice)}</div>
       <div class="pt-cell" style="text-align:right">${fmt$(value)}</div>
       <div class="pt-cell" style="text-align:right;color:${up?'var(--green)':'var(--red)'}">${fmt$(pnl)}<br><span style="font-size:10px">${fmtPct(pnlPct)}</span></div>
-      <div style="text-align:center"><button class="wl-del" onclick="removePosition('${p.sym}')">✕</button></div>
+      <div style="text-align:center"><button class="wl-del" onclick="removePosition('${ep}')">✕</button></div>
     </div>`;
   }));
   body.innerHTML=rows.join('');
@@ -2209,13 +2258,13 @@ async function renderJournal(){
   list.innerHTML=journal.map(t=>`
     <div class="jl-row">
       <div class="jl-cell">${t.trade_date||t.created_at?.slice(0,10)||'—'}</div>
-      <div class="jl-sym">${t.symbol}</div>
+      <div class="jl-sym">${escHtml(t.symbol||'')}</div>
       <div class="jl-cell" style="text-align:right">${fmt$(t.entry_price)}</div>
       <div class="jl-cell" style="text-align:right">${fmt$(t.exit_price)}</div>
       <div class="jl-cell" style="text-align:right">${t.shares}</div>
       <div class="jl-cell ${t.win?'jl-win':'jl-loss'}" style="text-align:right">${fmt$(t.pnl)}</div>
       <div class="jl-cell ${t.win?'jl-win':'jl-loss'}" style="text-align:right">${fmtPct(t.pnl_pct)}</div>
-      <div class="jl-note">${t.setup}</div>
+      <div class="jl-note">${escHtml(t.setup||'')}</div>
       <div style="font-family:var(--font-mono);font-size:10px;padding:2px 8px;border-radius:99px;display:inline-block;${t.win?'background:var(--green-dim);color:var(--green)':'background:var(--red-dim);color:var(--red)'}">${t.win?'WIN':'LOSS'}</div>
     </div>`).join('');
   updateJournalStats(journal);
@@ -2523,7 +2572,7 @@ async function loadLeaderboard(){
   // Fetch all journal rows (public leaderboard)
   const{data,error}=await _SB.from('journal').select('user_id,pnl,win');
   if(error){
-    body.innerHTML=`<div style="padding:40px;text-align:center;color:var(--red);font-family:var(--font-mono);font-size:11px">⚠ ${error.message}</div>`;
+    const errDiv=document.createElement('div');errDiv.style.cssText='padding:40px;text-align:center;color:var(--red);font-family:var(--font-mono);font-size:11px';errDiv.textContent='⚠ '+error.message;body.innerHTML='';body.appendChild(errDiv);
     return;
   }
   if(!data||!data.length){
@@ -2542,7 +2591,7 @@ async function loadLeaderboard(){
   const userIds=Object.keys(grouped);
   let profiles={};
   if(userIds.length){
-    const{data:pData}=await _SB.from('profiles').select('id,full_name,email').in('id',userIds);
+    const{data:pData}=await _SB.from('profiles').select('id,full_name').in('id',userIds);
     (pData||[]).forEach(p=>{profiles[p.id]=p;});
   }
   // Sort by total P&L descending, take top 10
@@ -2550,7 +2599,7 @@ async function loadLeaderboard(){
     .map(g=>({
       ...g,
       winRate:g.trades?g.wins/g.trades*100:0,
-      name:profiles[g.user_id]?.full_name||profiles[g.user_id]?.email?.split('@')[0]||'Trader #'+g.user_id.slice(0,6)
+      name:profiles[g.user_id]?.full_name||'Trader #'+g.user_id.slice(0,6)
     }))
     .sort((a,b)=>b.totalPnl-a.totalPnl)
     .slice(0,10);
@@ -2560,7 +2609,7 @@ async function loadLeaderboard(){
     const up=r.totalPnl>=0;
     return`<div class="lb-row${isMe?' current-user':''}">
       <div class="lb-rank-cell">${i<3?`<span style="font-size:18px">${medals[i]}</span>`:`<span>#${i+1}</span>`}</div>
-      <div class="lb-name">${r.name}${isMe?'<span class="lb-you">YOU</span>':''}</div>
+      <div class="lb-name">${escHtml(r.name)}${isMe?'<span class="lb-you">YOU</span>':''}</div>
       <div class="lb-cell">${r.trades}</div>
       <div class="lb-cell" style="color:${r.winRate>=50?'var(--green)':'var(--red)'}">${r.winRate.toFixed(1)}%</div>
       <div class="lb-cell" style="color:var(--green)">${r.wins}</div>
