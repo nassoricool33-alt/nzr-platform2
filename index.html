@@ -1368,6 +1368,7 @@ function toast(title,msg,type='gold'){
 const _quoteCache=new Map();
 const _CACHE_TTL=15000;
 async function fetchQuote(sym){
+  if(!sym)return null;
   const cached=_quoteCache.get(sym);
   if(cached&&Date.now()-cached.ts<_CACHE_TTL)return cached.data;
   try{
@@ -1737,7 +1738,7 @@ async function runAnalyze(){
   const hasLive=live&&live.price;
   const liveChgPct=hasLive?((live.price-live.prevClose)/live.prevClose*100):null;
   panel.innerHTML=`<div class="rp-loading"><div class="spin"></div><div class="spin-label">AI ANALYZING ${ticker} · ${tfLabels[activeTf].toUpperCase()}</div></div>`;
-  const indPromise=fetch('/api/indicators?symbol='+encodeURIComponent(ticker)).then(r=>r.ok?r.json():null).catch(()=>null);
+  const indPromise=ticker?fetch('/api/indicators?symbol='+encodeURIComponent(ticker)).then(r=>r.json().then(j=>({...j,_status:r.status}))).catch(()=>null):Promise.resolve(null);
   const priceCtx=hasLive?`LIVE MARKET DATA:\nCurrent: $${live.price.toFixed(2)}\nOpen: $${(live.open||live.price).toFixed(2)}\nHigh: $${(live.high||live.price).toFixed(2)}\nLow: $${(live.low||live.price).toFixed(2)}\nPrev Close: $${live.prevClose.toFixed(2)}\nChange: ${liveChgPct>=0?'+':''}${liveChgPct.toFixed(2)}%`:'No live price — use best known estimate.';
   const prompt=`You are NZR, an elite AI trading analyst. Analyze "${ticker}" for "${tfLabels[activeTf]}". Date: ${new Date().toDateString()}.\n\n${priceCtx}\n\nReturn ONLY raw JSON no markdown:\n{"valid":true,"ticker":"${ticker}","company":"Full name","timeframe":"${tfLabels[activeTf]}","signals":{"trend":"Bullish|Bearish|Neutral","momentum":"Strong|Moderate|Weak","volume":"High|Average|Low","risk":"High|Medium|Low"},"nzrScore":82,"entry":"specific price","target":"specific price","stop":"specific price","summary":"4 sentences: technical picture, key levels, catalysts/risks, trade thesis.","indicators":"2 sentences on RSI MACD VWAP readings.","bestFor":"trader type","edge":"one compelling reason","sentiment":{"bullish":65,"neutral":20,"bearish":15},"prediction":{"bear":"price","base":"price","bull":"price","bearConf":25,"baseConf":50,"bullConf":25},"news":["relevant market context 1","relevant context 2","relevant context 3"]}\nIf invalid: {"valid":false,"error":"reason"}`;
   const controller=new AbortController();
@@ -1937,7 +1938,11 @@ async function runAnalyze(){
     indPromise.then(ind=>{
       const grid=document.getElementById('rp-ind-grid');
       if(!grid)return;
-      if(!ind||ind.error){grid.innerHTML='<div class="ind-loading">Indicators unavailable</div>';return;}
+      if(!ind||ind.error){
+        const msg=ind&&ind._status===429?'Daily limit reached \u2014 indicators reset at midnight UTC':'Indicators unavailable';
+        const notice=document.createElement('div');notice.className='ind-loading';notice.textContent=msg;
+        grid.innerHTML='';grid.appendChild(notice);return;
+      }
       document.getElementById('rp-ind-date').textContent='as of '+ind.date;
       const rsiCls=ind.rsi.signal==='Overbought'?'bear':ind.rsi.signal==='Oversold'?'bull':'neu';
       const macdCls=ind.macd.signal_label==='Bullish'?'bull':'bear';
