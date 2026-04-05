@@ -140,6 +140,13 @@ nav{position:sticky;top:0;z-index:200;backdrop-filter:blur(24px);-webkit-backdro
 .ticker-chg.dn{color:var(--red)}
 @keyframes tickerRun{0%{transform:translateX(0)}100%{transform:translateX(-50%)}}
 
+/* ─── NEWS TICKER BAR ──────────────────────────────── */
+.news-ticker-bar{background:#000;border-bottom:1px solid #222;padding:7px 0;position:sticky;top:98px;z-index:180;overflow:hidden}
+.news-ticker-track{display:flex;width:max-content;animation:tickerRun 40s linear infinite}
+.news-ticker-track:hover{animation-play-state:paused}
+.news-ticker-item{display:flex;align-items:center;gap:0;padding:0 20px;font-family:var(--font-mono);font-size:11px;color:#fff;white-space:nowrap;letter-spacing:.2px}
+.news-ticker-bullet{color:#c8960c;margin:0 14px;font-size:13px;line-height:1}
+
 /* ─── SECTION HEADERS ──────────────────────────────── */
 .section-header{margin-bottom:28px}
 .section-eyebrow{font-family:var(--font-mono);font-size:10px;color:var(--gold);letter-spacing:3px;text-transform:uppercase;margin-bottom:8px}
@@ -512,6 +519,13 @@ footer{border-top:1px solid var(--border);padding:32px 0;margin-top:80px}
     <div class="indices-meta">
       <span class="indices-updated" id="last-updated">Updating…</span>
     </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════ NEWS TICKER ══ -->
+<div class="news-ticker-bar" id="news-ticker-bar">
+  <div class="news-ticker-track" id="news-ticker-track">
+    <span class="news-ticker-item">Market news loading…</span>
   </div>
 </div>
 
@@ -1012,6 +1026,8 @@ async function initAllData(){
   startLastUpdatedCounter();
   buildNewsWidget();
   buildEconCalendar();
+  buildNewsTicker();
+  setInterval(buildNewsTicker, 5 * 60 * 1000);
 }
 
 /* ── MARKET INDICES BAR ─────────────────────────── */
@@ -1338,6 +1354,26 @@ async function buildNewsWidget(){
     el.innerHTML=`<div style="padding:12px 0;color:var(--text3);font-family:var(--font-mono);font-size:11px;text-align:center">
       News feed unavailable. Check back during market hours.
     </div>`;
+  }
+}
+
+/* ── NEWS TICKER ────────────────────────────────── */
+async function buildNewsTicker(){
+  const track=document.getElementById('news-ticker-track');
+  if(!track)return;
+  try{
+    const r=await fetch('/api/news?type=market');
+    if(!r.ok)throw new Error();
+    const data=await r.json();
+    const items=(data.news||[]).filter(n=>n.headline).map(n=>n.headline);
+    if(!items.length)throw new Error();
+    const html=items.map((h,i)=>
+      `<span class="news-ticker-item">${i>0?'<span class="news-ticker-bullet">•</span>':''}${h}</span>`
+    ).join('');
+    // Duplicate for seamless loop
+    track.innerHTML=html+html;
+  }catch{
+    track.innerHTML='<span class="news-ticker-item">Market news unavailable — check back during market hours.</span>';
   }
 }
 
