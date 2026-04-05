@@ -512,8 +512,8 @@ footer{border-top:1px solid var(--border);padding:32px 0;margin-top:80px}
       <div class="index-divider"></div>
       <div class="index-item">
         <span class="index-sym">VIX</span>
-        <span class="index-price" style="color:var(--text3)">N/A</span>
-        <span class="index-chg na">unavailable</span>
+        <span class="skel" style="width:38px;height:13px"></span>
+        <span class="skel" style="width:38px;height:11px"></span>
       </div>
     </div>
     <div class="indices-meta">
@@ -1015,8 +1015,11 @@ function isMarketOpen(){
 const ALL_SYMS=['SPY','QQQ','DIA','IWM','AAPL','NVDA','TSLA','AMZN','MSFT','META','GOOGL','AMD','NFLX','JPM','GLD','V','UNH','XOM','JNJ','WMT','MA','PG','HD','COST','ABBV','MRK','CVX','ADBE','CRM','PYPL','INTC','QCOM','TXN'];
 
 async function initAllData(){
-  // Fetch all quotes in parallel; individual failures don't block others
-  await Promise.allSettled(ALL_SYMS.map(s=>loadQuote(s)));
+  // Fetch Finnhub quotes and VIX (Yahoo Finance proxy) in parallel
+  await Promise.allSettled([
+    ...ALL_SYMS.map(s=>loadQuote(s)),
+    loadVix(),
+  ]);
   renderIndicesLive();
   renderTickerLive();
   renderFearGreedLive();
@@ -1028,26 +1031,37 @@ async function initAllData(){
   buildEconCalendar();
   buildNewsTicker();
   setInterval(buildNewsTicker, 5 * 60 * 1000);
+  setInterval(renderFearGreedLive, 5 * 60 * 1000);
 }
 
 /* ── MARKET INDICES BAR ─────────────────────────── */
 const INDEX_DEFS=[
-  {sym:'SPY'},{sym:'QQQ'},{sym:'DIA'},{sym:'VIX',noData:true,label:'Volatility Index'},
+  {sym:'SPY'},{sym:'QQQ'},{sym:'DIA'},{sym:'VIX'},
 ];
 let lastUpdatedSec=0;
+
+async function loadVix(){
+  try{
+    const r=await fetch('/api/vix');
+    if(!r.ok)return;
+    const d=await r.json();
+    if(d.price==null)return;
+    Q['VIX']={price:d.price,change:d.changePercent,up:(d.changePercent??0)>=0,prevClose:null};
+  }catch{}
+}
 
 function renderIndicesLive(){
   const list=document.getElementById('indices-list');
   list.innerHTML=INDEX_DEFS.map((d,i)=>{
-    const q=d.noData?null:Q[d.sym];
-    const price=d.noData?'N/A':q?fmt$(q.price):'--';
-    const chg=d.noData?'unavailable':q?fmtChg(q.change):'--';
-    const cls='na';
+    const q=Q[d.sym];
+    const price=q?fmt$(q.price):'--';
+    const chg=q?fmtChg(q.change):'--';
+    const cls=q?(q.up?'up':'dn'):'na';
     return`${i>0?'<div class="index-divider"></div>':''}
     <div class="index-item">
       <span class="index-sym">${d.sym}</span>
-      <span class="index-price" ${q?'style="color:var(--text)"':'style="color:var(--text3)"'}>${price}</span>
-      <span class="index-chg ${q?(q.up?'up':'dn'):cls}">${chg}</span>
+      <span class="index-price">${price}</span>
+      <span class="index-chg ${cls}">${chg}</span>
     </div>`;
   }).join('');
 }
@@ -1091,41 +1105,48 @@ function renderTickerLive(){
   track.innerHTML=[...placeholders,...placeholders].join('');
 }());
 
-/* ── FEAR & GREED (VIX-derived) ─────────────────── */
-function renderFearGreedLive(){
+/* ── FEAR & GREED (CNN) ──────────────────────────── */
+function fgColor(score){
+  if(score<=25)return'var(--red)';
+  if(score<=45)return'#c8702a';
+  if(score<=55)return'var(--text2)';
+  if(score<=75)return'var(--green)';
+  return'var(--gold)';
+}
+
+async function renderFearGreedLive(){
   const el=document.getElementById('fear-greed-content');
-  const vix=Q['VIX'];
-  if(!vix){
+  try{
+    const r=await fetch('/api/feargreed');
+    if(!r.ok)throw new Error();
+    const data=await r.json();
+    if(data.value==null)throw new Error();
+    const score=Math.min(100,Math.max(0,data.value));
+    const label=data.rating||'--';
+    const color=fgColor(score);
+    el.innerHTML=`
+      <div style="padding:4px 0">
+        <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:14px">
+          <div style="font-family:var(--font-display);font-size:42px;font-weight:800;color:${color};line-height:1">${score}</div>
+          <div>
+            <div style="font-family:var(--font-display);font-weight:700;font-size:15px;color:${color}">${label}</div>
+            <div style="font-family:var(--font-mono);font-size:10px;color:var(--text3);margin-top:2px">CNN Fear &amp; Greed Index</div>
+          </div>
+        </div>
+        <div style="background:linear-gradient(90deg,var(--red) 0%,#c8702a 25%,var(--text2) 46%,var(--green) 75%,var(--gold) 100%);height:6px;border-radius:99px;position:relative;margin-bottom:6px">
+          <div style="position:absolute;top:-4px;left:${Math.min(98,Math.max(2,score))}%;transform:translateX(-50%);width:14px;height:14px;border-radius:50%;background:var(--text);border:2px solid var(--panel);box-shadow:0 1px 4px rgba(0,0,0,.2)"></div>
+        </div>
+        <div style="display:flex;justify-content:space-between;font-family:var(--font-mono);font-size:9px;color:var(--text3);letter-spacing:.5px">
+          <span>Extreme Fear</span><span>Neutral</span><span>Extreme Greed</span>
+        </div>
+      </div>`;
+  }catch{
     el.innerHTML=`<div class="empty-state">
       <div class="empty-icon">📉</div>
-      <div class="empty-title">Fear &amp; Greed data unavailable</div>
-      <div class="empty-desc">VIX is not supported by this data provider. Fear &amp; Greed index cannot be calculated.</div>
+      <div class="empty-title">Fear &amp; Greed unavailable</div>
+      <div class="empty-desc">Data unavailable — market may be closed or rate limit reached.</div>
     </div>`;
-    return;
   }
-  const v=vix.price;
-  let score,label,color;
-  if(v<12){score=90;label='Extreme Greed';color='var(--green)';}
-  else if(v<16){score=72;label='Greed';color='#5a9e6a';}
-  else if(v<21){score=50;label='Neutral';color='var(--gold)';}
-  else if(v<28){score=28;label='Fear';color='#c8702a';}
-  else{score=10;label='Extreme Fear';color='var(--red)';}
-  el.innerHTML=`
-    <div style="padding:4px 0">
-      <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:14px">
-        <div style="font-family:var(--font-display);font-size:42px;font-weight:800;color:${color};line-height:1">${score}</div>
-        <div>
-          <div style="font-family:var(--font-display);font-weight:700;font-size:15px;color:${color}">${label}</div>
-          <div style="font-family:var(--font-mono);font-size:10px;color:var(--text3);margin-top:2px">VIX ${fmt$(v)} &nbsp;${fmtChg(vix.change)}</div>
-        </div>
-      </div>
-      <div style="background:linear-gradient(90deg,var(--red) 0%,#c8702a 28%,var(--gold) 50%,#5a9e6a 72%,var(--green) 100%);height:6px;border-radius:99px;position:relative;margin-bottom:6px">
-        <div style="position:absolute;top:-4px;left:${Math.min(98,Math.max(2,score))}%;transform:translateX(-50%);width:14px;height:14px;border-radius:50%;background:var(--text);border:2px solid var(--panel);box-shadow:0 1px 4px rgba(0,0,0,.2)"></div>
-      </div>
-      <div style="display:flex;justify-content:space-between;font-family:var(--font-mono);font-size:9px;color:var(--text3);letter-spacing:.5px">
-        <span>Extreme Fear</span><span>Neutral</span><span>Extreme Greed</span>
-      </div>
-    </div>`;
 }
 
 function retryFearGreed(){
