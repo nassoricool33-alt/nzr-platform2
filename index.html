@@ -1254,6 +1254,13 @@ footer{border-top:1px solid var(--border);padding:32px 0;margin-top:80px}
     <div class="section-title">Strategy <span>Backtester</span></div>
   </div>
 
+  <!-- Preset test buttons -->
+  <div class="sec-fade" style="animation-delay:40ms;display:flex;gap:10px;flex-wrap:wrap;margin-bottom:24px">
+    <button class="bt-export-btn" style="border-color:var(--gold);color:var(--gold);font-size:10px" onclick="btPreset('AAPL','2022-01-01','2024-01-01','golden_cross')">▶ AAPL 2022–2024 Golden Cross</button>
+    <button class="bt-export-btn" style="font-size:10px" onclick="btPreset('SPY','2021-01-01','2023-06-01','rsi_macd')">▶ SPY 2021–2023 RSI+MACD</button>
+    <button class="bt-export-btn" style="font-size:10px" onclick="btPreset('NVDA','2022-01-01','2024-01-01','combined')">▶ NVDA 2022–2024 Combined</button>
+  </div>
+
   <div class="bt-layout sec-fade" style="animation-delay:80ms">
 
     <!-- ── LEFT: Controls ── -->
@@ -1305,6 +1312,9 @@ footer{border-top:1px solid var(--border);padding:32px 0;margin-top:80px}
 
       <!-- Summary cards -->
       <div id="bt-summary" style="display:none">
+        <!-- Message banner (shown when 0 trades) -->
+        <div id="bt-message" style="display:none;margin-bottom:16px;padding:12px 16px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);font-family:var(--font-mono);font-size:11px;color:var(--text2);line-height:1.6"></div>
+
         <div class="bt-summary-grid" id="bt-summary-grid"></div>
 
         <!-- Equity curve chart -->
@@ -1322,9 +1332,9 @@ footer{border-top:1px solid var(--border);padding:32px 0;margin-top:80px}
           <table class="bt-table">
             <thead>
               <tr>
-                <th>Entry Date</th><th>Symbol</th><th>Entry $</th>
+                <th>Entry Date</th><th>Symbol</th><th>Dir</th><th>Entry $</th>
                 <th>Exit Date</th><th>Exit $</th>
-                <th>P&amp;L %</th><th>Result</th><th>Days</th>
+                <th>P&amp;L $</th><th>P&amp;L %</th><th>Result</th><th>Days</th>
               </tr>
             </thead>
             <tbody id="bt-tbody"></tbody>
@@ -2696,9 +2706,9 @@ let _btTrades = [];
 })();
 
 const BT_STRATEGY_DESCS = {
-  golden_cross: 'Buy when EMA 60 crosses above EMA 200. Sell when EMA 60 crosses below EMA 200 or stop loss (5%) is hit. Best for trend-following on longer timeframes.',
-  rsi_macd:     'Buy when RSI &lt; 35 AND MACD histogram turns positive. Sell when RSI &gt; 70 OR histogram turns negative. Best for mean-reversion and momentum entries.',
-  combined:     'Requires EMA 60/200 golden cross AND RSI &lt; 35 AND positive MACD histogram. Most selective — fewer but higher-quality signals.',
+  golden_cross: 'Buy when EMA 60 crosses above EMA 200 (golden cross). Exit on death cross or 5% stop loss. Best for capturing major trend reversals — needs at least 1 year of data.',
+  rsi_macd:     'Buy when RSI &lt; 35 (oversold) AND MACD histogram turns positive. Exit when RSI &gt; 70 OR histogram turns negative. Good for catching oversold bounces.',
+  combined:     'Requires EMA 60 &gt; EMA 200 (uptrend) AND either RSI &lt; 35 (oversold) OR RSI &lt; 50 with positive MACD histogram (momentum). Exit on death cross, RSI &gt; 70, or MACD flip. More signals than pure golden cross.',
 };
 
 function btUpdateStrategyDesc() {
@@ -2754,12 +2764,24 @@ async function runBacktest() {
       placeholder.style.display = 'flex';
       placeholder.innerHTML =
         `<div style="font-size:28px;opacity:.35">⚠</div>
-         <div style="color:var(--red);font-family:var(--font-mono);font-size:12px;max-width:320px;text-align:center">${data.error || 'Backtest failed — check symbol and date range'}</div>`;
+         <div style="color:var(--red);font-family:var(--font-mono);font-size:12px;max-width:340px;text-align:center;line-height:1.6">${data.error || 'Backtest failed — check symbol and date range'}</div>`;
       return;
     }
 
     _btTrades = data.trades || [];
     placeholder.style.display = 'none';
+
+    // Show message banner if present (e.g. 0 trades explanation)
+    const msgEl = document.getElementById('bt-message');
+    if (msgEl) {
+      if (data.message) {
+        msgEl.textContent = data.message;
+        msgEl.style.display = 'block';
+      } else {
+        msgEl.style.display = 'none';
+      }
+    }
+
     btRenderSummary(data.summary, data.strategy, data.barsUsed);
     btRenderTable(_btTrades);
     btRenderChart(data.summary.equityCurve || []);
@@ -2813,22 +2835,26 @@ function btRenderTable(trades) {
   const tbody = document.getElementById('bt-tbody');
   if (!tbody) return;
   if (!trades.length) {
-    tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:28px;color:var(--text3);font-family:var(--font-mono);font-size:11px">No trades generated — try a wider date range or different strategy.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;padding:28px;color:var(--text3);font-family:var(--font-mono);font-size:11px">No trades found — try a longer date range or different strategy</td></tr>';
     return;
   }
   tbody.innerHTML = trades.map(t => {
-    const cls   = t.result === 'WIN' ? 'win' : 'loss';
-    const badge = t.result === 'WIN'
+    const cls      = t.result === 'WIN' ? 'win' : 'loss';
+    const badge    = t.result === 'WIN'
       ? '<span class="bt-result-win">WIN</span>'
       : '<span class="bt-result-loss">LOSS</span>';
-    const pnlStyle = `color:${t.pnlPct >= 0 ? 'var(--green)' : 'var(--red)'};font-weight:700`;
+    const pnlColor = `color:${t.pnlPct >= 0 ? 'var(--green)' : 'var(--red)'};font-weight:700`;
+    const dir      = t.direction || 'LONG';
+    const dirColor = dir === 'LONG' ? 'var(--green)' : 'var(--red)';
     return `<tr class="${cls}">
       <td style="font-family:var(--font-mono);color:var(--text3)">${t.entryDate}</td>
       <td style="font-family:var(--font-mono);font-weight:700;color:var(--gold)">${t.symbol}</td>
+      <td style="font-family:var(--font-mono);font-weight:700;color:${dirColor}">${dir}</td>
       <td style="font-family:var(--font-mono)">${btFmt$(t.entryPrice)}</td>
       <td style="font-family:var(--font-mono);color:var(--text3)">${t.exitDate}</td>
       <td style="font-family:var(--font-mono)">${btFmt$(t.exitPrice)}</td>
-      <td style="font-family:var(--font-mono);${pnlStyle}">${btFmtPct(t.pnlPct, true)}</td>
+      <td style="font-family:var(--font-mono);${pnlColor}">${t.pnl >= 0 ? '+' : ''}${btFmt$(t.pnl)}</td>
+      <td style="font-family:var(--font-mono);${pnlColor}">${btFmtPct(t.pnlPct, true)}</td>
       <td>${badge}</td>
       <td style="font-family:var(--font-mono);color:var(--text3)">${t.holdingDays}d</td>
     </tr>`;
@@ -2930,9 +2956,9 @@ function btRenderChart(equityCurve) {
 
 function btExportCSV() {
   if (!_btTrades.length) return;
-  const header = 'Symbol,Strategy,Entry Date,Entry Price,Exit Date,Exit Price,P&L %,Result,Days Held';
+  const header = 'Symbol,Strategy,Direction,Entry Date,Entry Price,Exit Date,Exit Price,P&L $,P&L %,Result,Days Held';
   const rows = _btTrades.map(t =>
-    [t.symbol, t.strategy, t.entryDate, t.entryPrice, t.exitDate, t.exitPrice, t.pnlPct, t.result, t.holdingDays].join(',')
+    [t.symbol, t.strategy, t.direction||'LONG', t.entryDate, t.entryPrice, t.exitDate, t.exitPrice, t.pnl, t.pnlPct, t.result, t.holdingDays].join(',')
   );
   const csv  = [header, ...rows].join('\n');
   const blob = new Blob([csv], { type: 'text/csv' });
@@ -2942,6 +2968,18 @@ function btExportCSV() {
   a.download = `nzr-backtest-${_btTrades[0]?.symbol || 'results'}-${Date.now()}.csv`;
   a.click();
   URL.revokeObjectURL(url);
+}
+
+function btPreset(symbol, startDate, endDate, strategy) {
+  const symEl  = document.getElementById('bt-symbol');
+  const startEl= document.getElementById('bt-start');
+  const endEl  = document.getElementById('bt-end');
+  const strEl  = document.getElementById('bt-strategy');
+  if(symEl)  symEl.value  = symbol;
+  if(startEl)startEl.value= startDate;
+  if(endEl)  endEl.value  = endDate;
+  if(strEl){ strEl.value  = strategy; btUpdateStrategyDesc(); }
+  runBacktest();
 }
 
 /* ── WEBSOCKET REAL-TIME PRICE STREAMING ─────────── */
