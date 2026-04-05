@@ -6,6 +6,7 @@
 <title>NZR — AI Trading Intelligence</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"/>
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=Space+Mono:ital,wght@0,400;0,700;1,400&family=Inter:wght@300;400;500&display=swap" rel="stylesheet"/>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
 /* ─── RESET & BASE ─────────────────────────────────── */
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
@@ -335,6 +336,37 @@ nav{position:sticky;top:0;z-index:200;backdrop-filter:blur(24px);-webkit-backdro
 .earnings-impact.low{background:rgba(0,0,0,.05);color:var(--text3)}
 .earnings-est{color:var(--text);font-weight:500;font-family:var(--font-mono);font-size:12px}
 
+/* ─── SCREENER ─────────────────────────────────────── */
+.screener-pills{display:flex;flex-wrap:wrap;gap:6px}
+.screener-pill{background:var(--bg3);border:1px solid var(--border);border-radius:99px;padding:5px 14px;font-family:var(--font-mono);font-size:11px;color:var(--text2);cursor:pointer;transition:all .15s;letter-spacing:.3px}
+.screener-pill:hover{border-color:var(--border2);color:var(--text)}
+.screener-pill.active{background:var(--gold-dim);border-color:rgba(200,150,12,.4);color:var(--gold)}
+
+/* ─── AUTH MODAL ────────────────────────────────────── */
+.auth-modal{position:fixed;inset:0;z-index:2000;background:rgba(240,238,233,.96);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);display:flex;align-items:center;justify-content:center;padding:24px}
+.auth-modal-box{background:var(--panel);border:1px solid var(--border2);border-radius:var(--radius-lg);padding:40px;max-width:420px;width:100%;box-shadow:var(--shadow);position:relative}
+.auth-modal-close{position:absolute;top:14px;right:14px;background:none;border:none;font-size:16px;cursor:pointer;color:var(--text3);width:30px;height:30px;display:flex;align-items:center;justify-content:center;border-radius:6px;transition:all .15s;line-height:1}
+.auth-modal-close:hover{background:rgba(0,0,0,.06);color:var(--text)}
+.auth-modal-logo{font-family:var(--font-display);font-weight:800;font-size:18px;letter-spacing:3px;color:var(--gold);text-align:center;margin-bottom:18px}
+.auth-modal-title{font-family:var(--font-display);font-size:20px;font-weight:700;color:var(--text);text-align:center;margin-bottom:4px}
+.auth-modal-sub{font-size:13px;color:var(--text2);text-align:center;margin-bottom:22px}
+.auth-tabs{display:flex;background:var(--bg2);border-radius:var(--radius);padding:3px;margin-bottom:22px}
+.auth-tab{flex:1;background:none;border:none;border-radius:6px;padding:8px;font-family:var(--font-display);font-size:13px;font-weight:600;color:var(--text2);cursor:pointer;transition:all .2s}
+.auth-tab.active{background:var(--panel);color:var(--text);box-shadow:0 1px 3px rgba(0,0,0,.08)}
+.auth-field{margin-bottom:14px}
+.auth-field label{display:block;font-family:var(--font-mono);font-size:10px;color:var(--text3);letter-spacing:2px;text-transform:uppercase;margin-bottom:6px}
+.auth-field input{width:100%;background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);padding:11px 14px;color:var(--text);font-family:var(--font-body);font-size:14px;outline:none;transition:all .2s}
+.auth-field input:focus{border-color:var(--gold);box-shadow:0 0 0 3px var(--gold-dim)}
+.auth-submit{width:100%;background:var(--gold);color:#fff;font-family:var(--font-display);font-weight:700;font-size:14px;letter-spacing:1px;padding:13px;border-radius:var(--radius);border:none;cursor:pointer;transition:all .2s;text-transform:uppercase;margin-top:4px;box-shadow:var(--glow-gold)}
+.auth-submit:hover{background:var(--gold2);transform:translateY(-1px)}
+.auth-submit:disabled{opacity:.6;cursor:not-allowed;transform:none}
+.auth-error{background:var(--red-dim);border:1px solid rgba(192,24,42,.2);border-radius:var(--radius);padding:10px 14px;font-size:13px;color:var(--red);margin-bottom:16px;line-height:1.5}
+.auth-divider{display:flex;align-items:center;gap:12px;margin:18px 0;font-family:var(--font-mono);font-size:10px;color:var(--text3);letter-spacing:1px}
+.auth-divider::before,.auth-divider::after{content:'';flex:1;height:1px;background:var(--border)}
+.auth-google{width:100%;background:var(--panel);border:1px solid var(--border2);border-radius:var(--radius);padding:11px;font-family:var(--font-display);font-weight:600;font-size:13px;color:var(--text);cursor:pointer;transition:all .2s;display:flex;align-items:center;justify-content:center;gap:10px}
+.auth-google:hover{border-color:var(--gold);background:var(--gold-dim)}
+.auth-note{font-size:11px;color:var(--text3);text-align:center;margin-top:16px;line-height:1.5}
+
 /* ─── ECON CALENDAR ────────────────────────────────── */
 .econ-impact-high{font-family:var(--font-mono);font-size:9px;padding:2px 8px;border-radius:99px;letter-spacing:.5px;background:var(--red-dim);color:var(--red);border:1px solid rgba(192,24,42,.2)}
 .econ-impact-med{font-family:var(--font-mono);font-size:9px;padding:2px 8px;border-radius:99px;letter-spacing:.5px;background:rgba(200,112,42,.1);color:#c8702a;border:1px solid rgba(200,112,42,.2)}
@@ -450,6 +482,40 @@ footer{border-top:1px solid var(--border);padding:32px 0;margin-top:80px}
       <strong>Trading involves substantial risk of loss.</strong> Past performance of any AI model or analysis does not guarantee future results. Always conduct your own due diligence and consult a licensed financial professional before making investment decisions.
     </div>
     <button class="disclaimer-modal-accept" onclick="acceptDisclaimer()">I Understand — Continue</button>
+  </div>
+</div>
+
+<!-- Auth modal -->
+<div class="auth-modal" id="auth-modal" style="display:none" onclick="if(event.target===this)closeAuthModal()">
+  <div class="auth-modal-box" onclick="event.stopPropagation()">
+    <button class="auth-modal-close" onclick="closeAuthModal()">✕</button>
+    <div class="auth-modal-logo">NZR</div>
+    <div class="auth-modal-title" id="auth-modal-title">Welcome back</div>
+    <div class="auth-modal-sub" id="auth-modal-sub">Sign in to your NZR account</div>
+    <div class="auth-tabs">
+      <button class="auth-tab active" id="tab-signin" onclick="switchAuthTab('signin')">Sign In</button>
+      <button class="auth-tab" id="tab-signup" onclick="switchAuthTab('signup')">Sign Up</button>
+    </div>
+    <div class="auth-error" id="auth-error" style="display:none"></div>
+    <!-- Sign In -->
+    <div id="form-signin">
+      <div class="auth-field"><label>Email</label><input type="email" id="signin-email" placeholder="you@example.com" onkeydown="if(event.key==='Enter')doSignIn()"/></div>
+      <div class="auth-field"><label>Password</label><input type="password" id="signin-password" placeholder="••••••••" onkeydown="if(event.key==='Enter')doSignIn()"/></div>
+      <button class="auth-submit" id="signin-btn" onclick="doSignIn()">SIGN IN</button>
+    </div>
+    <!-- Sign Up -->
+    <div id="form-signup" style="display:none">
+      <div class="auth-field"><label>Full Name</label><input type="text" id="signup-name" placeholder="Your name"/></div>
+      <div class="auth-field"><label>Email</label><input type="email" id="signup-email" placeholder="you@example.com"/></div>
+      <div class="auth-field"><label>Password</label><input type="password" id="signup-password" placeholder="At least 8 characters"/></div>
+      <button class="auth-submit" id="signup-btn" onclick="doSignUp()">CREATE ACCOUNT</button>
+    </div>
+    <div class="auth-divider">or</div>
+    <button class="auth-google" onclick="doGoogleOAuth()">
+      <svg width="18" height="18" viewBox="0 0 48 48"><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/></svg>
+      Continue with Google
+    </button>
+    <div class="auth-note">By continuing you agree to NZR's Terms of Service and Privacy Policy.</div>
   </div>
 </div>
 
@@ -734,37 +800,39 @@ footer{border-top:1px solid var(--border);padding:32px 0;margin-top:80px}
     <div class="section-title">Stock <span>Screener</span></div>
   </div>
 
-  <div class="stat-card sec-fade" style="animation-delay:100ms;margin-bottom:20px">
-    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px">
-      <div>
-        <label class="input-label" style="margin-bottom:6px">Market Cap</label>
-        <select style="background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);padding:9px 12px;color:var(--text2);font-family:var(--font-mono);font-size:11px;outline:none;width:100%;cursor:pointer">
-          <option>Any</option><option>Large Cap (&gt;$10B)</option><option>Mid Cap</option><option>Small Cap</option>
-        </select>
-      </div>
-      <div>
-        <label class="input-label" style="margin-bottom:6px">Sector</label>
-        <select style="background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);padding:9px 12px;color:var(--text2);font-family:var(--font-mono);font-size:11px;outline:none;width:100%;cursor:pointer">
-          <option>All Sectors</option><option>Technology</option><option>Financials</option><option>Healthcare</option><option>Energy</option>
-        </select>
-      </div>
-      <div>
-        <label class="input-label" style="margin-bottom:6px">Min NZR Score</label>
-        <select style="background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);padding:9px 12px;color:var(--text2);font-family:var(--font-mono);font-size:11px;outline:none;width:100%;cursor:pointer">
-          <option>Any Score</option><option>75+</option><option>80+</option><option>85+</option><option>90+</option>
-        </select>
+  <div class="stat-card sec-fade" style="padding:20px 24px;margin-bottom:16px;animation-delay:100ms">
+    <div style="margin-bottom:16px">
+      <div class="input-label" style="margin-bottom:8px">Sector</div>
+      <div class="screener-pills" id="screener-sector-pills">
+        <button class="screener-pill active" onclick="setScreenerSector('All',this)">All</button>
+        <button class="screener-pill" onclick="setScreenerSector('Technology',this)">Technology</button>
+        <button class="screener-pill" onclick="setScreenerSector('Financials',this)">Financials</button>
+        <button class="screener-pill" onclick="setScreenerSector('Healthcare',this)">Healthcare</button>
+        <button class="screener-pill" onclick="setScreenerSector('Energy',this)">Energy</button>
+        <button class="screener-pill" onclick="setScreenerSector('Consumer',this)">Consumer</button>
       </div>
     </div>
-    <div style="margin-top:16px">
-      <button class="btn-primary" style="font-size:13px;padding:11px 24px">RUN SCREENER</button>
+    <div>
+      <div class="input-label" style="margin-bottom:8px">Min NZR Score</div>
+      <div class="screener-pills" id="screener-score-pills">
+        <button class="screener-pill active" onclick="setScreenerScore(0,this)">All</button>
+        <button class="screener-pill" onclick="setScreenerScore(60,this)">60+</button>
+        <button class="screener-pill" onclick="setScreenerScore(70,this)">70+</button>
+        <button class="screener-pill" onclick="setScreenerScore(80,this)">80+</button>
+      </div>
     </div>
   </div>
 
   <div class="stat-card sec-fade" style="padding:0;animation-delay:150ms">
-    <div class="empty-state">
-      <div class="empty-icon">🔍</div>
-      <div class="empty-title">No results yet</div>
-      <div class="empty-desc">Configure your filters above and run the screener to find matching setups. Market may be closed — data is most accurate during regular trading hours.</div>
+    <div style="overflow-x:auto">
+      <table class="earnings-table" id="screener-table">
+        <thead>
+          <tr><th>Ticker</th><th>Company</th><th>Sector</th><th>Price</th><th>Change</th><th>NZR Score</th><th>Setup</th></tr>
+        </thead>
+        <tbody id="screener-tbody">
+          <tr><td colspan="7" style="text-align:center;padding:28px;font-family:var(--font-mono);font-size:11px;color:var(--text3)">Loading screener data…</td></tr>
+        </tbody>
+      </table>
     </div>
   </div>
 
@@ -782,7 +850,7 @@ footer{border-top:1px solid var(--border);padding:32px 0;margin-top:80px}
     <div class="auth-prompt-icon">🔒</div>
     <div class="auth-prompt-title">Sign in to use your watchlist</div>
     <div class="auth-prompt-desc">Save and track your favorite tickers across devices. Sign in to sync your watchlist, set price alerts, and get personalized AI signals.</div>
-    <button class="auth-prompt-btn">Sign in to continue</button>
+    <button class="auth-prompt-btn" onclick="openAuthModal()">Sign in to continue</button>
   </div>
 </div>
 </div>
@@ -798,7 +866,7 @@ footer{border-top:1px solid var(--border);padding:32px 0;margin-top:80px}
     <div class="auth-prompt-icon">🔒</div>
     <div class="auth-prompt-title">Sign in to track your portfolio</div>
     <div class="auth-prompt-desc">Log your positions and track performance over time. Sign in to save your portfolio, view P&amp;L, and get AI insights on your holdings.</div>
-    <button class="auth-prompt-btn">Sign in to continue</button>
+    <button class="auth-prompt-btn" onclick="openAuthModal()">Sign in to continue</button>
   </div>
 </div>
 </div>
@@ -814,7 +882,7 @@ footer{border-top:1px solid var(--border);padding:32px 0;margin-top:80px}
     <div class="auth-prompt-icon">🔒</div>
     <div class="auth-prompt-title">Sign in to use your journal</div>
     <div class="auth-prompt-desc">Document every trade with entry, exit, setup type, and emotional state. Sign in to start building a data-driven record of your trading decisions.</div>
-    <button class="auth-prompt-btn">Sign in to continue</button>
+    <button class="auth-prompt-btn" onclick="openAuthModal()">Sign in to continue</button>
   </div>
 </div>
 </div>
@@ -1039,7 +1107,7 @@ function updateMarketStatus(){
 }
 
 // All symbols needed across the page
-const ALL_SYMS=['SPY','QQQ','DIA','IWM','AAPL','NVDA','TSLA','AMZN','MSFT','META','GOOGL','AMD','NFLX','JPM','GLD','V','UNH','XOM','JNJ','WMT','MA','PG','HD','COST','ABBV','MRK','CVX','ADBE','CRM','PYPL','INTC','QCOM','TXN'];
+const ALL_SYMS=['SPY','QQQ','DIA','IWM','AAPL','NVDA','TSLA','AMZN','MSFT','META','GOOGL','AMD','NFLX','JPM','GLD','V','UNH','XOM','JNJ','WMT','MA','PG','HD','COST','ABBV','MRK','CVX','ADBE','CRM','PYPL','INTC','QCOM','TXN','GS','BAC','PFE','COP','SLB'];
 
 async function initAllData(){
   // Fetch Finnhub quotes and VIX (Yahoo Finance proxy) in parallel
@@ -1053,6 +1121,7 @@ async function initAllData(){
   renderTopMoversPolygon();
   buildHotPlays();
   buildMarkets();
+  buildScreener();
   updateMarketStatus();
   setInterval(updateMarketStatus, 60 * 1000);
   startLastUpdatedCounter();
@@ -1906,8 +1975,225 @@ Respond concisely and professionally. Focus on actionable market insights, strat
   chatMessages.scrollTop=chatMessages.scrollHeight;
 }
 
+/* ── SUPABASE AUTH ──────────────────────────────── */
+// Replace SUPABASE_ANON_KEY with your project's anon/publishable key from
+// https://supabase.com/dashboard/project/chfdvmtnditebmlmyihr/settings/api
+const SUPABASE_URL='https://chfdvmtnditebmlmyihr.supabase.co';
+const SUPABASE_ANON_KEY='YOUR_SUPABASE_ANON_KEY';
+
+let supabaseClient=null;
+
+function initSupabase(){
+  try{
+    if(typeof window.supabase==='undefined'){console.warn('[auth] Supabase SDK not loaded');return;}
+    supabaseClient=window.supabase.createClient(SUPABASE_URL,SUPABASE_ANON_KEY);
+    supabaseClient.auth.onAuthStateChange((event,session)=>{
+      if((event==='SIGNED_IN'||event==='INITIAL_SESSION')&&session){
+        closeAuthModal();
+        onAuthSignedIn(session.user);
+      }else if(event==='SIGNED_OUT'){
+        onAuthSignedOut();
+      }
+    });
+  }catch(err){console.error('[auth] Init failed:',err);}
+}
+
+function onAuthSignedIn(user){
+  // Update all "Sign in to continue" prompts to show signed-in state
+  document.querySelectorAll('.auth-prompt-btn').forEach(b=>{
+    b.textContent='Signed in as '+user.email;
+    b.style.background='var(--green)';
+    b.onclick=null;
+  });
+}
+
+function onAuthSignedOut(){
+  document.querySelectorAll('.auth-prompt-btn').forEach(b=>{
+    b.textContent='Sign in to continue';
+    b.style.background='';
+    b.onclick=()=>openAuthModal();
+  });
+}
+
+function openAuthModal(){
+  const m=document.getElementById('auth-modal');
+  if(m)m.style.display='flex';
+  showAuthError('');
+  switchAuthTab('signin');
+}
+
+function closeAuthModal(){
+  const m=document.getElementById('auth-modal');
+  if(m)m.style.display='none';
+  showAuthError('');
+}
+
+function switchAuthTab(tab){
+  document.getElementById('form-signin').style.display=tab==='signin'?'block':'none';
+  document.getElementById('form-signup').style.display=tab==='signup'?'block':'none';
+  document.getElementById('tab-signin').classList.toggle('active',tab==='signin');
+  document.getElementById('tab-signup').classList.toggle('active',tab==='signup');
+  document.getElementById('auth-modal-title').textContent=tab==='signin'?'Welcome back':'Create account';
+  document.getElementById('auth-modal-sub').textContent=tab==='signin'?'Sign in to your NZR account':'Join NZR — it\'s free';
+  showAuthError('');
+}
+
+function showAuthError(msg){
+  const el=document.getElementById('auth-error');
+  if(!el)return;
+  if(msg){el.textContent=msg;el.style.display='block';}
+  else{el.style.display='none';}
+}
+
+async function doSignIn(){
+  if(!supabaseClient)return showAuthError('Auth service unavailable — please refresh the page.');
+  const email=document.getElementById('signin-email').value.trim();
+  const password=document.getElementById('signin-password').value;
+  if(!email||!password)return showAuthError('Please enter your email and password.');
+  const btn=document.getElementById('signin-btn');
+  btn.disabled=true;btn.textContent='SIGNING IN…';
+  showAuthError('');
+  try{
+    const{error}=await supabaseClient.auth.signInWithPassword({email,password});
+    if(error)throw error;
+    closeAuthModal();
+  }catch(err){
+    showAuthError(err.message||'Sign in failed. Please check your credentials.');
+  }finally{btn.disabled=false;btn.textContent='SIGN IN';}
+}
+
+async function doSignUp(){
+  if(!supabaseClient)return showAuthError('Auth service unavailable — please refresh the page.');
+  const name=document.getElementById('signup-name').value.trim();
+  const email=document.getElementById('signup-email').value.trim();
+  const password=document.getElementById('signup-password').value;
+  if(!name||!email||!password)return showAuthError('Please fill in all fields.');
+  if(password.length<8)return showAuthError('Password must be at least 8 characters.');
+  const btn=document.getElementById('signup-btn');
+  btn.disabled=true;btn.textContent='CREATING ACCOUNT…';
+  showAuthError('');
+  try{
+    const{error}=await supabaseClient.auth.signUp({
+      email,password,options:{data:{full_name:name}}
+    });
+    if(error)throw error;
+    document.getElementById('form-signup').innerHTML=`
+      <div style="text-align:center;padding:24px 0">
+        <div style="font-size:36px;margin-bottom:14px">✉️</div>
+        <div style="font-family:var(--font-display);font-size:17px;font-weight:700;color:var(--text);margin-bottom:8px">Check your email</div>
+        <div style="font-size:13px;color:var(--text2);line-height:1.65">We sent a confirmation link to <strong>${email}</strong>.<br>Click the link to activate your account, then sign in.</div>
+      </div>`;
+  }catch(err){
+    showAuthError(err.message||'Sign up failed. Please try again.');
+  }finally{btn.disabled=false;btn.textContent='CREATE ACCOUNT';}
+}
+
+async function doGoogleOAuth(){
+  if(!supabaseClient)return showAuthError('Auth service unavailable — please refresh the page.');
+  try{
+    const{error}=await supabaseClient.auth.signInWithOAuth({
+      provider:'google',
+      options:{redirectTo:window.location.origin}
+    });
+    if(error)throw error;
+  }catch(err){showAuthError(err.message||'Google sign-in failed.');}
+}
+
+/* ── SCREENER ────────────────────────────────────── */
+const SCREENER_STOCKS=[
+  {sym:'AAPL',name:'Apple',sector:'Technology',nzr:88,setup:'Breakout above key resistance'},
+  {sym:'MSFT',name:'Microsoft',sector:'Technology',nzr:91,setup:'Momentum continuation play'},
+  {sym:'NVDA',name:'NVIDIA',sector:'Technology',nzr:94,setup:'AI infrastructure growth thesis'},
+  {sym:'GOOGL',name:'Alphabet',sector:'Technology',nzr:82,setup:'Value + growth hybrid setup'},
+  {sym:'META',name:'Meta Platforms',sector:'Technology',nzr:87,setup:'VWAP reclaim bounce'},
+  {sym:'AMD',name:'Advanced Micro Devices',sector:'Technology',nzr:79,setup:'Earnings catalyst play'},
+  {sym:'ADBE',name:'Adobe',sector:'Technology',nzr:72,setup:'Support level bounce'},
+  {sym:'CRM',name:'Salesforce',sector:'Technology',nzr:76,setup:'Bull flag pattern forming'},
+  {sym:'QCOM',name:'Qualcomm',sector:'Technology',nzr:81,setup:'Breakout continuation'},
+  {sym:'INTC',name:'Intel',sector:'Technology',nzr:58,setup:'Turnaround watch'},
+  {sym:'JPM',name:'JPMorgan Chase',sector:'Financials',nzr:85,setup:'Institutional accumulation'},
+  {sym:'GS',name:'Goldman Sachs',sector:'Financials',nzr:80,setup:'Earnings run-up play'},
+  {sym:'V',name:'Visa',sector:'Financials',nzr:86,setup:'Steady momentum trend'},
+  {sym:'MA',name:'Mastercard',sector:'Financials',nzr:84,setup:'Trend continuation setup'},
+  {sym:'BAC',name:'Bank of America',sector:'Financials',nzr:71,setup:'Range expansion watch'},
+  {sym:'UNH',name:'UnitedHealth',sector:'Healthcare',nzr:83,setup:'Defensive breakout play'},
+  {sym:'JNJ',name:'Johnson & Johnson',sector:'Healthcare',nzr:68,setup:'Dividend support hold'},
+  {sym:'ABBV',name:'AbbVie',sector:'Healthcare',nzr:77,setup:'Momentum continuation'},
+  {sym:'MRK',name:'Merck',sector:'Healthcare',nzr:75,setup:'Pipeline catalyst watch'},
+  {sym:'PFE',name:'Pfizer',sector:'Healthcare',nzr:55,setup:'Recovery watch'},
+  {sym:'XOM',name:'ExxonMobil',sector:'Energy',nzr:78,setup:'Oil price leverage play'},
+  {sym:'CVX',name:'Chevron',sector:'Energy',nzr:74,setup:'Dividend + momentum'},
+  {sym:'COP',name:'ConocoPhillips',sector:'Energy',nzr:82,setup:'Breakout attempt'},
+  {sym:'SLB',name:'SLB',sector:'Energy',nzr:69,setup:'Technical bounce setup'},
+  {sym:'AMZN',name:'Amazon',sector:'Consumer',nzr:90,setup:'AWS growth thesis play'},
+  {sym:'TSLA',name:'Tesla',sector:'Consumer',nzr:73,setup:'High-volatility momentum'},
+  {sym:'WMT',name:'Walmart',sector:'Consumer',nzr:81,setup:'Defensive strength'},
+  {sym:'COST',name:'Costco',sector:'Consumer',nzr:85,setup:'Consumer resilience play'},
+  {sym:'HD',name:'Home Depot',sector:'Consumer',nzr:76,setup:'Rate-sensitive bounce'},
+  {sym:'PG',name:"Procter & Gamble",sector:'Consumer',nzr:70,setup:'Defensive hold'},
+];
+
+const SECTOR_COLORS={
+  Technology:'var(--cyan)',Financials:'var(--gold)',Healthcare:'var(--green)',
+  Energy:'#c8702a',Consumer:'var(--text2)',
+};
+
+let screenerSector='All';
+let screenerMinScore=0;
+
+function setScreenerSector(sector,btn){
+  screenerSector=sector;
+  document.querySelectorAll('#screener-sector-pills .screener-pill').forEach(b=>b.classList.remove('active'));
+  if(btn)btn.classList.add('active');
+  buildScreener();
+}
+
+function setScreenerScore(score,btn){
+  screenerMinScore=score;
+  document.querySelectorAll('#screener-score-pills .screener-pill').forEach(b=>b.classList.remove('active'));
+  if(btn)btn.classList.add('active');
+  buildScreener();
+}
+
+function buildScreener(){
+  const tbody=document.getElementById('screener-tbody');
+  if(!tbody)return;
+  const filtered=SCREENER_STOCKS
+    .filter(s=>(screenerSector==='All'||s.sector===screenerSector)&&s.nzr>=screenerMinScore)
+    .sort((a,b)=>b.nzr-a.nzr);
+  if(!filtered.length){
+    tbody.innerHTML=`<tr><td colspan="7" style="text-align:center;padding:28px;font-family:var(--font-mono);font-size:11px;color:var(--text3)">No stocks match the current filters.</td></tr>`;
+    return;
+  }
+  tbody.innerHTML=filtered.map(s=>{
+    const q=Q[s.sym];
+    const price=q?fmt$(q.price):'--';
+    const chg=q?fmtChg(q.change):'--';
+    const up=q?q.up:true;
+    const scoreColor=s.nzr>=85?'var(--green)':s.nzr>=70?'var(--gold)':'var(--red)';
+    const sc=SECTOR_COLORS[s.sector]||'var(--text2)';
+    return`<tr onclick="goAnalyze('${s.sym}')" style="cursor:pointer">
+      <td><span style="font-family:var(--font-mono);font-weight:700;color:var(--gold);font-size:13px">${s.sym}</span></td>
+      <td style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px">${s.name}</td>
+      <td><span style="font-family:var(--font-mono);font-size:9px;padding:2px 8px;border-radius:99px;background:rgba(0,0,0,.05);border:1px solid var(--border);color:${sc};letter-spacing:.5px">${s.sector.toUpperCase()}</span></td>
+      <td style="font-family:var(--font-mono);font-size:12px">${price}</td>
+      <td style="font-family:var(--font-mono);font-size:12px;font-weight:700;color:${up?'var(--green)':'var(--red)'}">${chg}</td>
+      <td>
+        <div style="display:flex;align-items:center;gap:8px;min-width:100px">
+          <div style="flex:1;background:rgba(0,0,0,.08);border-radius:99px;height:4px;overflow:hidden">
+            <div style="width:${s.nzr}%;height:100%;background:${scoreColor};border-radius:99px"></div>
+          </div>
+          <span style="font-family:var(--font-mono);font-size:12px;font-weight:700;color:${scoreColor};min-width:26px;text-align:right">${s.nzr}</span>
+        </div>
+      </td>
+      <td style="font-size:12px;color:var(--text2);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${s.setup}</td>
+    </tr>`;
+  }).join('');
+}
+
 /* ── INIT ───────────────────────────────────────── */
 buildGuideCards();
+initSupabase();
 initAllData(); // fetches all live quotes then renders every data section
 </script>
 </body>
