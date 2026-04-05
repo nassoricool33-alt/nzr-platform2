@@ -336,6 +336,16 @@ nav{position:sticky;top:0;z-index:200;backdrop-filter:blur(24px);-webkit-backdro
 .earnings-impact.low{background:rgba(0,0,0,.05);color:var(--text3)}
 .earnings-est{color:var(--text);font-weight:500;font-family:var(--font-mono);font-size:12px}
 
+/* ─── DATA QUALITY BADGE ───────────────────────────── */
+.dq-badge{display:inline-flex;align-items:center;gap:5px;font-family:var(--font-mono);font-size:10px;padding:3px 10px;border-radius:99px;letter-spacing:.3px;border:1px solid transparent}
+.dq-badge.full{background:var(--green-dim);color:var(--green);border-color:rgba(26,122,64,.2)}
+.dq-badge.partial{background:rgba(200,112,42,.1);color:#c8702a;border-color:rgba(200,112,42,.2)}
+.dq-badge.limited{background:var(--red-dim);color:var(--red);border-color:rgba(192,24,42,.15)}
+.live-data-block{background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);padding:14px 18px;margin-bottom:12px;display:grid;grid-template-columns:repeat(3,1fr);gap:6px 20px}
+.live-data-item{display:flex;flex-direction:column;gap:2px}
+.live-data-lbl{font-family:var(--font-mono);font-size:9px;color:var(--text3);letter-spacing:1.5px;text-transform:uppercase}
+.live-data-val{font-family:var(--font-mono);font-size:12px;font-weight:700;color:var(--text)}
+
 /* ─── SCREENER ─────────────────────────────────────── */
 .screener-pills{display:flex;flex-wrap:wrap;gap:6px}
 .screener-pill{background:var(--bg3);border:1px solid var(--border);border-radius:99px;padding:5px 14px;font-family:var(--font-mono);font-size:11px;color:var(--text2);cursor:pointer;transition:all .15s;letter-spacing:.3px}
@@ -1821,21 +1831,89 @@ async function runAnalyze(){
   const btn=document.getElementById('az-btn');
   btn.disabled=true;
   const panel=document.getElementById('az-result');
-  panel.innerHTML=`<div class="result-loading"><div class="loading-ring"></div><div class="loading-label">Analyzing ${ticker} · ${tfLabels[activeTf]}</div></div>`;
 
-  const prompt=`You are NZR, an elite AI trading analyst. Analyze "${ticker}" for the "${tfLabels[activeTf]}" timeframe. Today: April 5, 2026.
+  // ── Step 1: show data-fetch loading state
+  panel.innerHTML=`<div class="result-loading"><div class="loading-ring"></div><div class="loading-label">Fetching live data for ${ticker}…</div></div>`;
+
+  // ── Step 2: fetch quote + indicators in parallel, failures are non-fatal
+  let qd=null, ind=null;
+  await Promise.allSettled([
+    fetch('/api/quote?symbol='+ticker)
+      .then(r=>r.ok?r.json():Promise.reject())
+      .then(d=>{if(d&&d.price!=null&&!d.error)qd=d;})
+      .catch(()=>{}),
+    fetch('/api/indicators?symbol='+ticker)
+      .then(r=>r.ok?r.json():Promise.reject())
+      .then(d=>{if(d&&d.rsi&&!d.error)ind=d;})
+      .catch(()=>{}),
+  ]);
+
+  // ── Step 3: determine data quality
+  const dqLevel = qd&&ind?'full':qd?'partial':'limited';
+  const dqLabel = dqLevel==='full'
+    ? '● Live data — full accuracy'
+    : dqLevel==='partial'
+    ? '◑ Partial data — indicators delayed'
+    : '○ Limited data — analysis may be less accurate';
+
+  // ── Step 4: update loading label with quality status
+  panel.innerHTML=`<div class="result-loading">
+    <div class="loading-ring"></div>
+    <div class="loading-label">Analyzing ${ticker} · ${tfLabels[activeTf]}</div>
+    <div style="margin-top:8px"><span class="dq-badge ${dqLevel}">${dqLabel}</span></div>
+  </div>`;
+
+  // ── Step 5: build enriched prompt
+  const p2=(v,d=2)=>v!=null&&!isNaN(v)?Number(v).toFixed(d):'N/A';
+
+  const priceSection=qd
+    ?`Price Data:
+- Current Price: $${p2(qd.price)}
+- Change: ${p2(qd.change)}%
+- Today High: $${p2(qd.high)} | Low: $${p2(qd.low)}
+- Open: $${p2(qd.open)} | Prev Close: $${p2(qd.prevClose)}`
+    :`Price Data: unavailable — use general knowledge of typical price levels for this stock`;
+
+  const indSection=ind
+    ?`Technical Indicators:
+- RSI (14): ${p2(ind.rsi.value)} — ${ind.rsi.signal}
+- MACD: ${p2(ind.macd.macd,4)} | Signal: ${p2(ind.macd.signal,4)} | Histogram: ${p2(ind.macd.histogram,4)} — ${ind.macd.signal_label}
+- Bollinger Bands: Upper $${p2(ind.bbands.upper)} | Mid $${p2(ind.bbands.middle)} | Lower $${p2(ind.bbands.lower)}${ind.golden_cross?`\n- SMA Cross: ${ind.golden_cross.signal} (SMA50: $${p2(ind.golden_cross.sma50)} / SMA200: $${p2(ind.golden_cross.sma200)})`:''}`
+    :`Technical Indicators: unavailable — ${qd?'Alpha Vantage rate limit reached or market closed':'no data could be fetched'}. Derive signals from price action only.`;
+
+  const missingNote=(!qd||!ind)
+    ?`\nNote: ${!qd?'Price data is unavailable. ':''}${!ind?'Technical indicators are unavailable.':''} Acknowledge missing data in your analysis.`
+    :'';
+
+  const prompt=`Analyze ${ticker} based on this LIVE real-time data:
+
+${priceSection}
+
+${indSection}
+${missingNote}
+Timeframe selected: ${tfLabels[activeTf]}
+
+Based ONLY on this real data, provide:
+1. Market bias (Bullish/Bearish/Neutral) with confidence %
+2. Key support and resistance levels derived from the Bollinger Bands and price action
+3. Specific entry price, target price, and stop loss based on the real current price
+4. Risk/reward ratio
+5. NZR Score out of 100 based on the technical setup
+6. 2-3 sentence trading thesis based on the real data above
+
+Be specific with real numbers. Do not guess or use generic statements.
 
 Return ONLY raw JSON, no markdown, no backticks:
-{"valid":true,"ticker":"${ticker}","company":"Full company name","timeframe":"${tfLabels[activeTf]}","signals":{"trend":"Bullish or Bearish or Neutral","momentum":"Strong or Moderate or Weak","volume":"High or Average or Low","risk":"High or Medium or Low"},"nzrScore":85,"entry":"specific entry condition or price range","target":"price target or % gain","stop":"stop loss level or % risk","summary":"4 sentences: (1) current technical picture, (2) key price levels to watch, (3) catalysts or risks, (4) trade thesis for this timeframe.","indicators":"Key indicator readings in 2 sentences.","bestFor":"type of trader","edge":"one compelling reason this is a good setup right now"}
+{"valid":true,"ticker":"${ticker}","company":"Full company name","timeframe":"${tfLabels[activeTf]}","signals":{"trend":"Bullish or Bearish or Neutral","momentum":"Strong or Moderate or Weak","volume":"High or Average or Low","risk":"High or Medium or Low"},"nzrScore":85,"entry":"specific entry price based on real data","target":"specific price target with number","stop":"specific stop loss price with number","summary":"4 sentences using real data: (1) current technical picture with actual indicator readings, (2) key price levels from BBands/price data, (3) catalysts or risks, (4) trade thesis for this timeframe.","indicators":"Exact indicator readings provided: RSI value, MACD direction, BBand position.","bestFor":"type of trader","edge":"one specific reason using the real data above"}
 
 If invalid ticker: {"valid":false,"error":"reason"}
-nzrScore should be 0-100, realistic for the setup quality.`;
+nzrScore must be 0-100, derived directly from the indicator readings above, not a guess.`;
 
   try{
     const resp=await fetch('/api/analyze',{
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({max_tokens:900,messages:[{role:'user',content:prompt}]})
+      body:JSON.stringify({max_tokens:1000,messages:[{role:'user',content:prompt}]})
     });
     if(!resp.ok){
       let errBody='';
@@ -1862,14 +1940,30 @@ nzrScore should be 0-100, realistic for the setup quality.`;
     const circumference=2*Math.PI*26;
     const offset=circumference*(1-score/100);
 
+    // Build live data snapshot block (shown only when data was fetched)
+    const liveBlock=qd?`
+      <div class="live-data-block">
+        <div class="live-data-item"><span class="live-data-lbl">Price</span><span class="live-data-val">$${p2(qd.price)}</span></div>
+        <div class="live-data-item"><span class="live-data-lbl">Change</span><span class="live-data-val" style="color:${qd.change>=0?'var(--green)':'var(--red)'}">${qd.change>=0?'+':''}${p2(qd.change)}%</span></div>
+        <div class="live-data-item"><span class="live-data-lbl">High / Low</span><span class="live-data-val">${p2(qd.high)} / ${p2(qd.low)}</span></div>
+        ${ind?`<div class="live-data-item"><span class="live-data-lbl">RSI (14)</span><span class="live-data-val">${p2(ind.rsi.value)} · ${ind.rsi.signal}</span></div>
+        <div class="live-data-item"><span class="live-data-lbl">MACD</span><span class="live-data-val" style="color:${ind.macd.signal_label==='Bullish'?'var(--green)':'var(--red)'}">${ind.macd.signal_label}</span></div>
+        <div class="live-data-item"><span class="live-data-lbl">BB Mid</span><span class="live-data-val">$${p2(ind.bbands.middle)}</span></div>`:''}
+      </div>`:'';
+
     panel.innerHTML=`<div class="result-content">
       <div class="result-top">
         <div>
           <div class="result-ticker">${r.ticker}</div>
           <div class="result-company">${r.company}</div>
         </div>
-        <div class="result-tf-badge">${r.timeframe}</div>
+        <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px">
+          <div class="result-tf-badge">${r.timeframe}</div>
+          <span class="dq-badge ${dqLevel}">${dqLabel}</span>
+        </div>
       </div>
+
+      ${liveBlock}
 
       <div class="nzr-score">
         <div class="score-ring">
