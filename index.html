@@ -1635,10 +1635,14 @@ nzrScore should be 0-100, realistic for the setup quality.`;
   try{
     const resp=await fetch('/api/analyze',{
       method:'POST',
-      headers:{'content-type':'application/json'},
-      body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:900,messages:[{role:'user',content:prompt}]})
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({max_tokens:900,messages:[{role:'user',content:prompt}]})
     });
-    if(!resp.ok)throw new Error(`Server error ${resp.status}`);
+    if(!resp.ok){
+      let errBody='';
+      try{const j=await resp.json();errBody=j.error||'';}catch{}
+      throw new Error(`Server error ${resp.status}${errBody?' — '+errBody:''}`);
+    }
     const data=await resp.json();
     const raw=(data.content||[]).map(b=>b.text||'').join('').trim();
     let r;
@@ -1752,17 +1756,21 @@ Respond concisely and professionally. Focus on actionable market insights, strat
   try{
     const resp=await fetch('/api/analyze',{
       method:'POST',
-      headers:{'content-type':'application/json'},
-      body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:400,messages:[{role:'user',content:prompt}]})
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({max_tokens:400,messages:[{role:'user',content:prompt}]})
     });
-    if(!resp.ok)throw new Error('Server error');
+    if(!resp.ok){
+      let errBody='';
+      try{const j=await resp.json();errBody=j.error||'';}catch{}
+      throw new Error(`HTTP ${resp.status}${errBody?' — '+errBody:''}`);
+    }
     const data=await resp.json();
     const raw=(data.content||[]).map(b=>b.text||'').join('').trim();
     typingIndicator.classList.remove('visible');
     appendChat('assistant',raw||'I could not process that request. Please try again.');
   }catch(e){
     typingIndicator.classList.remove('visible');
-    appendChat('assistant','Connection error. Please check your API configuration and try again.');
+    appendChat('assistant','⚠ Error: '+e.message);
   }
   chatSend.disabled=false;
   chatMessages.scrollTop=chatMessages.scrollHeight;
