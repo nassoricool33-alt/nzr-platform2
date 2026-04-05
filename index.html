@@ -508,6 +508,24 @@ footer{border-top:1px solid var(--border);padding:32px 0;margin-top:80px}
 .bt-chart-title{font-family:var(--font-mono);font-size:10px;color:var(--text3);letter-spacing:2px;text-transform:uppercase;margin-bottom:16px}
 .bt-loading{display:flex;align-items:center;justify-content:center;gap:14px;padding:60px;color:var(--text3);font-family:var(--font-mono);font-size:12px}
 .bt-strategy-desc{font-size:12px;color:var(--text2);line-height:1.6;padding:10px 14px;background:var(--bg3);border-radius:var(--radius);border:1px solid var(--border);margin-top:8px}
+.bt-mode-tabs{display:flex;gap:4px;background:var(--bg3);border-radius:var(--radius);padding:4px;margin-bottom:0}
+.bt-mode-tab{flex:1;padding:7px 4px;background:none;border:none;cursor:pointer;font-family:var(--font-mono);font-size:10px;letter-spacing:.8px;text-transform:uppercase;color:var(--text3);border-radius:6px;transition:all .2s}
+.bt-mode-tab.active{background:var(--panel);color:var(--text);font-weight:700;box-shadow:0 1px 4px rgba(0,0,0,.1)}
+.bt-cap-alloc{display:flex;gap:8px;margin-top:8px}
+.bt-alloc-chip{flex:1;background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);padding:7px 10px;text-align:center;font-family:var(--font-mono);font-size:9px;color:var(--text3);letter-spacing:.3px}
+.bt-alloc-chip b{display:block;font-size:13px;font-weight:800;font-family:var(--font-display);color:var(--text);margin-bottom:2px;line-height:1}
+.bt-dual-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px}
+@media(max-width:700px){.bt-dual-grid{grid-template-columns:1fr}}
+.bt-mode-card{background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius-lg);padding:16px}
+.bt-mode-card-title{font-family:var(--font-mono);font-size:9px;color:var(--text3);letter-spacing:2px;text-transform:uppercase;margin-bottom:12px;display:flex;align-items:center;gap:6px}
+.bt-mode-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0}
+.bt-mini-stats{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.bt-mini-stat{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);padding:10px}
+.bt-mini-stat-lbl{font-family:var(--font-mono);font-size:8px;color:var(--text3);letter-spacing:1px;text-transform:uppercase;margin-bottom:4px}
+.bt-mini-stat-val{font-family:var(--font-display);font-size:16px;font-weight:800;color:var(--text);line-height:1}
+.bt-chart-legend{display:flex;gap:16px;margin-bottom:12px;font-family:var(--font-mono);font-size:10px;color:var(--text2)}
+.bt-chart-legend-item{display:flex;align-items:center;gap:6px}
+.bt-chart-legend-line{width:14px;height:3px;border-radius:2px;flex-shrink:0}
 
 /* ─── NOTIFICATION BELL ────────────────────────── */
 .notif-bell-btn{position:relative;background:none;border:none;cursor:pointer;padding:7px 9px;border-radius:var(--radius);color:var(--text2);font-size:18px;line-height:1;transition:all .2s;flex-shrink:0}
@@ -563,8 +581,23 @@ footer{border-top:1px solid var(--border);padding:32px 0;margin-top:80px}
 .kill-btn:disabled{opacity:.5;cursor:not-allowed;transform:none}
 .kill-btn.halted-state{background:var(--text3);cursor:not-allowed}
 .status-box-minimized{display:none;align-items:center;gap:8px;cursor:pointer;padding:10px 14px}
-.status-box.min .status-box-header,.status-box.min .status-box-rows,.status-box.min .kill-btn{display:none}
+.status-box.min .status-box-header,.status-box.min .status-box-rows,.status-box.min .kill-btn,.status-box.min .sb-capital-row,.status-box.min .sb-modes-section{display:none}
 .status-box.min .status-box-minimized{display:flex}
+.sb-capital-row{display:flex;align-items:center;gap:6px;margin-bottom:10px}
+.sb-cap-input{flex:1;background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);padding:6px 9px;color:var(--text);font-family:var(--font-mono);font-size:11px;outline:none;min-width:0;transition:border-color .2s}
+.sb-cap-input:focus{border-color:var(--gold)}
+.sb-set-btn{background:var(--gold);color:#050810;font-family:var(--font-display);font-weight:800;font-size:9px;letter-spacing:.8px;padding:7px 10px;border-radius:var(--radius);border:none;cursor:pointer;white-space:nowrap;text-transform:uppercase;transition:all .15s;flex-shrink:0}
+.sb-set-btn:hover{filter:brightness(1.08)}
+.sb-modes-section{border-top:1px solid var(--border);padding-top:10px;margin-top:2px;margin-bottom:10px;display:flex;flex-direction:column;gap:7px}
+.sb-mode-row{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.sb-mode-lbl{display:flex;align-items:center;gap:5px;font-size:10px;color:var(--text3)}
+.sb-mode-chip{font-family:var(--font-mono);font-size:8px;letter-spacing:.5px;padding:2px 6px;border-radius:99px;background:var(--bg3);border:1px solid var(--border);color:var(--text3);text-transform:uppercase}
+.sb-mode-chip.active{background:var(--gold-dim);border-color:rgba(200,150,12,.35);color:var(--gold)}
+.sb-mode-chip.halted{background:var(--red-dim);border-color:rgba(192,24,42,.2);color:var(--red)}
+.sb-mode-vals{text-align:right;font-family:var(--font-mono);font-size:9px;color:var(--text3);line-height:1.4}
+.sb-countdown-row{display:flex;align-items:center;justify-content:space-between;border-top:1px solid var(--border);padding-top:8px;margin-top:2px;margin-bottom:10px}
+.sb-countdown-lbl{font-size:9px;color:var(--text3);letter-spacing:.3px}
+.sb-countdown-val{font-family:var(--font-mono);font-size:10px;font-weight:700;color:var(--text)}
 
 /* ─── KILL SWITCH MODAL ────────────────────────── */
 .ks-modal{position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.45);backdrop-filter:blur(8px);display:none;align-items:center;justify-content:center;padding:24px}
@@ -751,6 +784,14 @@ footer{border-top:1px solid var(--border);padding:32px 0;margin-top:80px}
     <div class="status-box-title">System Status</div>
     <button class="status-box-collapse" onclick="toggleStatusBox()" title="Minimize">—</button>
   </div>
+
+  <!-- Capital input -->
+  <div class="sb-capital-row">
+    <input class="sb-cap-input" id="sb-capital-input" type="number" placeholder="Capital $" min="100" step="1000"/>
+    <button class="sb-set-btn" onclick="sbSetCapital()">SET</button>
+  </div>
+
+  <!-- API status rows -->
   <div class="status-box-rows" id="status-box-rows">
     <div class="status-row">
       <span class="status-row-lbl">Polygon.io</span>
@@ -769,6 +810,25 @@ footer{border-top:1px solid var(--border);padding:32px 0;margin-top:80px}
       <span class="status-row-val" id="st-bot"><span class="status-dot-sm loading"></span>—</span>
     </div>
   </div>
+
+  <!-- Day / Swing mode indicators -->
+  <div class="sb-modes-section" id="sb-modes-section">
+    <div class="sb-mode-row">
+      <div class="sb-mode-lbl"><span class="sb-mode-chip" id="sb-day-chip">DAY</span>Day</div>
+      <div class="sb-mode-vals" id="sb-day-vals">—</div>
+    </div>
+    <div class="sb-mode-row">
+      <div class="sb-mode-lbl"><span class="sb-mode-chip" id="sb-swing-chip">SWING</span>Swing</div>
+      <div class="sb-mode-vals" id="sb-swing-vals">—</div>
+    </div>
+  </div>
+
+  <!-- Auto-close countdown -->
+  <div class="sb-countdown-row" id="sb-countdown-row">
+    <span class="sb-countdown-lbl">Day auto-close</span>
+    <span class="sb-countdown-val" id="sb-countdown">—</span>
+  </div>
+
   <button class="kill-btn" id="kill-btn" onclick="openKillModal()">⛔ HALT ALL TRADING</button>
   <div class="status-box-minimized" onclick="toggleStatusBox()">
     <span class="status-dot-sm ok" id="st-mini-dot"></span>
@@ -1256,15 +1316,35 @@ footer{border-top:1px solid var(--border);padding:32px 0;margin-top:80px}
 
   <!-- Preset test buttons -->
   <div class="sec-fade" style="animation-delay:40ms;display:flex;gap:10px;flex-wrap:wrap;margin-bottom:24px">
-    <button class="bt-export-btn" style="border-color:var(--gold);color:var(--gold);font-size:10px" onclick="btPreset('AAPL','2022-01-01','2024-01-01','golden_cross')">▶ AAPL 2022–2024 Golden Cross</button>
-    <button class="bt-export-btn" style="font-size:10px" onclick="btPreset('SPY','2021-01-01','2023-06-01','rsi_macd')">▶ SPY 2021–2023 RSI+MACD</button>
-    <button class="bt-export-btn" style="font-size:10px" onclick="btPreset('NVDA','2022-01-01','2024-01-01','combined')">▶ NVDA 2022–2024 Combined</button>
+    <button class="bt-export-btn" style="border-color:var(--gold);color:var(--gold);font-size:10px" onclick="btPreset('AAPL','2022-01-01','2024-01-01','swing','combined')">▶ AAPL Swing Combined</button>
+    <button class="bt-export-btn" style="font-size:10px" onclick="btPreset('SPY','2022-01-01','2024-01-01','swing','ema_cross')">▶ SPY Swing EMA Cross</button>
+    <button class="bt-export-btn" style="font-size:10px" onclick="btPreset('NVDA','2024-01-01','2024-12-31','day','macd_crossover')">▶ NVDA Day MACD</button>
+    <button class="bt-export-btn" style="font-size:10px" onclick="btPreset('TSLA','2023-01-01','2024-06-01','both','macd_crossover','combined')">▶ TSLA Both Modes</button>
   </div>
 
   <div class="bt-layout sec-fade" style="animation-delay:80ms">
 
     <!-- ── LEFT: Controls ── -->
     <div class="bt-panel">
+
+      <div class="input-group">
+        <label class="input-label">Starting Capital</label>
+        <input class="bt-input" id="bt-capital" type="number" placeholder="10000" value="10000" min="100" step="1000" oninput="btUpdateAllocDisplay()"/>
+        <div class="bt-cap-alloc" id="bt-alloc-display">
+          <div class="bt-alloc-chip"><b id="bt-alloc-day">$4,000</b>Day 40%</div>
+          <div class="bt-alloc-chip"><b id="bt-alloc-swing">$6,000</b>Swing 60%</div>
+        </div>
+      </div>
+
+      <div class="input-group">
+        <label class="input-label">Trading Mode</label>
+        <div class="bt-mode-tabs">
+          <button class="bt-mode-tab" id="bt-mode-tab-day"   onclick="btSetMode('day')">Day</button>
+          <button class="bt-mode-tab active" id="bt-mode-tab-swing" onclick="btSetMode('swing')">Swing</button>
+          <button class="bt-mode-tab" id="bt-mode-tab-both"  onclick="btSetMode('both')">Both</button>
+        </div>
+      </div>
+
       <div class="input-group">
         <label class="input-label">Symbol</label>
         <input class="bt-input" id="bt-symbol" type="text" placeholder="AAPL" maxlength="10" value="AAPL" style="text-transform:uppercase"/>
@@ -1280,24 +1360,35 @@ footer{border-top:1px solid var(--border);padding:32px 0;margin-top:80px}
         <input class="bt-input" id="bt-end" type="date"/>
       </div>
 
-      <div class="input-group">
-        <label class="input-label">Strategy</label>
-        <select class="bt-select" id="bt-strategy" onchange="btUpdateStrategyDesc()">
+      <!-- Day strategy — shown for day/both -->
+      <div class="input-group" id="bt-day-strat-group" style="display:none">
+        <label class="input-label">Day Strategy</label>
+        <select class="bt-select" id="bt-day-strategy" onchange="btUpdateStrategyDesc()">
+          <option value="macd_crossover" selected>MACD Crossover (15-min)</option>
+          <option value="rsi_mean_reversion">RSI Mean Reversion (15-min)</option>
+        </select>
+      </div>
+
+      <!-- Swing strategy — shown for swing/both -->
+      <div class="input-group" id="bt-swing-strat-group">
+        <label class="input-label">Swing Strategy</label>
+        <select class="bt-select" id="bt-swing-strategy" onchange="btUpdateStrategyDesc()">
+          <option value="ema_cross">EMA 20/50 Cross</option>
+          <option value="combined" selected>Combined (EMA60/200 + RSI)</option>
           <option value="golden_cross">Golden Cross (EMA 60/200)</option>
           <option value="rsi_macd">RSI + MACD</option>
-          <option value="combined" selected>Combined (All signals)</option>
         </select>
         <div class="bt-strategy-desc" id="bt-strategy-desc">
-          Requires EMA 60/200 golden cross AND RSI &lt; 35 AND positive MACD histogram. Most selective — fewer but higher-quality signals.
+          EMA 60 &gt; EMA 200 uptrend AND RSI &lt; 35 or momentum entry. Exit on death cross, RSI overbought, or MACD flip. 5% stop, 30-day max hold.
         </div>
       </div>
 
       <button class="bt-run-btn" id="bt-run-btn" onclick="runBacktest()">RUN BACKTEST ↗</button>
 
-      <div style="margin-top:16px;font-family:var(--font-mono);font-size:10px;color:var(--text3);line-height:1.7">
-        Data: Polygon.io daily OHLCV<br>
-        Assumes long-only, 100% position sizing<br>
-        No commissions or slippage modelled<br>
+      <div style="margin-top:16px;font-family:var(--font-mono);font-size:10px;color:var(--text3);line-height:1.8">
+        Data: Polygon.io · 0.1% slippage · $5/leg<br>
+        Day: 15-min bars · 9:30–3:30 PM ET<br>
+        Swing: daily bars · 30-day max hold<br>
         ⚠ Past performance ≠ future results
       </div>
     </div>
@@ -1319,7 +1410,11 @@ footer{border-top:1px solid var(--border);padding:32px 0;margin-top:80px}
 
         <!-- Equity curve chart -->
         <div class="bt-chart-wrap">
-          <div class="bt-chart-title">Equity Curve — $10,000 Starting Capital</div>
+          <div class="bt-chart-title" id="bt-chart-title">Equity Curve</div>
+          <div class="bt-chart-legend" id="bt-chart-legend" style="display:none">
+            <div class="bt-chart-legend-item"><div class="bt-chart-legend-line" style="background:#c8960c"></div>Day Trading</div>
+            <div class="bt-chart-legend-item"><div class="bt-chart-legend-line" style="background:#1a5c96"></div>Swing Trading</div>
+          </div>
           <canvas id="bt-equity-chart" style="max-height:260px"></canvas>
         </div>
 
@@ -1332,7 +1427,7 @@ footer{border-top:1px solid var(--border);padding:32px 0;margin-top:80px}
           <table class="bt-table">
             <thead>
               <tr>
-                <th>Entry Date</th><th>Symbol</th><th>Dir</th><th>Entry $</th>
+                <th>Entry Date</th><th>Symbol</th><th>Mode</th><th>Dir</th><th>Entry $</th>
                 <th>Exit Date</th><th>Exit $</th>
                 <th>P&amp;L $</th><th>P&amp;L %</th><th>Result</th><th>Days</th>
               </tr>
@@ -2690,36 +2785,64 @@ function buildScreener(){
 }
 
 /* ── BACKTEST ────────────────────────────────────── */
-let _btChart = null;
+let _btChart  = null;
 let _btTrades = [];
+let _btMode   = 'swing';
 
-// Set default dates and symbol
+// Set default dates
 (function(){
-  const today = new Date();
+  const today      = new Date();
   const oneYearAgo = new Date(today);
   oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
-  const fmt = d => d.toISOString().split('T')[0];
+  const fmt    = d => d.toISOString().split('T')[0];
   const startEl = document.getElementById('bt-start');
   const endEl   = document.getElementById('bt-end');
   if (startEl && !startEl.value) startEl.value = fmt(oneYearAgo);
-  if (endEl)   endEl.value = fmt(today);
+  if (endEl   && !endEl.value)   endEl.value   = fmt(today);
 })();
 
 const BT_STRATEGY_DESCS = {
-  golden_cross: 'Buy when EMA 60 crosses above EMA 200 (golden cross). Exit on death cross or 5% stop loss. Best for capturing major trend reversals — needs at least 1 year of data.',
-  rsi_macd:     'Buy when RSI &lt; 35 (oversold) AND MACD histogram turns positive. Exit when RSI &gt; 70 OR histogram turns negative. Good for catching oversold bounces.',
-  combined:     'Requires EMA 60 &gt; EMA 200 (uptrend) AND either RSI &lt; 35 (oversold) OR RSI &lt; 50 with positive MACD histogram (momentum). Exit on death cross, RSI &gt; 70, or MACD flip. More signals than pure golden cross.',
+  macd_crossover:     'Enter when MACD histogram flips positive on 15-min bars. Exit on histogram flip negative, 1.5% stop, or 3:30 PM ET force close. No overnight holds.',
+  rsi_mean_reversion: 'Enter when RSI(14) &lt; 30 AND MACD histogram turns positive on 15-min bars. Exit when RSI &gt; 65, MACD flips negative, or EOD. Mean reversion bounce play.',
+  ema_cross:          'Enter when EMA 20 crosses above EMA 50 (golden cross). Exit on death cross, 5% stop loss, or 30-day max hold. Good for medium-term trend following.',
+  combined:           'Enter when EMA 60 &gt; EMA 200 (uptrend) AND RSI &lt; 35 OR (RSI &lt; 50 AND MACD positive). Exit on death cross, RSI &gt; 70, MACD flip, 5% stop, or 30-day hold.',
+  golden_cross:       'Enter when EMA 60 crosses above EMA 200. Exit on death cross or 5% stop. Long-term trend strategy — needs at least 1 year of data.',
+  rsi_macd:           'Enter when RSI(14) &lt; 35 AND MACD histogram turns positive on daily bars. Exit when RSI &gt; 70 or histogram turns negative. Oversold bounce strategy.',
 };
 
+function btSetMode(mode) {
+  _btMode = mode;
+  ['day','swing','both'].forEach(m => {
+    document.getElementById(`bt-mode-tab-${m}`)?.classList.toggle('active', m === mode);
+  });
+  const dayGroup   = document.getElementById('bt-day-strat-group');
+  const swingGroup = document.getElementById('bt-swing-strat-group');
+  if (dayGroup)   dayGroup.style.display   = (mode === 'day'   || mode === 'both') ? '' : 'none';
+  if (swingGroup) swingGroup.style.display = (mode === 'swing' || mode === 'both') ? '' : 'none';
+  btUpdateStrategyDesc();
+}
+
 function btUpdateStrategyDesc() {
-  const sel  = document.getElementById('bt-strategy');
-  const desc = document.getElementById('bt-strategy-desc');
-  if (desc && sel) desc.innerHTML = BT_STRATEGY_DESCS[sel.value] || '';
+  const mode     = _btMode;
+  const descEl   = document.getElementById('bt-strategy-desc');
+  if (!descEl) return;
+  const stratKey = mode === 'day'
+    ? (document.getElementById('bt-day-strategy')?.value || 'macd_crossover')
+    : (document.getElementById('bt-swing-strategy')?.value || 'combined');
+  descEl.innerHTML = BT_STRATEGY_DESCS[stratKey] || '';
+}
+
+function btUpdateAllocDisplay() {
+  const cap    = parseFloat(document.getElementById('bt-capital')?.value) || 10000;
+  const dayEl  = document.getElementById('bt-alloc-day');
+  const swgEl  = document.getElementById('bt-alloc-swing');
+  if (dayEl)  dayEl.textContent  = '$' + (cap * 0.4).toLocaleString('en-US', { maximumFractionDigits: 0 });
+  if (swgEl)  swgEl.textContent  = '$' + (cap * 0.6).toLocaleString('en-US', { maximumFractionDigits: 0 });
 }
 
 function btFmt$(v) {
   if (v == null || isNaN(v)) return '--';
-  return '$' + Number(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return (v < 0 ? '-$' : '$') + Math.abs(Number(v)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 function btFmtPct(v, showSign = true) {
   if (v == null || isNaN(v)) return '--';
@@ -2732,234 +2855,335 @@ function btPctColor(v) {
 }
 
 async function runBacktest() {
-  const symbol    = (document.getElementById('bt-symbol').value || '').trim().toUpperCase();
-  const startDate = document.getElementById('bt-start').value;
-  const endDate   = document.getElementById('bt-end').value;
-  const strategy  = document.getElementById('bt-strategy').value;
-  const btn       = document.getElementById('bt-run-btn');
+  const symbol      = (document.getElementById('bt-symbol')?.value || '').trim().toUpperCase();
+  const startDate   = document.getElementById('bt-start')?.value;
+  const endDate     = document.getElementById('bt-end')?.value;
+  const capital     = parseFloat(document.getElementById('bt-capital')?.value) || 10000;
+  const mode        = _btMode;
+  const dayStrategy   = document.getElementById('bt-day-strategy')?.value   || 'macd_crossover';
+  const swingStrategy = document.getElementById('bt-swing-strategy')?.value || 'combined';
+
+  const btn         = document.getElementById('bt-run-btn');
   const placeholder = document.getElementById('bt-placeholder');
   const summary     = document.getElementById('bt-summary');
 
-  if (!symbol)                  { alert('Enter a ticker symbol'); return; }
-  if (!startDate || !endDate)   { alert('Select start and end dates'); return; }
-  if (startDate >= endDate)     { alert('End date must be after start date'); return; }
+  if (!symbol)                { alert('Enter a ticker symbol'); return; }
+  if (!startDate || !endDate) { alert('Select start and end dates'); return; }
+  if (startDate >= endDate)   { alert('End date must be after start date'); return; }
 
   btn.disabled = true;
   placeholder.style.display = 'flex';
-  placeholder.innerHTML =
-    `<div class="loading-ring"></div>
-     <div style="font-family:var(--font-mono);font-size:12px;margin-top:10px">Running backtest for ${symbol}…</div>`;
+  placeholder.innerHTML = `<div class="loading-ring"></div>
+    <div style="font-family:var(--font-mono);font-size:12px;margin-top:10px">Running ${mode} backtest for ${symbol}…</div>`;
   summary.style.display = 'none';
 
   try {
-    const r = await fetch('/api/backtest', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ symbol, startDate, endDate, strategy }),
-    });
+    const payload = { symbol, startDate, endDate, capital, mode, dayStrategy, swingStrategy };
+    const r    = await fetch('/api/backtest', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
     const data = await r.json();
     console.log('[backtest] Response:', data);
 
     if (!r.ok || data.error) {
       placeholder.style.display = 'flex';
-      placeholder.innerHTML =
-        `<div style="font-size:28px;opacity:.35">⚠</div>
-         <div style="color:var(--red);font-family:var(--font-mono);font-size:12px;max-width:340px;text-align:center;line-height:1.6">${data.error || 'Backtest failed — check symbol and date range'}</div>`;
+      placeholder.innerHTML = `<div style="font-size:28px;opacity:.35">⚠</div>
+        <div style="color:var(--red);font-family:var(--font-mono);font-size:12px;max-width:380px;text-align:center;line-height:1.6">${data.error || 'Backtest failed — check symbol and date range'}</div>`;
       return;
     }
 
-    _btTrades = data.trades || [];
     placeholder.style.display = 'none';
 
-    // Show message banner if present (e.g. 0 trades explanation)
-    const msgEl = document.getElementById('bt-message');
-    if (msgEl) {
-      if (data.message) {
-        msgEl.textContent = data.message;
-        msgEl.style.display = 'block';
-      } else {
-        msgEl.style.display = 'none';
-      }
+    if (data.mode === 'both') {
+      _btTrades = [
+        ...(data.dayResult?.trades   || []),
+        ...(data.swingResult?.trades || []),
+      ].sort((a, b) => a.entryDate.localeCompare(b.entryDate));
+      btShowMessage(data.dayResult?.message || data.swingResult?.message);
+      btRenderBothSummary(data);
+      btRenderTable(_btTrades);
+      btRenderChart(data.dayResult?.summary?.equityCurve || [], data.swingResult?.summary?.equityCurve || [], data);
+    } else {
+      _btTrades = data.trades || [];
+      btShowMessage(data.message);
+      btRenderSummary(data.summary, data.strategy || data.mode, data.barsUsed, data.capital, data.deployedCapital);
+      btRenderTable(_btTrades);
+      btRenderChart(data.summary.equityCurve || [], [], data);
     }
 
-    btRenderSummary(data.summary, data.strategy, data.barsUsed);
-    btRenderTable(_btTrades);
-    btRenderChart(data.summary.equityCurve || []);
     summary.style.display = 'block';
 
   } catch (err) {
     placeholder.style.display = 'flex';
-    placeholder.innerHTML =
-      `<div style="color:var(--red);font-family:var(--font-mono);font-size:12px">⚠ ${err.message}</div>`;
+    placeholder.innerHTML = `<div style="color:var(--red);font-family:var(--font-mono);font-size:12px">⚠ ${err.message}</div>`;
   } finally {
     btn.disabled = false;
   }
 }
 
-function btRenderSummary(s, strategy, barsUsed) {
-  const winColor   = (s.winRate >= 55) ? 'var(--green)' : (s.winRate >= 45) ? 'var(--gold)' : 'var(--red)';
-  const pnlColor   = btPctColor(s.totalPnlPct);
-  const ddColor    = s.maxDrawdown > 20 ? 'var(--red)' : s.maxDrawdown > 10 ? 'var(--gold)' : 'var(--green)';
-  const pfColor    = s.profitFactor >= 1.5 ? 'var(--green)' : s.profitFactor >= 1 ? 'var(--gold)' : 'var(--red)';
-  const stratName  = { golden_cross:'Golden Cross', rsi_macd:'RSI + MACD', combined:'Combined' }[strategy] || strategy;
+function btShowMessage(msg) {
+  const el = document.getElementById('bt-message');
+  if (!el) return;
+  if (msg) { el.textContent = msg; el.style.display = 'block'; }
+  else       el.style.display = 'none';
+}
+
+function btRenderSummary(s, strategyKey, barsUsed, totalCap, deployedCap) {
+  const winColor  = s.winRate >= 55 ? 'var(--green)' : s.winRate >= 45 ? 'var(--gold)' : 'var(--red)';
+  const pnlColor  = btPctColor(s.totalPnlPct);
+  const ddColor   = s.maxDrawdown > 20 ? 'var(--red)' : s.maxDrawdown > 10 ? 'var(--gold)' : 'var(--green)';
+  const pfColor   = s.profitFactor >= 1.5 ? 'var(--green)' : s.profitFactor >= 1 ? 'var(--gold)' : 'var(--red)';
+  const NAMES     = { macd_crossover:'MACD Cross', rsi_mean_reversion:'RSI Reversion', ema_cross:'EMA 20/50', combined:'Combined', golden_cross:'Golden Cross', rsi_macd:'RSI+MACD' };
+  const stratName = NAMES[strategyKey] || strategyKey;
+  const capStr    = deployedCap ? btFmt$(deployedCap) : btFmt$(s.startCapital || 10000);
+
+  // Update chart title
+  const titleEl = document.getElementById('bt-chart-title');
+  if (titleEl) titleEl.textContent = `Equity Curve — ${capStr} Capital`;
+  const legendEl = document.getElementById('bt-chart-legend');
+  if (legendEl) legendEl.style.display = 'none';
 
   document.getElementById('bt-summary-grid').innerHTML = `
-    <div class="bt-stat">
-      <div class="bt-stat-lbl">Total Trades</div>
+    <div class="bt-stat"><div class="bt-stat-lbl">Total Trades</div>
       <div class="bt-stat-val">${s.totalTrades}</div>
-      <div class="bt-stat-sub">${s.wins}W / ${s.losses}L · ${barsUsed} bars</div>
-    </div>
-    <div class="bt-stat">
-      <div class="bt-stat-lbl">Win Rate</div>
+      <div class="bt-stat-sub">${s.wins}W / ${s.losses}L · ${barsUsed} bars</div></div>
+    <div class="bt-stat"><div class="bt-stat-lbl">Win Rate</div>
       <div class="bt-stat-val" style="color:${winColor}">${s.winRate}%</div>
-      <div class="bt-stat-sub">${stratName}</div>
-    </div>
-    <div class="bt-stat">
-      <div class="bt-stat-lbl">Total P&amp;L</div>
-      <div class="bt-stat-val" style="color:${pnlColor}">${btFmtPct(s.totalPnlPct, true)}</div>
-      <div class="bt-stat-sub">$10k → ${btFmt$(s.finalEquity)}</div>
-    </div>
-    <div class="bt-stat">
-      <div class="bt-stat-lbl">Max Drawdown</div>
+      <div class="bt-stat-sub">${stratName}</div></div>
+    <div class="bt-stat"><div class="bt-stat-lbl">Total P&amp;L</div>
+      <div class="bt-stat-val" style="color:${pnlColor}">${btFmt$(s.totalPnl)}</div>
+      <div class="bt-stat-sub">${btFmtPct(s.totalPnlPct, true)} · ${capStr} → ${btFmt$(s.finalEquity)}</div></div>
+    <div class="bt-stat"><div class="bt-stat-lbl">Max Drawdown</div>
       <div class="bt-stat-val" style="color:${ddColor}">-${s.maxDrawdown}%</div>
-      <div class="bt-stat-sub">Avg win: +${s.avgWin}%</div>
-    </div>
-    <div class="bt-stat">
-      <div class="bt-stat-lbl">Profit Factor</div>
+      <div class="bt-stat-sub">Avg win: +${s.avgWin}%</div></div>
+    <div class="bt-stat"><div class="bt-stat-lbl">Profit Factor</div>
       <div class="bt-stat-val" style="color:${pfColor}">${s.profitFactor}x</div>
-      <div class="bt-stat-sub">Avg loss: ${s.avgLoss}%</div>
-    </div>`;
+      <div class="bt-stat-sub">Avg loss: ${s.avgLoss}%</div></div>`;
+}
+
+function btRenderBothSummary(data) {
+  const d   = data.dayResult?.summary   || {};
+  const sw  = data.swingResult?.summary || {};
+  const comb = data.combined || {};
+  const NAMES = { macd_crossover:'MACD Cross', rsi_mean_reversion:'RSI Reversion', ema_cross:'EMA 20/50', combined:'Combined', golden_cross:'Golden Cross', rsi_macd:'RSI+MACD' };
+
+  const titleEl = document.getElementById('bt-chart-title');
+  if (titleEl) titleEl.textContent = `Equity Curves — ${btFmt$(data.capital)} Total Capital`;
+  const legendEl = document.getElementById('bt-chart-legend');
+  if (legendEl) legendEl.style.display = 'flex';
+
+  const combPnlColor = btPctColor(comb.totalPnlPct);
+
+  document.getElementById('bt-summary-grid').innerHTML = `
+    <div style="grid-column:1/-1">
+      <div class="bt-dual-grid">
+        <div class="bt-mode-card">
+          <div class="bt-mode-card-title"><div class="bt-mode-dot" style="background:#c8960c"></div>Day Trading · ${btFmt$(data.dayCapital)} · ${NAMES[data.dayResult?.strategy] || ''}</div>
+          <div class="bt-mini-stats">
+            <div class="bt-mini-stat"><div class="bt-mini-stat-lbl">Trades</div><div class="bt-mini-stat-val">${d.totalTrades ?? 0}</div></div>
+            <div class="bt-mini-stat"><div class="bt-mini-stat-lbl">Win Rate</div><div class="bt-mini-stat-val" style="color:${d.winRate>=50?'var(--green)':'var(--red)'}">${d.winRate ?? 0}%</div></div>
+            <div class="bt-mini-stat"><div class="bt-mini-stat-lbl">P&amp;L</div><div class="bt-mini-stat-val" style="color:${btPctColor(d.totalPnlPct)}">${btFmt$(d.totalPnl)}</div></div>
+            <div class="bt-mini-stat"><div class="bt-mini-stat-lbl">Max DD</div><div class="bt-mini-stat-val" style="color:${d.maxDrawdown>15?'var(--red)':'var(--text)'}">-${d.maxDrawdown ?? 0}%</div></div>
+          </div>
+        </div>
+        <div class="bt-mode-card">
+          <div class="bt-mode-card-title"><div class="bt-mode-dot" style="background:#1a5c96"></div>Swing Trading · ${btFmt$(data.swingCapital)} · ${NAMES[data.swingResult?.strategy] || ''}</div>
+          <div class="bt-mini-stats">
+            <div class="bt-mini-stat"><div class="bt-mini-stat-lbl">Trades</div><div class="bt-mini-stat-val">${sw.totalTrades ?? 0}</div></div>
+            <div class="bt-mini-stat"><div class="bt-mini-stat-lbl">Win Rate</div><div class="bt-mini-stat-val" style="color:${sw.winRate>=50?'var(--green)':'var(--red)'}">${sw.winRate ?? 0}%</div></div>
+            <div class="bt-mini-stat"><div class="bt-mini-stat-lbl">P&amp;L</div><div class="bt-mini-stat-val" style="color:${btPctColor(sw.totalPnlPct)}">${btFmt$(sw.totalPnl)}</div></div>
+            <div class="bt-mini-stat"><div class="bt-mini-stat-lbl">Max DD</div><div class="bt-mini-stat-val" style="color:${sw.maxDrawdown>15?'var(--red)':'var(--text)'}">-${sw.maxDrawdown ?? 0}%</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="bt-stat"><div class="bt-stat-lbl">Combined Trades</div>
+      <div class="bt-stat-val">${comb.totalTrades ?? 0}</div>
+      <div class="bt-stat-sub">${data.dayResult?.trades?.length ?? 0} day + ${data.swingResult?.trades?.length ?? 0} swing</div></div>
+    <div class="bt-stat"><div class="bt-stat-lbl">Combined P&amp;L</div>
+      <div class="bt-stat-val" style="color:${combPnlColor}">${btFmt$(comb.totalPnl)}</div>
+      <div class="bt-stat-sub">${btFmtPct(comb.totalPnlPct, true)} return</div></div>
+    <div class="bt-stat"><div class="bt-stat-lbl">Final Equity</div>
+      <div class="bt-stat-val" style="color:${combPnlColor}">${btFmt$(comb.finalEquity)}</div>
+      <div class="bt-stat-sub">${btFmt$(data.capital)} starting</div></div>
+    <div class="bt-stat"><div class="bt-stat-lbl">Max Drawdown</div>
+      <div class="bt-stat-val" style="color:${(comb.maxDrawdown??0)>20?'var(--red)':(comb.maxDrawdown??0)>10?'var(--gold)':'var(--green)'}">-${comb.maxDrawdown ?? 0}%</div>
+      <div class="bt-stat-sub">Worst single mode</div></div>`;
 }
 
 function btRenderTable(trades) {
   const tbody = document.getElementById('bt-tbody');
   if (!tbody) return;
   if (!trades.length) {
-    tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;padding:28px;color:var(--text3);font-family:var(--font-mono);font-size:11px">No trades found — try a longer date range or different strategy</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="11" style="text-align:center;padding:28px;color:var(--text3);font-family:var(--font-mono);font-size:11px">No trades found — try a longer date range or different strategy</td></tr>';
     return;
   }
+  const MODECOLORS = { day:'var(--gold)', swing:'#1a5c96' };
   tbody.innerHTML = trades.map(t => {
     const cls      = t.result === 'WIN' ? 'win' : 'loss';
-    const badge    = t.result === 'WIN'
-      ? '<span class="bt-result-win">WIN</span>'
-      : '<span class="bt-result-loss">LOSS</span>';
-    const pnlColor = `color:${t.pnlPct >= 0 ? 'var(--green)' : 'var(--red)'};font-weight:700`;
-    const dir      = t.direction || 'LONG';
-    const dirColor = dir === 'LONG' ? 'var(--green)' : 'var(--red)';
+    const badge    = t.result === 'WIN' ? '<span class="bt-result-win">WIN</span>' : '<span class="bt-result-loss">LOSS</span>';
+    const pnlStyle = `color:${t.pnl >= 0 ? 'var(--green)' : 'var(--red)'};font-weight:700`;
+    const modeColor = MODECOLORS[t.mode] || 'var(--text3)';
+    const holdStr  = t.mode === 'day' ? (t.holdingMins != null ? `${t.holdingMins}m` : '0d') : `${t.holdingDays ?? 0}d`;
     return `<tr class="${cls}">
       <td style="font-family:var(--font-mono);color:var(--text3)">${t.entryDate}</td>
       <td style="font-family:var(--font-mono);font-weight:700;color:var(--gold)">${t.symbol}</td>
-      <td style="font-family:var(--font-mono);font-weight:700;color:${dirColor}">${dir}</td>
+      <td style="font-family:var(--font-mono);font-size:9px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:${modeColor}">${t.mode||''}</td>
+      <td style="font-family:var(--font-mono);font-weight:700;color:var(--green)">${t.direction||'LONG'}</td>
       <td style="font-family:var(--font-mono)">${btFmt$(t.entryPrice)}</td>
       <td style="font-family:var(--font-mono);color:var(--text3)">${t.exitDate}</td>
       <td style="font-family:var(--font-mono)">${btFmt$(t.exitPrice)}</td>
-      <td style="font-family:var(--font-mono);${pnlColor}">${t.pnl >= 0 ? '+' : ''}${btFmt$(t.pnl)}</td>
-      <td style="font-family:var(--font-mono);${pnlColor}">${btFmtPct(t.pnlPct, true)}</td>
+      <td style="font-family:var(--font-mono);${pnlStyle}">${t.pnl >= 0 ? '+' : ''}${btFmt$(t.pnl)}</td>
+      <td style="font-family:var(--font-mono);${pnlStyle}">${btFmtPct(t.pnlPct, true)}</td>
       <td>${badge}</td>
-      <td style="font-family:var(--font-mono);color:var(--text3)">${t.holdingDays}d</td>
+      <td style="font-family:var(--font-mono);color:var(--text3)">${holdStr}</td>
     </tr>`;
   }).join('');
 }
 
-function btRenderChart(equityCurve) {
+/**
+ * @param {Array} curve1  - primary equity curve (or day curve for "both" mode)
+ * @param {Array} curve2  - swing equity curve (only used for "both" mode)
+ * @param {object} data   - full response (for mode detection)
+ */
+function btRenderChart(curve1, curve2, data) {
   const wrap   = document.querySelector('.bt-chart-wrap');
   const canvas = document.getElementById('bt-equity-chart');
   if (!canvas) return;
 
   if (_btChart) { _btChart.destroy(); _btChart = null; }
-
-  // Remove any previous empty-state message
   const prev = wrap?.querySelector('.bt-chart-empty');
   if (prev) prev.remove();
 
-  // Need at least 2 points to draw a meaningful line
-  if (!equityCurve || equityCurve.length < 2) {
+  const isBoth   = data?.mode === 'both';
+  const hasCurve1 = curve1 && curve1.length >= 2;
+  const hasCurve2 = curve2 && curve2.length >= 2;
+
+  if (!hasCurve1 && !hasCurve2) {
     canvas.style.display = 'none';
     if (wrap) {
       const msg = document.createElement('div');
-      msg.className = 'bt-chart-empty';
+      msg.className   = 'bt-chart-empty';
       msg.style.cssText = 'text-align:center;padding:48px 24px;font-family:var(--font-mono);font-size:11px;color:var(--text3)';
-      msg.textContent = 'No trades generated for this period and strategy — try a longer date range or different strategy';
+      msg.textContent = 'No trades generated — try a longer date range or different strategy';
       wrap.appendChild(msg);
     }
     return;
   }
   canvas.style.display = '';
 
-  const labels = equityCurve.map(p => p.date || '');
-  const values = equityCurve.map(p => p.equity);
-  const startVal = values[0] || 10000;
-  const endVal   = values[values.length - 1] || 10000;
-  const up        = endVal >= startVal;
-  const lineColor = up ? '#1a7a40' : '#c0182a';
-  const fillColor = up ? 'rgba(26,122,64,.08)' : 'rgba(192,24,42,.07)';
-
-  // Read computed CSS variable values for theming
   const style     = getComputedStyle(document.documentElement);
   const tickColor = style.getPropertyValue('--text3').trim() || '#8a8480';
   const gridColor = style.getPropertyValue('--border').trim() || '#d8d4ca';
 
-  _btChart = new Chart(canvas, {
-    type: 'line',
-    data: {
-      labels,
-      datasets: [{
-        data: values,
-        borderColor: lineColor,
-        backgroundColor: fillColor,
-        borderWidth: 2,
-        pointRadius: equityCurve.length > 60 ? 0 : 3,
-        pointHoverRadius: 5,
-        fill: true,
-        tension: 0.3,
-      }],
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: true,
-      interaction: { mode: 'index', intersect: false },
-      plugins: {
-        legend: { display: false },
-        tooltip: {
-          backgroundColor: '#ffffff',
-          titleColor: '#4a4540',
-          bodyColor: '#0a0808',
-          borderColor: '#d8d4ca',
-          borderWidth: 1,
-          callbacks: {
-            label: ctx => ' $' + Number(ctx.parsed.y).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
-          },
+  const datasets = [];
+
+  if (isBoth) {
+    // Collect all unique dates across both curves
+    const allDates = [...new Set([
+      ...(hasCurve1 ? curve1.map(p => p.date) : []),
+      ...(hasCurve2 ? curve2.map(p => p.date) : []),
+    ])].sort();
+
+    const map1 = hasCurve1 ? Object.fromEntries(curve1.map(p => [p.date, p.equity])) : {};
+    const map2 = hasCurve2 ? Object.fromEntries(curve2.map(p => [p.date, p.equity])) : {};
+
+    // Fill forward for each curve
+    const vals1 = [], vals2 = [];
+    let last1 = data.dayCapital   || 4000;
+    let last2 = data.swingCapital || 6000;
+    for (const d of allDates) {
+      if (map1[d] != null) last1 = map1[d];
+      if (map2[d] != null) last2 = map2[d];
+      vals1.push(last1);
+      vals2.push(last2);
+    }
+
+    if (hasCurve1) datasets.push({
+      label: 'Day',
+      data: allDates.map((_, i) => vals1[i]),
+      borderColor: '#c8960c',
+      backgroundColor: 'rgba(200,150,12,.06)',
+      borderWidth: 2,
+      pointRadius: allDates.length > 60 ? 0 : 3,
+      pointHoverRadius: 5,
+      fill: false,
+      tension: 0.3,
+    });
+    if (hasCurve2) datasets.push({
+      label: 'Swing',
+      data: allDates.map((_, i) => vals2[i]),
+      borderColor: '#1a5c96',
+      backgroundColor: 'rgba(26,92,150,.06)',
+      borderWidth: 2,
+      pointRadius: allDates.length > 60 ? 0 : 3,
+      pointHoverRadius: 5,
+      fill: false,
+      tension: 0.3,
+    });
+
+    const vals = values => values[values.length - 1] ?? 0;
+    const up   = vals(vals1) + vals(vals2) >= (data.capital || 10000);
+    _btChart = new Chart(canvas, {
+      type: 'line',
+      data: { labels: allDates, datasets },
+      options: btChartOptions(tickColor, gridColor),
+    });
+  } else {
+    const labels = curve1.map(p => p.date || '');
+    const values = curve1.map(p => p.equity);
+    const up     = (values[values.length - 1] ?? 0) >= (values[0] ?? 0);
+    datasets.push({
+      label: 'Equity',
+      data: values,
+      borderColor:     up ? '#1a7a40' : '#c0182a',
+      backgroundColor: up ? 'rgba(26,122,64,.08)' : 'rgba(192,24,42,.07)',
+      borderWidth: 2,
+      pointRadius: curve1.length > 60 ? 0 : 3,
+      pointHoverRadius: 5,
+      fill: true,
+      tension: 0.3,
+    });
+    _btChart = new Chart(canvas, {
+      type: 'line',
+      data: { labels, datasets },
+      options: btChartOptions(tickColor, gridColor),
+    });
+  }
+}
+
+function btChartOptions(tickColor, gridColor) {
+  return {
+    responsive: true,
+    maintainAspectRatio: true,
+    interaction: { mode: 'index', intersect: false },
+    plugins: {
+      legend: { display: false },
+      tooltip: {
+        backgroundColor: '#ffffff',
+        titleColor: '#4a4540',
+        bodyColor: '#0a0808',
+        borderColor: '#d8d4ca',
+        borderWidth: 1,
+        callbacks: {
+          label: ctx => ` ${ctx.dataset.label || 'Equity'}: $${Number(ctx.parsed.y).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}`,
         },
       },
-      scales: {
-        x: {
-          ticks: {
-            color: tickColor,
-            font: { family: "'Space Mono', monospace", size: 9 },
-            maxTicksLimit: 10,
-            maxRotation: 0,
-          },
-          grid: { color: gridColor },
-        },
-        y: {
-          ticks: {
-            color: tickColor,
-            font: { family: "'Space Mono', monospace", size: 9 },
-            callback: v => '$' + Number(v).toLocaleString(),
-          },
-          grid: { color: gridColor },
-        },
-      },
     },
-  });
+    scales: {
+      x: { ticks: { color: tickColor, font: { family:"'Space Mono', monospace", size:9 }, maxTicksLimit:10, maxRotation:0 }, grid: { color: gridColor } },
+      y: { ticks: { color: tickColor, font: { family:"'Space Mono', monospace", size:9 }, callback: v => '$' + Number(v).toLocaleString() }, grid: { color: gridColor } },
+    },
+  };
 }
 
 function btExportCSV() {
   if (!_btTrades.length) return;
-  const header = 'Symbol,Strategy,Direction,Entry Date,Entry Price,Exit Date,Exit Price,P&L $,P&L %,Result,Days Held';
-  const rows = _btTrades.map(t =>
-    [t.symbol, t.strategy, t.direction||'LONG', t.entryDate, t.entryPrice, t.exitDate, t.exitPrice, t.pnl, t.pnlPct, t.result, t.holdingDays].join(',')
-  );
+  const header = 'Symbol,Mode,Strategy,Direction,Entry Date,Entry Price,Exit Date,Exit Price,P&L $,P&L %,Result,Hold';
+  const rows = _btTrades.map(t => [
+    t.symbol, t.mode||'', t.strategy||'', t.direction||'LONG',
+    t.entryDate, t.entryPrice, t.exitDate, t.exitPrice,
+    t.pnl, t.pnlPct, t.result,
+    t.mode === 'day' ? `${t.holdingMins ?? 0}m` : `${t.holdingDays ?? 0}d`,
+  ].join(','));
   const csv  = [header, ...rows].join('\n');
   const blob = new Blob([csv], { type: 'text/csv' });
   const url  = URL.createObjectURL(blob);
@@ -2970,15 +3194,18 @@ function btExportCSV() {
   URL.revokeObjectURL(url);
 }
 
-function btPreset(symbol, startDate, endDate, strategy) {
+function btPreset(symbol, startDate, endDate, mode, dayStrat, swingStrat) {
   const symEl  = document.getElementById('bt-symbol');
   const startEl= document.getElementById('bt-start');
   const endEl  = document.getElementById('bt-end');
-  const strEl  = document.getElementById('bt-strategy');
-  if(symEl)  symEl.value  = symbol;
-  if(startEl)startEl.value= startDate;
-  if(endEl)  endEl.value  = endDate;
-  if(strEl){ strEl.value  = strategy; btUpdateStrategyDesc(); }
+  const dayEl  = document.getElementById('bt-day-strategy');
+  const swgEl  = document.getElementById('bt-swing-strategy');
+  if (symEl)   symEl.value   = symbol;
+  if (startEl) startEl.value = startDate;
+  if (endEl)   endEl.value   = endDate;
+  if (dayEl  && dayStrat)   dayEl.value = dayStrat;
+  if (swgEl  && swingStrat) swgEl.value = swingStrat;
+  btSetMode(mode || 'swing');
   runBacktest();
 }
 
@@ -3189,8 +3416,13 @@ let _haltDate = localStorage.getItem('nzr_halt_date') || '';
 
 function _isTodayET(){
   const now = new Date();
-  const et = new Date(now.toLocaleString('en-US',{timeZone:'America/New_York'}));
-  return et.toISOString().slice(0,10);
+  return new Date(now.toLocaleString('en-US',{timeZone:'America/New_York'})).toISOString().slice(0,10);
+}
+
+function _getETMinuteOfDay(){
+  const now = new Date();
+  const et  = new Date(now.toLocaleString('en-US',{timeZone:'America/New_York'}));
+  return et.getHours() * 60 + et.getMinutes();
 }
 
 function toggleStatusBox(){
@@ -3207,6 +3439,81 @@ function setStatusRow(id, ok, label){
   el.innerHTML = `<span class="status-dot-sm ${dotCls}"></span>${label}`;
 }
 
+async function sbSetCapital(){
+  const input = document.getElementById('sb-capital-input');
+  const cap   = parseFloat(input?.value);
+  if (!cap || cap < 100) { alert('Enter a valid capital amount (min $100)'); return; }
+  try {
+    const r = await fetch('/api/bot?action=setcapital', {
+      method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ capital: cap }),
+    });
+    const d = await r.json();
+    if (d.ok || d.capitalAmount) {
+      addNotif('price_alert', `Trading capital set to $${cap.toLocaleString()}. Day: $${(cap*0.4).toLocaleString()} / Swing: $${(cap*0.6).toLocaleString()}`);
+      input.style.borderColor = 'var(--green)';
+      setTimeout(() => { if(input) input.style.borderColor = ''; }, 2000);
+    } else {
+      alert(d.error || 'Failed to set capital');
+    }
+  } catch(e) { alert('Could not reach bot: ' + e.message); }
+}
+
+function _updateCountdown(){
+  const min       = _getETMinuteOfDay();
+  const CLOSE_MIN = 15 * 60 + 45; // 3:45 PM ET
+  const countEl   = document.getElementById('sb-countdown');
+  if (!countEl) return;
+  if (min >= CLOSE_MIN || min < 570) {
+    countEl.textContent = min < 570 ? 'Pre-market' : 'Closed';
+    countEl.style.color = 'var(--text3)';
+  } else {
+    const minsLeft = CLOSE_MIN - min;
+    const h = Math.floor(minsLeft / 60);
+    const m = minsLeft % 60;
+    countEl.textContent = h > 0 ? `${h}h ${m}m` : `${m}m`;
+    countEl.style.color = minsLeft <= 30 ? 'var(--red)' : 'var(--text)';
+  }
+}
+
+function _updateModeRows(botData){
+  if (!botData) return;
+  const day   = botData.day   || botData.dayState   || {};
+  const swing = botData.swing || botData.swingState || {};
+  const cap   = botData.capitalAmount;
+
+  // Populate capital input if blank and capital is set
+  const capInput = document.getElementById('sb-capital-input');
+  if (capInput && !capInput.value && cap) capInput.value = cap;
+
+  // Day chip
+  const dayChip = document.getElementById('sb-day-chip');
+  if (dayChip) {
+    dayChip.className = 'sb-mode-chip ' + (botData.killSwitch ? 'halted' : day.active === false ? 'halted' : 'active');
+    dayChip.textContent = botData.killSwitch ? 'HALTED' : day.active === false ? 'OFF' : 'ACTIVE';
+  }
+  const dayVals = document.getElementById('sb-day-vals');
+  if (dayVals) {
+    const alloc = day.allocation ? `$${Number(day.allocation).toLocaleString('en-US',{maximumFractionDigits:0})}` : '—';
+    const pnl   = day.pnl != null ? (day.pnl >= 0 ? '+$' : '-$') + Math.abs(day.pnl).toFixed(0) : '—';
+    const pnlColor = (day.pnl ?? 0) >= 0 ? 'var(--green)' : 'var(--red)';
+    dayVals.innerHTML = `${alloc} alloc<br><span style="color:${pnlColor};font-weight:700">${pnl} today</span>`;
+  }
+
+  // Swing chip
+  const swingChip = document.getElementById('sb-swing-chip');
+  if (swingChip) {
+    swingChip.className = 'sb-mode-chip ' + (botData.killSwitch ? 'halted' : swing.active === false ? 'halted' : 'active');
+    swingChip.textContent = botData.killSwitch ? 'HALTED' : swing.active === false ? 'OFF' : 'ACTIVE';
+  }
+  const swingVals = document.getElementById('sb-swing-vals');
+  if (swingVals) {
+    const alloc = swing.allocation ? `$${Number(swing.allocation).toLocaleString('en-US',{maximumFractionDigits:0})}` : '—';
+    const pnl   = swing.pnl != null ? (swing.pnl >= 0 ? '+$' : '-$') + Math.abs(swing.pnl).toFixed(0) : '—';
+    const pnlColor = (swing.pnl ?? 0) >= 0 ? 'var(--green)' : 'var(--red)';
+    swingVals.innerHTML = `${alloc} alloc<br><span style="color:${pnlColor};font-weight:700">${pnl} week</span>`;
+  }
+}
+
 async function pollStatus(){
   if(_tradingHalted && _haltDate && _haltDate !== _isTodayET()){
     _tradingHalted = false;
@@ -3214,8 +3521,9 @@ async function pollStatus(){
     localStorage.removeItem('nzr_halt_date');
   }
 
-  const killBtn = document.getElementById('kill-btn');
+  const killBtn   = document.getElementById('kill-btn');
   const statusBox = document.getElementById('status-box');
+  _updateCountdown();
 
   if(_tradingHalted){
     if(killBtn){ killBtn.textContent = '⛔ TRADING HALTED'; killBtn.classList.add('halted-state'); killBtn.disabled = true; }
@@ -3258,8 +3566,11 @@ async function pollStatus(){
       localStorage.setItem('nzr_trading_halted','true');
       localStorage.setItem('nzr_halt_date', _isTodayET());
     } else if(d){
-      botOk = true; botLabel = 'Active';
+      botOk = true;
+      const caps = d.capitalAmount ? ` · $${Number(d.capitalAmount).toLocaleString('en-US',{maximumFractionDigits:0})}` : '';
+      botLabel = 'Active' + caps;
     }
+    _updateModeRows(d);
   } catch{ botOk = null; botLabel = '—'; }
   setStatusRow('st-bot', botOk, botLabel);
 
@@ -3270,6 +3581,7 @@ async function pollStatus(){
 function initStatusPolling(){
   pollStatus();
   setInterval(pollStatus, 60000);
+  setInterval(_updateCountdown, 30000); // refresh countdown every 30s
 }
 
 /* ── KILL SWITCH ────────────────────────────── */

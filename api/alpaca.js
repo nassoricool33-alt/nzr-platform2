@@ -141,6 +141,15 @@ module.exports = async function handler(req, res) {
       return res.status(r.status).json(r.body);
     }
 
+    // ── GET portfolio history ────────────────────────────────────────────────
+    if (action === 'history' && req.method === 'GET') {
+      const period    = String(req.query.period    || '1M').replace(/[^0-9A-Za-z]/g, '').slice(0, 4);
+      const timeframe = String(req.query.timeframe || '1D').replace(/[^0-9A-Za-z]/g, '').slice(0, 4);
+      const path = `/v2/account/portfolio/history?period=${encodeURIComponent(period)}&timeframe=${encodeURIComponent(timeframe)}&extended_hours=false`;
+      const r = await alpacaRequest({ ...ctx, method: 'GET', path });
+      return res.status(r.status).json(r.body);
+    }
+
     // ── GET account (connection check) ──────────────────────────────────────
     if (action === 'account' || (req.method === 'GET' && !action)) {
       const r = await alpacaRequest({ ...ctx, method: 'GET', path: '/v2/account' });
