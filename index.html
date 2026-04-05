@@ -10,44 +10,44 @@
 /* ─── RESET & BASE ─────────────────────────────────── */
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{
-  --bg:#050810;
-  --bg2:#090d1a;
-  --bg3:#0d1224;
-  --panel:#0f1628;
-  --panel2:#141c32;
-  --border:#1e2d52;
-  --border2:#243460;
-  --gold:#f0c040;
-  --gold2:#e8a820;
-  --gold-dim:rgba(240,192,64,.12);
-  --gold-glow:rgba(240,192,64,.25);
-  --cyan:#00d4ff;
-  --cyan-dim:rgba(0,212,255,.08);
-  --green:#00e59b;
-  --green-dim:rgba(0,229,155,.08);
-  --red:#ff4466;
-  --red-dim:rgba(255,68,102,.08);
-  --text:#e8eaf2;
-  --text2:#8892aa;
-  --text3:#4a5470;
+  --bg:#f7f5f0;
+  --bg2:#eeece6;
+  --bg3:#e6e3dc;
+  --panel:#ffffff;
+  --panel2:#faf9f5;
+  --border:#d8d4ca;
+  --border2:#c8c3b8;
+  --gold:#c8960c;
+  --gold2:#b07c08;
+  --gold-dim:rgba(200,150,12,.12);
+  --gold-glow:rgba(200,150,12,.25);
+  --cyan:#006b8f;
+  --cyan-dim:rgba(0,107,143,.08);
+  --green:#1a7a40;
+  --green-dim:rgba(26,122,64,.1);
+  --red:#c0182a;
+  --red-dim:rgba(192,24,42,.08);
+  --text:#0a0808;
+  --text2:#4a4540;
+  --text3:#8a8480;
   --font-display:'Syne',sans-serif;
   --font-mono:'Space Mono',monospace;
   --font-body:'Inter',sans-serif;
   --radius:8px;
   --radius-lg:14px;
-  --shadow:0 2px 16px rgba(0,0,0,.35);
-  --glow-gold:0 0 24px rgba(240,192,64,.18),0 0 60px rgba(240,192,64,.06);
-  --glow-cyan:0 0 24px rgba(0,212,255,.15),0 0 60px rgba(0,212,255,.05);
+  --shadow:0 1px 4px rgba(0,0,0,.06),0 2px 12px rgba(0,0,0,.06);
+  --glow-gold:0 0 0 2px rgba(200,150,12,.2);
+  --glow-cyan:0 0 0 2px rgba(0,107,143,.15);
 }
 html{scroll-behavior:smooth}
 body{background:var(--bg);color:var(--text);font-family:var(--font-body);font-weight:400;min-height:100vh;overflow-x:hidden;cursor:default}
 
 /* ─── ANIMATED BACKGROUND ──────────────────────────── */
-.bg-grid{position:fixed;inset:0;z-index:0;pointer-events:none;background-image:linear-gradient(rgba(30,45,82,.35) 1px,transparent 1px),linear-gradient(90deg,rgba(30,45,82,.35) 1px,transparent 1px);background-size:60px 60px;mask-image:radial-gradient(ellipse 80% 80% at 50% 50%,black 40%,transparent 100%)}
+.bg-grid{position:fixed;inset:0;z-index:0;pointer-events:none;background-image:linear-gradient(rgba(160,148,128,.18) 1px,transparent 1px),linear-gradient(90deg,rgba(160,148,128,.18) 1px,transparent 1px);background-size:60px 60px;mask-image:radial-gradient(ellipse 80% 80% at 50% 50%,black 40%,transparent 100%)}
 .glow-orb{position:fixed;border-radius:50%;pointer-events:none;z-index:0}
-.orb1{width:600px;height:600px;top:-200px;left:-100px;background:radial-gradient(circle,rgba(0,212,255,.06) 0%,transparent 70%);animation:orbFloat1 18s ease-in-out infinite}
-.orb2{width:800px;height:800px;bottom:-300px;right:-200px;background:radial-gradient(circle,rgba(240,192,64,.05) 0%,transparent 70%);animation:orbFloat2 22s ease-in-out infinite}
-.orb3{width:400px;height:400px;top:40%;left:40%;background:radial-gradient(circle,rgba(0,229,155,.04) 0%,transparent 70%);animation:orbFloat3 15s ease-in-out infinite}
+.orb1{width:600px;height:600px;top:-200px;left:-100px;background:radial-gradient(circle,rgba(200,150,12,.05) 0%,transparent 70%);animation:orbFloat1 18s ease-in-out infinite}
+.orb2{width:800px;height:800px;bottom:-300px;right:-200px;background:radial-gradient(circle,rgba(200,150,12,.04) 0%,transparent 70%);animation:orbFloat2 22s ease-in-out infinite}
+.orb3{width:400px;height:400px;top:40%;left:40%;background:radial-gradient(circle,rgba(160,148,128,.04) 0%,transparent 70%);animation:orbFloat3 15s ease-in-out infinite}
 @keyframes orbFloat1{0%,100%{transform:translate(0,0)}50%{transform:translate(60px,40px)}}
 @keyframes orbFloat2{0%,100%{transform:translate(0,0)}50%{transform:translate(-50px,-30px)}}
 @keyframes orbFloat3{0%,100%{transform:translate(0,0) scale(1)}50%{transform:translate(30px,-40px) scale(1.1)}}
@@ -56,22 +56,22 @@ body{background:var(--bg);color:var(--text);font-family:var(--font-body);font-we
 .wrapper{position:relative;z-index:1;max-width:1400px;margin:0 auto;padding:0 24px}
 
 /* ─── DISCLAIMER MODAL ─────────────────────────────── */
-.disclaimer-modal{position:fixed;inset:0;z-index:1000;background:rgba(5,8,16,.94);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);display:flex;align-items:center;justify-content:center;padding:24px}
+.disclaimer-modal{position:fixed;inset:0;z-index:1000;background:rgba(240,238,233,.96);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);display:flex;align-items:center;justify-content:center;padding:24px}
 .disclaimer-modal-box{background:var(--panel);border:1px solid var(--border2);border-radius:var(--radius-lg);padding:44px;max-width:500px;width:100%;box-shadow:var(--glow-gold)}
 .disclaimer-modal-icon{font-size:32px;margin-bottom:16px}
 .disclaimer-modal-title{font-family:var(--font-display);font-size:22px;font-weight:700;color:var(--text);margin-bottom:12px;letter-spacing:-.3px}
 .disclaimer-modal-body{font-size:13px;color:var(--text2);line-height:1.8;margin-bottom:28px}
 .disclaimer-modal-body strong{color:var(--text);font-weight:500}
-.disclaimer-modal-accept{width:100%;background:var(--gold);color:#050810;font-family:var(--font-display);font-weight:700;font-size:14px;letter-spacing:1px;padding:14px;border-radius:var(--radius);border:none;cursor:pointer;transition:all .2s;text-transform:uppercase;box-shadow:var(--glow-gold)}
+.disclaimer-modal-accept{width:100%;background:var(--gold);color:#ffffff;font-family:var(--font-display);font-weight:700;font-size:14px;letter-spacing:1px;padding:14px;border-radius:var(--radius);border:none;cursor:pointer;transition:all .2s;text-transform:uppercase;box-shadow:var(--glow-gold)}
 .disclaimer-modal-accept:hover{background:var(--gold2);transform:translateY(-2px)}
 
 /* ─── NAVBAR ───────────────────────────────────────── */
-nav{position:sticky;top:0;z-index:200;backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);background:rgba(5,8,16,.88);border-bottom:1px solid var(--border)}
+nav{position:sticky;top:0;z-index:200;backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);background:rgba(247,245,240,.97);border-bottom:1px solid var(--border)}
 .nav-inner{display:flex;align-items:center;justify-content:space-between;height:64px;max-width:1400px;margin:0 auto;padding:0 24px;gap:16px}
 .logo{display:flex;align-items:center;gap:12px;text-decoration:none;flex-shrink:0}
-.logo-mark{width:36px;height:36px;background:var(--gold);display:flex;align-items:center;justify-content:center;font-family:var(--font-display);font-weight:800;font-size:16px;color:#050810;clip-path:polygon(50% 0%,100% 25%,100% 75%,50% 100%,0% 75%,0% 25%);animation:logoSpin 8s ease-in-out infinite}
+.logo-mark{width:36px;height:36px;background:var(--gold);display:flex;align-items:center;justify-content:center;font-family:var(--font-display);font-weight:800;font-size:16px;color:#ffffff;clip-path:polygon(50% 0%,100% 25%,100% 75%,50% 100%,0% 75%,0% 25%);animation:logoSpin 8s ease-in-out infinite}
 @keyframes logoSpin{0%,100%{filter:brightness(1)}50%{filter:brightness(1.2)}}
-.logo-text{font-family:var(--font-display);font-weight:800;font-size:22px;letter-spacing:3px;color:var(--gold);text-shadow:var(--glow-gold)}
+.logo-text{font-family:var(--font-display);font-weight:800;font-size:22px;letter-spacing:3px;color:var(--gold)}
 .logo-sub{font-family:var(--font-mono);font-size:9px;color:var(--text3);letter-spacing:3px;text-transform:uppercase;margin-top:-2px}
 
 /* Nav groups */
@@ -80,13 +80,13 @@ nav{position:sticky;top:0;z-index:200;backdrop-filter:blur(24px);-webkit-backdro
 .nav-group{display:flex;align-items:center;padding:0 2px}
 .nav-group+.nav-group{border-left:1px solid var(--border);margin-left:6px;padding-left:8px}
 .nav-tab{background:none;border:none;color:var(--text2);font-family:var(--font-display);font-size:12px;font-weight:500;letter-spacing:.3px;padding:7px 11px;border-radius:var(--radius);cursor:pointer;transition:all .2s;position:relative;white-space:nowrap}
-.nav-tab:hover{color:var(--text);background:rgba(255,255,255,.05)}
+.nav-tab:hover{color:var(--text);background:rgba(0,0,0,.05)}
 .nav-tab.active{color:var(--gold);background:var(--gold-dim)}
-.nav-tab.active::after{content:'';position:absolute;bottom:-1px;left:11px;right:11px;height:2px;background:var(--gold);border-radius:2px 2px 0 0;box-shadow:0 0 8px var(--gold)}
+.nav-tab.active::after{content:'';position:absolute;bottom:-1px;left:11px;right:11px;height:2px;background:var(--gold);border-radius:2px 2px 0 0}
 
 /* Status */
 .nav-status{display:flex;align-items:center;gap:8px;font-family:var(--font-mono);font-size:11px;color:var(--text2);flex-shrink:0}
-.status-dot{width:6px;height:6px;border-radius:50%;background:var(--green);box-shadow:0 0 8px var(--green);animation:blink 2s infinite}
+.status-dot{width:6px;height:6px;border-radius:50%;background:var(--green);animation:blink 2s infinite}
 @keyframes blink{0%,100%{opacity:1}50%{opacity:.4}}
 
 /* ─── MARKET INDICES BAR ───────────────────────────── */
@@ -119,13 +119,13 @@ nav{position:sticky;top:0;z-index:200;backdrop-filter:blur(24px);-webkit-backdro
 
 /* ─── HERO ─────────────────────────────────────────── */
 .hero{padding:72px 0 56px;text-align:center;position:relative}
-.hero-badge{display:inline-flex;align-items:center;gap:8px;background:var(--gold-dim);border:1px solid rgba(240,192,64,.3);border-radius:99px;padding:6px 18px;font-family:var(--font-mono);font-size:11px;color:var(--gold);letter-spacing:2px;text-transform:uppercase;margin-bottom:28px;animation:fadeUp .6s ease both}
+.hero-badge{display:inline-flex;align-items:center;gap:8px;background:var(--gold-dim);border:1px solid rgba(200,150,12,.3);border-radius:99px;padding:6px 18px;font-family:var(--font-mono);font-size:11px;color:var(--gold);letter-spacing:2px;text-transform:uppercase;margin-bottom:28px;animation:fadeUp .6s ease both}
 .hero-title{font-family:var(--font-display);font-size:clamp(42px,6vw,78px);font-weight:800;line-height:1.05;letter-spacing:-2px;margin-bottom:20px;animation:fadeUp .6s .08s ease both;color:var(--text)}
 .hero-title .accent{color:var(--gold);text-shadow:var(--glow-gold)}
 .hero-desc{font-size:17px;color:var(--text2);max-width:540px;margin:0 auto 40px;line-height:1.7;animation:fadeUp .6s .16s ease both}
 .hero-cta{display:flex;gap:12px;justify-content:center;flex-wrap:wrap;animation:fadeUp .6s .24s ease both}
-.btn-primary{background:var(--gold);color:#050810;font-family:var(--font-display);font-weight:700;font-size:14px;letter-spacing:1px;padding:14px 32px;border-radius:var(--radius);border:none;cursor:pointer;transition:all .2s;box-shadow:var(--glow-gold);text-transform:uppercase}
-.btn-primary:hover{background:var(--gold2);transform:translateY(-2px);box-shadow:0 0 40px rgba(240,192,64,.4)}
+.btn-primary{background:var(--gold);color:#ffffff;font-family:var(--font-display);font-weight:700;font-size:14px;letter-spacing:1px;padding:14px 32px;border-radius:var(--radius);border:none;cursor:pointer;transition:all .2s;box-shadow:var(--glow-gold);text-transform:uppercase}
+.btn-primary:hover{background:var(--gold2);transform:translateY(-2px)}
 .btn-secondary{background:transparent;color:var(--text);font-family:var(--font-display);font-weight:600;font-size:14px;letter-spacing:.3px;padding:14px 32px;border-radius:var(--radius);border:1px solid var(--border2);cursor:pointer;transition:all .2s}
 .btn-secondary:hover{border-color:var(--gold);color:var(--gold);background:var(--gold-dim)}
 @keyframes fadeUp{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
@@ -151,28 +151,28 @@ nav{position:sticky;top:0;z-index:200;backdrop-filter:blur(24px);-webkit-backdro
 .widget-card{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius-lg);padding:24px;box-shadow:var(--shadow)}
 .widget-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px}
 .widget-title{font-family:var(--font-display);font-size:14px;font-weight:600;color:var(--text)}
-.widget-retry{font-family:var(--font-mono);font-size:10px;color:var(--gold);background:var(--gold-dim);border:1px solid rgba(240,192,64,.3);border-radius:99px;padding:3px 10px;cursor:pointer;transition:all .2s;letter-spacing:.3px}
-.widget-retry:hover{background:rgba(240,192,64,.2)}
+.widget-retry{font-family:var(--font-mono);font-size:10px;color:var(--gold);background:var(--gold-dim);border:1px solid rgba(200,150,12,.3);border-radius:99px;padding:3px 10px;cursor:pointer;transition:all .2s;letter-spacing:.3px}
+.widget-retry:hover{background:rgba(200,150,12,.2)}
 
 /* ─── EMPTY STATE ──────────────────────────────────── */
 .empty-state{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:40px 24px;text-align:center;gap:10px}
 .empty-icon{font-size:32px;opacity:.25}
 .empty-title{font-family:var(--font-display);font-size:15px;font-weight:600;color:var(--text2)}
 .empty-desc{font-size:13px;color:var(--text3);line-height:1.65;max-width:320px}
-.empty-action{margin-top:6px;font-family:var(--font-display);font-weight:600;font-size:12px;color:var(--gold);background:var(--gold-dim);border:1px solid rgba(240,192,64,.3);border-radius:var(--radius);padding:9px 18px;cursor:pointer;transition:all .2s;letter-spacing:.3px}
-.empty-action:hover{background:rgba(240,192,64,.2);transform:translateY(-1px)}
+.empty-action{margin-top:6px;font-family:var(--font-display);font-weight:600;font-size:12px;color:var(--gold);background:var(--gold-dim);border:1px solid rgba(200,150,12,.3);border-radius:var(--radius);padding:9px 18px;cursor:pointer;transition:all .2s;letter-spacing:.3px}
+.empty-action:hover{background:rgba(200,150,12,.2);transform:translateY(-1px)}
 
 /* ─── AUTH PROMPT ──────────────────────────────────── */
 .auth-prompt{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius-lg);padding:52px 40px;text-align:center;max-width:440px;margin:60px auto;box-shadow:var(--shadow)}
 .auth-prompt-icon{font-size:36px;margin-bottom:16px;opacity:.4}
 .auth-prompt-title{font-family:var(--font-display);font-size:19px;font-weight:700;color:var(--text);margin-bottom:10px}
 .auth-prompt-desc{font-size:14px;color:var(--text2);line-height:1.65;margin-bottom:24px}
-.auth-prompt-btn{background:var(--gold);color:#050810;font-family:var(--font-display);font-weight:700;font-size:13px;letter-spacing:1px;padding:12px 28px;border-radius:var(--radius);border:none;cursor:pointer;transition:all .2s;text-transform:uppercase}
+.auth-prompt-btn{background:var(--gold);color:#ffffff;font-family:var(--font-display);font-weight:700;font-size:13px;letter-spacing:1px;padding:12px 28px;border-radius:var(--radius);border:none;cursor:pointer;transition:all .2s;text-transform:uppercase}
 .auth-prompt-btn:hover{background:var(--gold2);transform:translateY(-1px)}
 
 /* ─── STAT CARDS ───────────────────────────────────── */
 .stat-card{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius-lg);padding:24px;position:relative;overflow:hidden;transition:border-color .3s;box-shadow:var(--shadow)}
-.stat-card::before{content:'';position:absolute;inset:0;background:linear-gradient(135deg,rgba(240,192,64,.04) 0%,transparent 60%);pointer-events:none}
+.stat-card::before{content:'';position:absolute;inset:0;background:linear-gradient(135deg,rgba(200,150,12,.06) 0%,transparent 60%);pointer-events:none}
 .stat-card:hover{border-color:var(--border2)}
 .stat-label{font-family:var(--font-mono);font-size:10px;color:var(--text3);letter-spacing:2px;text-transform:uppercase;margin-bottom:10px}
 .stat-value{font-family:var(--font-display);font-size:32px;font-weight:800;color:var(--gold);letter-spacing:-1px;line-height:1}
@@ -180,13 +180,13 @@ nav{position:sticky;top:0;z-index:200;backdrop-filter:blur(24px);-webkit-backdro
 .stat-badge{position:absolute;top:16px;right:16px;font-family:var(--font-mono);font-size:11px;padding:3px 8px;border-radius:99px}
 .stat-badge.up{background:var(--green-dim);color:var(--green)}
 .stat-badge.dn{background:var(--red-dim);color:var(--red)}
-.stat-badge.neu{background:rgba(255,255,255,.04);color:var(--text3)}
+.stat-badge.neu{background:rgba(0,0,0,.05);color:var(--text3)}
 
 /* ─── ANALYZER ─────────────────────────────────────── */
 .analyzer-grid{display:grid;grid-template-columns:360px 1fr;gap:20px;align-items:start}
 .analyzer-panel{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius-lg);padding:28px;position:sticky;top:120px;box-shadow:var(--shadow)}
 .analyzer-panel h3{font-family:var(--font-display);font-size:15px;font-weight:700;color:var(--text);margin-bottom:20px;display:flex;align-items:center;gap:10px}
-.panel-icon{width:28px;height:28px;background:var(--gold-dim);border:1px solid rgba(240,192,64,.3);border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:13px;flex-shrink:0}
+.panel-icon{width:28px;height:28px;background:var(--gold-dim);border:1px solid rgba(200,150,12,.3);border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:13px;flex-shrink:0}
 .input-group{margin-bottom:16px}
 .input-label{font-family:var(--font-mono);font-size:10px;color:var(--text3);letter-spacing:2px;text-transform:uppercase;margin-bottom:8px;display:block}
 .ticker-input{width:100%;background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);padding:12px 16px;color:var(--text);font-family:var(--font-mono);font-size:16px;font-weight:700;letter-spacing:2px;text-transform:uppercase;outline:none;transition:all .2s}
@@ -195,8 +195,8 @@ nav{position:sticky;top:0;z-index:200;backdrop-filter:blur(24px);-webkit-backdro
 .tf-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:20px}
 .tf-pill{background:var(--bg3);border:1px solid var(--border);border-radius:6px;padding:7px 4px;text-align:center;font-family:var(--font-mono);font-size:11px;color:var(--text2);cursor:pointer;transition:all .2s}
 .tf-pill:hover{border-color:var(--border2);color:var(--text)}
-.tf-pill.active{background:var(--gold-dim);border-color:rgba(240,192,64,.4);color:var(--gold)}
-.analyze-submit{width:100%;background:var(--gold);color:#050810;font-family:var(--font-display);font-weight:700;font-size:14px;letter-spacing:1.5px;padding:14px;border-radius:var(--radius);border:none;cursor:pointer;transition:all .2s;text-transform:uppercase;box-shadow:var(--glow-gold);margin-bottom:16px}
+.tf-pill.active{background:var(--gold-dim);border-color:rgba(200,150,12,.4);color:var(--gold)}
+.analyze-submit{width:100%;background:var(--gold);color:#ffffff;font-family:var(--font-display);font-weight:700;font-size:14px;letter-spacing:1.5px;padding:14px;border-radius:var(--radius);border:none;cursor:pointer;transition:all .2s;text-transform:uppercase;box-shadow:var(--glow-gold);margin-bottom:16px}
 .analyze-submit:hover{background:var(--gold2);transform:translateY(-1px)}
 .analyze-submit:disabled{opacity:.5;cursor:not-allowed;transform:none}
 .quick-row{display:flex;flex-wrap:wrap;gap:6px}
@@ -215,7 +215,7 @@ nav{position:sticky;top:0;z-index:200;backdrop-filter:blur(24px);-webkit-backdro
 .result-top{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:24px;padding-bottom:20px;border-bottom:1px solid var(--border)}
 .result-ticker{font-family:var(--font-display);font-size:36px;font-weight:800;color:var(--gold);letter-spacing:-1px;line-height:1}
 .result-company{font-size:13px;color:var(--text2);margin-top:4px}
-.result-tf-badge{font-family:var(--font-mono);font-size:10px;padding:5px 12px;border-radius:99px;background:var(--gold-dim);color:var(--gold);border:1px solid rgba(240,192,64,.25);letter-spacing:1px}
+.result-tf-badge{font-family:var(--font-mono);font-size:10px;padding:5px 12px;border-radius:99px;background:var(--gold-dim);color:var(--gold);border:1px solid rgba(200,150,12,.25);letter-spacing:1px}
 .signals-row{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:20px}
 .sig-card{background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);padding:14px;text-align:center}
 .sig-lbl{font-family:var(--font-mono);font-size:9px;color:var(--text3);letter-spacing:2px;text-transform:uppercase;margin-bottom:6px}
@@ -233,7 +233,7 @@ nav{position:sticky;top:0;z-index:200;backdrop-filter:blur(24px);-webkit-backdro
 .analysis-block{background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);padding:18px;margin-bottom:12px}
 .block-label{font-family:var(--font-mono);font-size:9px;color:var(--text3);letter-spacing:2px;text-transform:uppercase;margin-bottom:10px}
 .block-text{font-size:13px;color:var(--text2);line-height:1.75}
-.nzr-score{display:flex;align-items:center;gap:16px;background:linear-gradient(135deg,rgba(240,192,64,.08),rgba(240,192,64,.03));border:1px solid rgba(240,192,64,.25);border-radius:var(--radius);padding:18px;margin-bottom:12px}
+.nzr-score{display:flex;align-items:center;gap:16px;background:linear-gradient(135deg,rgba(200,150,12,.07),rgba(200,150,12,.03));border:1px solid rgba(200,150,12,.25);border-radius:var(--radius);padding:18px;margin-bottom:12px}
 .score-ring{width:64px;height:64px;flex-shrink:0;position:relative}
 .score-ring svg{transform:rotate(-90deg)}
 .score-num{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-family:var(--font-display);font-weight:800;font-size:18px;color:var(--gold)}
@@ -253,7 +253,7 @@ nav{position:sticky;top:0;z-index:200;backdrop-filter:blur(24px);-webkit-backdro
 .guide-title{font-family:var(--font-display);font-size:17px;font-weight:700;color:var(--text);margin-bottom:10px;line-height:1.3}
 .guide-desc{font-size:13px;color:var(--text2);line-height:1.7;margin-bottom:18px}
 .guide-tags{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:18px}
-.guide-tag{font-family:var(--font-mono);font-size:10px;padding:3px 8px;border-radius:99px;background:rgba(255,255,255,.04);border:1px solid var(--border);color:var(--text3)}
+.guide-tag{font-family:var(--font-mono);font-size:10px;padding:3px 8px;border-radius:99px;background:rgba(0,0,0,.04);border:1px solid var(--border);color:var(--text3)}
 .guide-arrow{color:var(--gold);font-size:18px;transition:transform .2s;display:inline-block}
 .guide-back{display:flex;align-items:center;gap:8px;background:none;border:none;color:var(--text2);font-family:var(--font-display);font-size:14px;cursor:pointer;margin-bottom:32px;padding:0;transition:color .2s}
 .guide-back:hover{color:var(--gold)}
@@ -262,12 +262,12 @@ nav{position:sticky;top:0;z-index:200;backdrop-filter:blur(24px);-webkit-backdro
 .guide-detail-sub{font-size:15px;color:var(--text2);margin-bottom:40px;line-height:1.6}
 .tip-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:16px;margin-bottom:32px}
 .tip-card{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius-lg);padding:22px;position:relative;box-shadow:var(--shadow)}
-.tip-num{position:absolute;top:18px;right:18px;font-family:var(--font-mono);font-size:32px;font-weight:700;color:rgba(240,192,64,.06);line-height:1}
+.tip-num{position:absolute;top:18px;right:18px;font-family:var(--font-mono);font-size:32px;font-weight:700;color:rgba(200,150,12,.1);line-height:1}
 .tip-title{font-family:var(--font-display);font-size:15px;font-weight:700;color:var(--text);margin-bottom:8px}
 .tip-body{font-size:13px;color:var(--text2);line-height:1.75}
 .rule-list{display:grid;gap:12px;margin-bottom:32px}
 .rule-item{display:flex;gap:16px;background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);padding:18px;align-items:flex-start;box-shadow:var(--shadow)}
-.rule-icon{width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0;background:var(--gold-dim);border:1px solid rgba(240,192,64,.2)}
+.rule-icon{width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0;background:var(--gold-dim);border:1px solid rgba(200,150,12,.2)}
 .rule-title{font-family:var(--font-display);font-size:14px;font-weight:600;color:var(--text);margin-bottom:4px}
 .rule-body{font-size:12px;color:var(--text2);line-height:1.65}
 
@@ -278,8 +278,8 @@ nav{position:sticky;top:0;z-index:200;backdrop-filter:blur(24px);-webkit-backdro
 .market-name{font-family:var(--font-display);font-size:16px;font-weight:700;color:var(--text)}
 .market-sub{font-size:12px;color:var(--text3);margin-top:2px}
 .market-badge{font-family:var(--font-mono);font-size:10px;padding:4px 10px;border-radius:99px}
-.market-badge.open{background:var(--green-dim);color:var(--green);border:1px solid rgba(0,229,155,.2)}
-.market-badge.closed{background:rgba(255,255,255,.04);color:var(--text3);border:1px solid var(--border)}
+.market-badge.open{background:var(--green-dim);color:var(--green);border:1px solid rgba(26,122,64,.25)}
+.market-badge.closed{background:rgba(0,0,0,.05);color:var(--text3);border:1px solid var(--border)}
 .market-price{font-family:var(--font-mono);font-size:28px;font-weight:700;color:var(--text);margin-bottom:6px}
 .market-change{font-family:var(--font-mono);font-size:13px}
 .market-change.up{color:var(--green)}
@@ -303,9 +303,9 @@ nav{position:sticky;top:0;z-index:200;backdrop-filter:blur(24px);-webkit-backdro
 .flow-table-wrap{overflow-x:auto;margin-bottom:8px}
 .flow-table{width:100%;border-collapse:collapse;font-family:var(--font-mono);font-size:12px}
 .flow-table th{font-size:9px;color:var(--text3);letter-spacing:2px;text-transform:uppercase;padding:10px 12px;text-align:left;border-bottom:1px solid var(--border);font-weight:400}
-.flow-table td{padding:11px 12px;border-bottom:1px solid rgba(30,45,82,.5);color:var(--text2);vertical-align:middle}
+.flow-table td{padding:11px 12px;border-bottom:1px solid var(--border);color:var(--text2);vertical-align:middle}
 .flow-table tr:last-child td{border-bottom:none}
-.flow-table tr:hover td{background:rgba(255,255,255,.02)}
+.flow-table tr:hover td{background:rgba(0,0,0,.02)}
 .flow-call{color:var(--green)}
 .flow-put{color:var(--red)}
 .flow-prem{color:var(--gold);font-weight:700}
@@ -317,20 +317,20 @@ nav{position:sticky;top:0;z-index:200;backdrop-filter:blur(24px);-webkit-backdro
 /* ─── EARNINGS CALENDAR ────────────────────────────── */
 .earnings-table{width:100%;border-collapse:collapse}
 .earnings-table th{font-family:var(--font-mono);font-size:9px;color:var(--text3);letter-spacing:2px;text-transform:uppercase;padding:10px 14px;text-align:left;border-bottom:1px solid var(--border);font-weight:400}
-.earnings-table td{padding:12px 14px;border-bottom:1px solid rgba(30,45,82,.5);font-size:13px;color:var(--text2)}
+.earnings-table td{padding:12px 14px;border-bottom:1px solid var(--border);font-size:13px;color:var(--text2)}
 .earnings-table tr:last-child td{border-bottom:none}
-.earnings-table tr:hover td{background:rgba(255,255,255,.02)}
+.earnings-table tr:hover td{background:rgba(0,0,0,.02)}
 .earnings-sym{font-family:var(--font-mono);font-weight:700;color:var(--gold)}
 .earnings-impact{font-family:var(--font-mono);font-size:9px;padding:2px 8px;border-radius:99px;letter-spacing:.5px}
 .earnings-impact.high{background:var(--red-dim);color:var(--red)}
 .earnings-impact.med{background:var(--gold-dim);color:var(--gold)}
-.earnings-impact.low{background:rgba(255,255,255,.04);color:var(--text3)}
+.earnings-impact.low{background:rgba(0,0,0,.05);color:var(--text3)}
 .earnings-est{color:var(--text);font-weight:500;font-family:var(--font-mono);font-size:12px}
 
 /* ─── AI CHAT ──────────────────────────────────────── */
 .chat-layout{display:flex;flex-direction:column;height:calc(100vh - 200px);min-height:500px;max-height:800px;background:var(--panel);border:1px solid var(--border);border-radius:var(--radius-lg);overflow:hidden;box-shadow:var(--shadow)}
 .chat-header{padding:18px 24px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px;flex-shrink:0}
-.chat-header-icon{width:30px;height:30px;background:var(--gold-dim);border:1px solid rgba(240,192,64,.3);border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:13px;flex-shrink:0}
+.chat-header-icon{width:30px;height:30px;background:var(--gold-dim);border:1px solid rgba(200,150,12,.3);border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:13px;flex-shrink:0}
 .chat-header-info{flex:1}
 .chat-header-title{font-family:var(--font-display);font-size:14px;font-weight:700;color:var(--text)}
 .chat-header-sub{font-size:11px;color:var(--text3);margin-top:1px}
@@ -339,7 +339,7 @@ nav{position:sticky;top:0;z-index:200;backdrop-filter:blur(24px);-webkit-backdro
 .chat-messages::-webkit-scrollbar-track{background:transparent}
 .chat-messages::-webkit-scrollbar-thumb{background:var(--border);border-radius:4px}
 .chat-bubble{max-width:82%;padding:13px 17px;border-radius:12px;font-size:13px;line-height:1.7}
-.chat-bubble.user{align-self:flex-end;background:var(--gold-dim);border:1px solid rgba(240,192,64,.25);color:var(--text);border-bottom-right-radius:3px}
+.chat-bubble.user{align-self:flex-end;background:var(--gold-dim);border:1px solid rgba(200,150,12,.25);color:var(--text);border-bottom-right-radius:3px}
 .chat-bubble.assistant{align-self:flex-start;background:var(--bg3);border:1px solid var(--border);color:var(--text2);border-bottom-left-radius:3px}
 .chat-bubble.system-msg{align-self:center;background:transparent;color:var(--text3);font-family:var(--font-mono);font-size:10px;letter-spacing:.5px;border:none;padding:2px 0;max-width:100%}
 
@@ -355,14 +355,14 @@ nav{position:sticky;top:0;z-index:200;backdrop-filter:blur(24px);-webkit-backdro
 .chat-input{flex:1;background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);padding:11px 14px;color:var(--text);font-family:var(--font-body);font-size:13px;outline:none;transition:all .2s;resize:none;line-height:1.5;min-height:44px;max-height:120px}
 .chat-input:focus{border-color:var(--gold);box-shadow:0 0 0 3px var(--gold-dim)}
 .chat-input::placeholder{color:var(--text3)}
-.chat-send{background:var(--gold);color:#050810;font-family:var(--font-display);font-weight:700;font-size:12px;padding:11px 18px;border-radius:var(--radius);border:none;cursor:pointer;transition:all .2s;white-space:nowrap;letter-spacing:.5px;text-transform:uppercase;height:44px}
+.chat-send{background:var(--gold);color:#ffffff;font-family:var(--font-display);font-weight:700;font-size:12px;padding:11px 18px;border-radius:var(--radius);border:none;cursor:pointer;transition:all .2s;white-space:nowrap;letter-spacing:.5px;text-transform:uppercase;height:44px}
 .chat-send:hover{background:var(--gold2);transform:translateY(-1px)}
 .chat-send:disabled{opacity:.5;cursor:not-allowed;transform:none}
 
 /* ─── LEADERBOARD ──────────────────────────────────── */
 .leaderboard-table{width:100%;border-collapse:collapse}
 .leaderboard-table th{font-family:var(--font-mono);font-size:9px;color:var(--text3);letter-spacing:2px;text-transform:uppercase;padding:10px 16px;text-align:left;border-bottom:1px solid var(--border);font-weight:400}
-.leaderboard-table td{padding:14px 16px;border-bottom:1px solid rgba(30,45,82,.5);font-size:13px;color:var(--text2)}
+.leaderboard-table td{padding:14px 16px;border-bottom:1px solid var(--border);font-size:13px;color:var(--text2)}
 .lb-rank{font-family:var(--font-mono);font-weight:700;color:var(--text3);font-size:12px}
 .lb-rank.gold-rank{color:var(--gold)}
 .lb-name{font-family:var(--font-display);font-weight:600;color:var(--text);font-size:14px}
@@ -406,6 +406,14 @@ footer{border-top:1px solid var(--border);padding:32px 0;margin-top:80px}
   .nav-tab{padding:5px 8px;font-size:10px}
   .indices-bar-inner{padding:0 14px}
 }
+
+/* ─── NEWS WIDGET ──────────────────────────────────── */
+.news-widget{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius-lg);padding:24px;margin-bottom:48px;box-shadow:var(--shadow)}
+.news-item{display:block;padding:11px 0;border-bottom:1px solid var(--border);text-decoration:none;transition:opacity .15s}
+.news-item:last-child{border-bottom:none;padding-bottom:0}
+.news-item:hover{opacity:.7}
+.news-source{font-family:var(--font-mono);font-size:9px;color:var(--gold);letter-spacing:1px;text-transform:uppercase;margin-bottom:3px}
+.news-headline{font-size:13px;color:var(--text);line-height:1.5;font-weight:500}
 </style>
 </head>
 <body>
@@ -524,6 +532,15 @@ footer{border-top:1px solid var(--border);padding:32px 0;margin-top:80px}
   <!-- Ticker tape -->
   <div class="ticker-wrap sec-fade" style="animation-delay:100ms">
     <div class="ticker-track" id="ticker-track"></div>
+  </div>
+
+  <!-- Breaking News -->
+  <div class="news-widget sec-fade" style="animation-delay:150ms">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+      <span style="font-family:var(--font-display);font-size:14px;font-weight:600;color:var(--text)">Breaking News</span>
+      <span style="font-family:var(--font-mono);font-size:9px;color:var(--text3);letter-spacing:1px;text-transform:uppercase">Market headlines</span>
+    </div>
+    <div id="news-widget"><div style="padding:12px 0;text-align:center;color:var(--text3);font-family:var(--font-mono);font-size:11px">Loading headlines…</div></div>
   </div>
 
   <!-- Fear & Greed + Top Movers widgets -->
@@ -946,87 +963,187 @@ document.querySelectorAll('.nav-tab').forEach(t=>{
   t.addEventListener('click',()=>showPage(t.dataset.page));
 });
 
+/* ── CENTRAL DATA LAYER ─────────────────────────── */
+// All live quote data is stored here after fetching
+const Q={};
+
+function fmt$(p){
+  if(p==null||isNaN(p))return '--';
+  return p>=1000
+    ? p.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})
+    : p.toFixed(2);
+}
+function fmtChg(c){
+  if(c==null||isNaN(c))return '--';
+  return(c>=0?'+':'')+c.toFixed(2)+'%';
+}
+
+async function loadQuote(sym){
+  try{
+    const r=await fetch('/api/quote?symbol='+sym);
+    if(!r.ok)return null;
+    const d=await r.json();
+    if(d.error||!d.price)return null;
+    Q[sym]={price:d.price,change:d.change,up:d.change>=0,prevClose:d.prevClose};
+    return Q[sym];
+  }catch{return null;}
+}
+
+function isMarketOpen(){
+  const et=new Date(new Date().toLocaleString('en-US',{timeZone:'America/New_York'}));
+  const day=et.getDay();
+  if(day===0||day===6)return false;
+  const mins=et.getHours()*60+et.getMinutes();
+  return mins>=570&&mins<960;
+}
+
+// All symbols needed across the page
+const ALL_SYMS=['SPY','QQQ','DIA','VIX','IWM','AAPL','NVDA','TSLA','AMZN','MSFT','META','GOOGL','AMD','NFLX','JPM','GLD','V','UNH','XOM','JNJ','WMT','MA','PG','HD','COST','ABBV','MRK','CVX','ADBE','CRM','PYPL','INTC','QCOM','TXN'];
+
+async function initAllData(){
+  // Fetch all quotes in parallel; individual failures don't block others
+  await Promise.allSettled(ALL_SYMS.map(s=>loadQuote(s)));
+  renderIndicesLive();
+  renderTickerLive();
+  renderFearGreedLive();
+  renderTopMoversLive();
+  buildHotPlays();
+  buildMarkets();
+  startLastUpdatedCounter();
+  buildNewsWidget();
+  buildEconCalendar();
+}
+
 /* ── MARKET INDICES BAR ─────────────────────────── */
-const INDICES=[
-  {sym:'SPY',price:'541.20',chg:'+0.82%',up:true},
-  {sym:'QQQ',price:'461.55',chg:'+1.14%',up:true},
-  {sym:'DIA',price:'401.28',chg:'+0.31%',up:true},
-  {sym:'VIX',price:'14.20',chg:'-3.51%',up:false},
+const INDEX_DEFS=[
+  {sym:'SPY'},{sym:'QQQ'},{sym:'DIA'},{sym:'VIX'},
 ];
 let lastUpdatedSec=0;
 
-function renderIndices(data,failed){
+function renderIndicesLive(){
   const list=document.getElementById('indices-list');
-  if(failed){
-    list.innerHTML=data.map((d,i)=>`
-      ${i>0?'<div class="index-divider"></div>':''}
-      <div class="index-item">
-        <span class="index-sym">${d.sym}</span>
-        <span class="index-price">--</span>
-        <span class="index-chg na">unavailable</span>
-      </div>`).join('');
-    return;
-  }
-  list.innerHTML=data.map((d,i)=>`
-    ${i>0?'<div class="index-divider"></div>':''}
+  list.innerHTML=INDEX_DEFS.map((d,i)=>{
+    const q=Q[d.sym];
+    const price=q?fmt$(q.price):'--';
+    const chg=q?fmtChg(q.change):'--';
+    const cls=q?(q.up?'up':'dn'):'na';
+    return`${i>0?'<div class="index-divider"></div>':''}
     <div class="index-item">
       <span class="index-sym">${d.sym}</span>
-      <span class="index-price">${d.price}</span>
-      <span class="index-chg ${d.up?'up':'dn'}">${d.chg}</span>
-    </div>`).join('');
+      <span class="index-price">${price}</span>
+      <span class="index-chg ${cls}">${chg}</span>
+    </div>`;
+  }).join('');
 }
 
-function initIndices(){
-  setTimeout(()=>{
-    try{
-      renderIndices(INDICES,false);
-      lastUpdatedSec=0;
-      document.getElementById('last-updated').textContent='Last updated: just now';
-      setInterval(()=>{
-        lastUpdatedSec++;
-        const t=lastUpdatedSec===1?'1 second':lastUpdatedSec+' seconds';
-        document.getElementById('last-updated').textContent=`Last updated: ${t} ago`;
-      },1000);
-    }catch(e){
-      renderIndices(INDICES,true);
-      document.getElementById('last-updated').textContent='Data unavailable';
-    }
-  },1200);
+function startLastUpdatedCounter(){
+  lastUpdatedSec=0;
+  document.getElementById('last-updated').textContent='Last updated: just now';
+  setInterval(()=>{
+    lastUpdatedSec++;
+    const t=lastUpdatedSec===1?'1 second':lastUpdatedSec+' seconds';
+    document.getElementById('last-updated').textContent=`Last updated: ${t} ago`;
+  },1000);
 }
-initIndices();
 
 /* ── TICKER TAPE ────────────────────────────────── */
-const TICKERS=[
-  {s:'SPY',p:'541.20',c:'+0.82%',up:true},{s:'QQQ',p:'461.55',c:'+1.14%',up:true},
-  {s:'AAPL',p:'198.40',c:'+0.55%',up:true},{s:'NVDA',p:'875.30',c:'+2.31%',up:true},
-  {s:'TSLA',p:'247.60',c:'-1.20%',up:false},{s:'AMZN',p:'192.80',c:'+0.74%',up:true},
-  {s:'MSFT',p:'415.90',c:'+0.43%',up:true},{s:'META',p:'512.40',c:'+1.88%',up:true},
-  {s:'GOOGL',p:'178.60',c:'+0.62%',up:true},{s:'AMD',p:'158.20',c:'-0.35%',up:false},
-  {s:'NFLX',p:'628.40',c:'+1.05%',up:true},{s:'JPM',p:'198.70',c:'+0.28%',up:true},
-  {s:'GLD',p:'231.40',c:'+0.44%',up:true},{s:'BTC-X',p:'71,240',c:'+3.21%',up:true},
-];
-function buildTicker(){
+const TICKER_SYMS=['SPY','QQQ','AAPL','NVDA','TSLA','AMZN','MSFT','META','GOOGL','AMD','NFLX','JPM','GLD','IWM'];
+
+function renderTickerLive(){
   const track=document.getElementById('ticker-track');
-  track.innerHTML=[...TICKERS,...TICKERS].map(t=>`
+  const items=TICKER_SYMS.map(s=>{
+    const q=Q[s];
+    return{s,p:q?fmt$(q.price):'--',c:q?fmtChg(q.change):'--',up:q?q.up:true};
+  });
+  track.innerHTML=[...items,...items].map(t=>`
     <div class="ticker-item">
       <span class="ticker-sym">${t.s}</span>
       <span class="ticker-price">${t.p}</span>
       <span class="ticker-chg ${t.up?'up':'dn'}">${t.c}</span>
     </div>`).join('');
 }
-buildTicker();
 
-/* ── FEAR & GREED WIDGET ────────────────────────── */
-function retryFearGreed(){
+// Show placeholder tape immediately; live data fills in after initAllData()
+(function buildTickerPlaceholder(){
+  const track=document.getElementById('ticker-track');
+  const placeholders=TICKER_SYMS.map(s=>`
+    <div class="ticker-item">
+      <span class="ticker-sym">${s}</span>
+      <span class="ticker-price" style="opacity:.4">---</span>
+      <span class="ticker-chg" style="opacity:.3">--</span>
+    </div>`);
+  track.innerHTML=[...placeholders,...placeholders].join('');
+}());
+
+/* ── FEAR & GREED (VIX-derived) ─────────────────── */
+function renderFearGreedLive(){
   const el=document.getElementById('fear-greed-content');
-  el.innerHTML='<div style="padding:20px;text-align:center;color:var(--text3);font-family:var(--font-mono);font-size:12px">Connecting…</div>';
-  setTimeout(()=>{
+  const vix=Q['VIX'];
+  if(!vix){
     el.innerHTML=`<div class="empty-state">
       <div class="empty-icon">📉</div>
       <div class="empty-title">Fear &amp; Greed data unavailable</div>
-      <div class="empty-desc">Could not reach the data source. Try again during market hours.</div>
+      <div class="empty-desc">VIX data could not be loaded. Check connection or try during market hours.</div>
     </div>`;
-  },1500);
+    return;
+  }
+  const v=vix.price;
+  let score,label,color;
+  if(v<12){score=90;label='Extreme Greed';color='var(--green)';}
+  else if(v<16){score=72;label='Greed';color='#5a9e6a';}
+  else if(v<21){score=50;label='Neutral';color='var(--gold)';}
+  else if(v<28){score=28;label='Fear';color='#c8702a';}
+  else{score=10;label='Extreme Fear';color='var(--red)';}
+  el.innerHTML=`
+    <div style="padding:4px 0">
+      <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:14px">
+        <div style="font-family:var(--font-display);font-size:42px;font-weight:800;color:${color};line-height:1">${score}</div>
+        <div>
+          <div style="font-family:var(--font-display);font-weight:700;font-size:15px;color:${color}">${label}</div>
+          <div style="font-family:var(--font-mono);font-size:10px;color:var(--text3);margin-top:2px">VIX ${fmt$(v)} &nbsp;${fmtChg(vix.change)}</div>
+        </div>
+      </div>
+      <div style="background:linear-gradient(90deg,var(--red) 0%,#c8702a 28%,var(--gold) 50%,#5a9e6a 72%,var(--green) 100%);height:6px;border-radius:99px;position:relative;margin-bottom:6px">
+        <div style="position:absolute;top:-4px;left:${Math.min(98,Math.max(2,score))}%;transform:translateX(-50%);width:14px;height:14px;border-radius:50%;background:var(--text);border:2px solid var(--panel);box-shadow:0 1px 4px rgba(0,0,0,.2)"></div>
+      </div>
+      <div style="display:flex;justify-content:space-between;font-family:var(--font-mono);font-size:9px;color:var(--text3);letter-spacing:.5px">
+        <span>Extreme Fear</span><span>Neutral</span><span>Extreme Greed</span>
+      </div>
+    </div>`;
+}
+
+function retryFearGreed(){
+  const el=document.getElementById('fear-greed-content');
+  el.innerHTML='<div style="padding:16px;text-align:center;color:var(--text3);font-family:var(--font-mono);font-size:11px">Reconnecting…</div>';
+  loadQuote('VIX').then(()=>renderFearGreedLive());
+}
+
+/* ── TOP MOVERS ─────────────────────────────────── */
+const MOVER_SYMS=['AAPL','NVDA','TSLA','AMZN','MSFT','META','GOOGL','AMD','NFLX','JPM','SPY','QQQ','V','XOM','COST','IWM'];
+
+function renderTopMoversLive(){
+  const el=document.getElementById('top-movers-content');
+  const entries=MOVER_SYMS
+    .map(s=>({sym:s,...Q[s]}))
+    .filter(e=>e.price!=null)
+    .sort((a,b)=>Math.abs(b.change)-Math.abs(a.change))
+    .slice(0,6);
+  if(!entries.length){
+    el.innerHTML=`<div class="empty-state">
+      <div class="empty-icon">📊</div>
+      <div class="empty-title">Market data unavailable</div>
+      <div class="empty-desc">Top mover data is not available outside regular trading hours (9:30 AM – 4:00 PM ET).</div>
+    </div>`;
+    return;
+  }
+  el.innerHTML='<div style="display:flex;flex-direction:column">'+entries.map((e,i)=>`
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:9px 0;${i<entries.length-1?'border-bottom:1px solid var(--border)':''}">
+      <div style="display:flex;align-items:center;gap:10px">
+        <span style="font-family:var(--font-mono);font-weight:700;font-size:12px;color:var(--gold);min-width:48px">${e.sym}</span>
+        <span style="font-family:var(--font-mono);font-size:12px;color:var(--text)">${fmt$(e.price)}</span>
+      </div>
+      <span style="font-family:var(--font-mono);font-size:12px;font-weight:700;color:${e.up?'var(--green)':'var(--red)'}">${fmtChg(e.change)}</span>
+    </div>`).join('')+'</div>';
 }
 
 /* ── HOT PLAYS ──────────────────────────────────── */
@@ -1049,27 +1166,31 @@ function buildHotPlays(){
     </div></div>`;
     return;
   }
-  grid.innerHTML=hotPlays.map(p=>`
-    <div class="stat-card" style="cursor:pointer" onclick="goAnalyze('${p.sym}')">
+  grid.innerHTML=hotPlays.map(p=>{
+    const q=Q[p.sym];
+    const livePrice=q?`<span style="font-family:var(--font-mono);font-size:11px;color:var(--text2)">${fmt$(q.price)}</span><span style="font-family:var(--font-mono);font-size:11px;color:${q.up?'var(--green)':'var(--red)'};margin-left:6px">${fmtChg(q.change)}</span>`:'';
+    return`<div class="stat-card" style="cursor:pointer" onclick="goAnalyze('${p.sym}')">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px">
         <div>
           <div style="font-family:var(--font-display);font-size:24px;font-weight:800;color:var(--gold)">${p.sym}</div>
           <div style="font-size:12px;color:var(--text2);margin-top:2px">${p.setup}</div>
+          ${livePrice?`<div style="margin-top:5px">${livePrice}</div>`:''}
         </div>
         <div style="text-align:right">
-          <div style="font-family:var(--font-mono);font-size:9px;background:rgba(255,255,255,.04);border:1px solid var(--border);border-radius:99px;padding:3px 10px;color:var(--text3);margin-bottom:4px;letter-spacing:.5px">${p.tag}</div>
+          <div style="font-family:var(--font-mono);font-size:9px;background:rgba(0,0,0,.05);border:1px solid var(--border);border-radius:99px;padding:3px 10px;color:var(--text3);margin-bottom:4px;letter-spacing:.5px">${p.tag}</div>
           <div style="font-family:var(--font-mono);font-size:10px;color:var(--text3)">${p.tf}</div>
         </div>
       </div>
       <div style="display:flex;align-items:center;gap:12px">
-        <div style="flex:1;background:rgba(255,255,255,.04);border-radius:99px;height:4px;overflow:hidden">
-          <div style="width:${p.score}%;height:100%;background:${p.color};border-radius:99px;box-shadow:0 0 8px ${p.color}"></div>
+        <div style="flex:1;background:rgba(0,0,0,.08);border-radius:99px;height:4px;overflow:hidden">
+          <div style="width:${p.score}%;height:100%;background:${p.color};border-radius:99px"></div>
         </div>
         <div style="font-family:var(--font-mono);font-size:13px;font-weight:700;color:${p.color}">${p.score}</div>
       </div>
       <div style="margin-top:12px;font-family:var(--font-mono);font-size:10px;color:var(--text3);letter-spacing:.5px">NZR SCORE · <span style="color:${p.color}">${p.trend}</span></div>
       <div style="position:absolute;bottom:16px;right:16px;font-size:12px;color:var(--text3)">Analyze →</div>
-    </div>`).join('');
+    </div>`;
+  }).join('');
 }
 buildHotPlays();
 
@@ -1080,15 +1201,21 @@ function goAnalyze(sym){
 }
 
 /* ── MARKETS PAGE ───────────────────────────────── */
-const markets=[
-  {name:'S&P 500',sub:'US Large Cap',sym:'SPX',price:'5,412.20',change:'+0.82%',up:true,open:true},
-  {name:'NASDAQ 100',sub:'Tech Index',sym:'NDX',price:'18,461.55',change:'+1.14%',up:true,open:true},
-  {name:'Dow Jones',sub:'US Blue Chip',sym:'DJIA',price:'40,128.40',change:'+0.31%',up:true,open:true},
-  {name:'Russell 2000',sub:'Small Cap',sym:'RUT',price:'2,018.70',change:'-0.44%',up:false,open:true},
+const MARKET_DEFS=[
+  {name:'S&P 500',sub:'US Large Cap (SPY)',qSym:'SPY'},
+  {name:'NASDAQ 100',sub:'Tech Index (QQQ)',qSym:'QQQ'},
+  {name:'Dow Jones',sub:'US Blue Chip (DIA)',qSym:'DIA'},
+  {name:'Russell 2000',sub:'Small Cap (IWM)',qSym:'IWM'},
 ];
+
 function buildMarkets(){
   const grid=document.getElementById('market-grid');
-  grid.innerHTML=markets.map(m=>{
+  const open=isMarketOpen();
+  grid.innerHTML=MARKET_DEFS.map(m=>{
+    const q=Q[m.qSym];
+    const price=q?fmt$(q.price):'--';
+    const chg=q?fmtChg(q.change):'--';
+    const up=q?q.up:true;
     const pts=Array.from({length:20},(_,i)=>20+Math.sin(i*.5+Math.random())*8+i*.3);
     const maxP=Math.max(...pts),minP=Math.min(...pts);
     const path=pts.map((p,i)=>{
@@ -1098,12 +1225,12 @@ function buildMarkets(){
     return`<div class="market-card">
       <div class="market-card-header">
         <div><div class="market-name">${m.name}</div><div class="market-sub">${m.sub}</div></div>
-        <div class="market-badge ${m.open?'open':'closed'}">${m.open?'● Open':'Closed'}</div>
+        <div class="market-badge ${open?'open':'closed'}">${open?'● Open':'Closed'}</div>
       </div>
-      <div class="market-price">${m.price}</div>
-      <div class="market-change ${m.up?'up':'dn'}">${m.change} today</div>
+      <div class="market-price">${price}</div>
+      <div class="market-change ${up?'up':'dn'}">${chg} today</div>
       <svg class="sparkline" viewBox="0 0 240 48" preserveAspectRatio="none">
-        <path d="${path}" fill="none" stroke="${m.up?'var(--green)':'var(--red)'}" stroke-width="1.5"/>
+        <path d="${path}" fill="none" stroke="${up?'var(--green)':'var(--red)'}" stroke-width="1.5"/>
       </svg>
     </div>`;
   }).join('');
@@ -1112,25 +1239,25 @@ function buildMarkets(){
   buildEconCalendar();
 }
 
+const HEAT_SYMS=['AAPL','MSFT','NVDA','GOOGL','AMZN','META','TSLA','JPM','V','UNH','XOM','JNJ','WMT','MA','PG','HD','COST','ABBV','MRK','CVX','AMD','NFLX','ADBE','CRM','PYPL','INTC','QCOM','TXN'];
+
 function buildHeatMap(){
-  const stocks=[
-    {s:'AAPL',v:'+0.6'},{s:'MSFT',v:'+0.4'},{s:'NVDA',v:'+2.3'},{s:'GOOGL',v:'+0.6'},{s:'AMZN',v:'+0.7'},{s:'META',v:'+1.9'},{s:'TSLA',v:'-1.2'},
-    {s:'JPM',v:'+0.3'},{s:'V',v:'+0.5'},{s:'UNH',v:'-0.2'},{s:'XOM',v:'+0.8'},{s:'JNJ',v:'-0.1'},{s:'WMT',v:'+0.4'},{s:'MA',v:'+0.6'},
-    {s:'PG',v:'+0.2'},{s:'HD',v:'+0.3'},{s:'COST',v:'+0.9'},{s:'ABBV',v:'-0.3'},{s:'MRK',v:'+0.1'},{s:'CVX',v:'+0.5'},{s:'AMD',v:'-0.4'},
-    {s:'NFLX',v:'+1.1'},{s:'ADBE',v:'+0.7'},{s:'CRM',v:'+0.8'},{s:'PYPL',v:'-0.6'},{s:'INTC',v:'-1.4'},{s:'QCOM',v:'+0.3'},{s:'TXN',v:'+0.2'},
-  ];
-  document.getElementById('heat-grid').innerHTML=stocks.map(st=>{
-    const v=parseFloat(st.v);
+  document.getElementById('heat-grid').innerHTML=HEAT_SYMS.map(s=>{
+    const q=Q[s];
+    const v=q?q.change:0;
+    const vStr=q?(v>=0?'+':'')+v.toFixed(1):'--';
     let cls='heat-flat';
-    if(v>1.5)cls='heat-strong-up';
-    else if(v>0.5)cls='heat-up';
-    else if(v>0)cls='heat-slight-up';
-    else if(v>-0.5)cls='heat-slight-dn';
-    else if(v>-1)cls='heat-dn';
-    else cls='heat-strong-dn';
-    return`<div class="heat-cell ${cls}" onclick="goAnalyze('${st.s}')" title="${st.s}: ${st.v}%">
-      <div class="heat-sym">${st.s}</div>
-      <div class="heat-pct">${st.v}%</div>
+    if(q){
+      if(v>1.5)cls='heat-strong-up';
+      else if(v>0.5)cls='heat-up';
+      else if(v>0)cls='heat-slight-up';
+      else if(v>-0.5)cls='heat-slight-dn';
+      else if(v>-1)cls='heat-dn';
+      else cls='heat-strong-dn';
+    }
+    return`<div class="heat-cell ${cls}" onclick="goAnalyze('${s}')" title="${s}: ${vStr}%">
+      <div class="heat-sym">${s}</div>
+      <div class="heat-pct">${vStr}%</div>
     </div>`;
   }).join('');
 }
@@ -1146,14 +1273,72 @@ function buildSessions(){
     <div class="stat-card">
       <div class="stat-label">${s.name}</div>
       <div style="font-family:var(--font-mono);font-size:12px;color:var(--cyan);margin-bottom:8px">${s.time}</div>
-      <div style="font-family:var(--font-mono);font-size:9px;background:var(--gold-dim);border:1px solid rgba(240,192,64,.2);border-radius:99px;display:inline-block;padding:2px 10px;color:var(--gold);margin-bottom:10px;letter-spacing:.5px">${s.status}</div>
+      <div style="font-family:var(--font-mono);font-size:9px;background:var(--gold-dim);border:1px solid rgba(200,150,12,.2);border-radius:99px;display:inline-block;padding:2px 10px;color:var(--gold);margin-bottom:10px;letter-spacing:.5px">${s.status}</div>
       <div style="font-size:12px;color:var(--text2);line-height:1.6">${s.tip}</div>
     </div>`).join('');
 }
 
-function buildEconCalendar(){
-  /* Placeholder — shows empty state since no live data source */
-  /* In production, replace with a real API call */
+async function buildEconCalendar(){
+  const el=document.getElementById('econ-calendar');
+  try{
+    const today=new Date();
+    const from=today.toISOString().split('T')[0];
+    const to=new Date(today.getTime()+14*86400000).toISOString().split('T')[0];
+    const r=await fetch('/api/news?type=earnings&from='+from+'&to='+to);
+    if(!r.ok)throw new Error('fetch failed');
+    const data=await r.json();
+    const items=(data.earningsCalendar||[])
+      .filter(e=>e.symbol&&e.date)
+      .slice(0,12);
+    if(!items.length)throw new Error('empty');
+    el.innerHTML=`<table class="earnings-table">
+      <thead><tr><th>Date</th><th>Ticker</th><th>Company</th><th>Time</th><th>Est. EPS</th></tr></thead>
+      <tbody>${items.map(e=>`
+        <tr>
+          <td style="font-family:var(--font-mono);font-size:12px;color:var(--text3)">${e.date}</td>
+          <td><span class="earnings-sym">${e.symbol}</span></td>
+          <td style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${e.name||'--'}</td>
+          <td style="font-family:var(--font-mono);font-size:11px;color:var(--text3)">${e.hour==='bmo'?'Pre-Market':e.hour==='amc'?'After Close':'--'}</td>
+          <td><span class="earnings-est">${e.epsEstimate!=null?'$'+Number(e.epsEstimate).toFixed(2):'--'}</span></td>
+        </tr>`).join('')}
+      </tbody></table>`;
+  }catch{
+    el.innerHTML=`<div class="empty-state" style="padding:36px 24px">
+      <div class="empty-icon">📅</div>
+      <div class="empty-title">No high-impact events found for this week</div>
+      <div class="empty-desc">The earnings calendar is currently unavailable. Check back during market hours.</div>
+    </div>`;
+  }
+}
+
+/* ── BREAKING NEWS ───────────────────────────────── */
+function timeAgo(unix){
+  const diff=Math.floor(Date.now()/1000-unix);
+  if(diff<60)return diff+'s ago';
+  if(diff<3600)return Math.floor(diff/60)+'m ago';
+  if(diff<86400)return Math.floor(diff/3600)+'h ago';
+  return Math.floor(diff/86400)+'d ago';
+}
+
+async function buildNewsWidget(){
+  const el=document.getElementById('news-widget');
+  if(!el)return;
+  try{
+    const r=await fetch('/api/news?type=market');
+    if(!r.ok)throw new Error('fetch failed');
+    const data=await r.json();
+    const items=(data.news||[]).slice(0,5);
+    if(!items.length)throw new Error('empty');
+    el.innerHTML=items.map(n=>`
+      <a class="news-item" href="${n.url}" target="_blank" rel="noopener noreferrer">
+        <div class="news-source">${n.source||'News'} · ${timeAgo(n.datetime)}</div>
+        <div class="news-headline">${n.headline}</div>
+      </a>`).join('');
+  }catch{
+    el.innerHTML=`<div style="padding:12px 0;color:var(--text3);font-family:var(--font-mono);font-size:11px;text-align:center">
+      News feed unavailable. Check back during market hours.
+    </div>`;
+  }
 }
 
 /* ── OPTIONS FLOW (simulated) ───────────────────── */
@@ -1450,7 +1635,7 @@ nzrScore should be 0-100, realistic for the setup quality.`;
       <div class="nzr-score">
         <div class="score-ring">
           <svg width="64" height="64" viewBox="0 0 64 64">
-            <circle cx="32" cy="32" r="26" fill="none" stroke="rgba(255,255,255,.06)" stroke-width="4"/>
+            <circle cx="32" cy="32" r="26" fill="none" stroke="rgba(0,0,0,.1)" stroke-width="4"/>
             <circle cx="32" cy="32" r="26" fill="none" stroke="${scoreColor}" stroke-width="4"
               stroke-dasharray="${circumference.toFixed(1)}" stroke-dashoffset="${offset.toFixed(1)}"
               stroke-linecap="round" style="filter:drop-shadow(0 0 6px ${scoreColor})"/>
@@ -1549,7 +1734,7 @@ Respond concisely and professionally. Focus on actionable market insights, strat
 
 /* ── INIT ───────────────────────────────────────── */
 buildGuideCards();
-buildMarkets();
+initAllData(); // fetches all live quotes then renders every data section
 </script>
 </body>
 </html>
