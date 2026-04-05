@@ -16,10 +16,11 @@ export default async function handler(req, res) {
 
   const key = process.env.ANTHROPIC_API_KEY;
   if (!key) {
-    return res.status(500).json({ error: 'API not configured' });
+    console.error('[analyze] ANTHROPIC_API_KEY is not set');
+    return res.status(500).json({ error: 'AI service unavailable. Please try again.' });
   }
 
-  // Extract and validate the messages array from the request body
+  // Validate messages array
   const messages = req.body && Array.isArray(req.body.messages) ? req.body.messages : null;
   if (!messages || messages.length === 0) {
     return res.status(400).json({ error: 'messages array is required' });
@@ -40,7 +41,7 @@ export default async function handler(req, res) {
       body: JSON.stringify({
         model: 'claude-sonnet-4-20250514',
         max_tokens,
-        system: 'You are NZR, an elite AI trading analyst. Return only valid JSON as instructed. Never include markdown fences or extra commentary outside the JSON.',
+        system: 'You are NZR, an elite AI trading intelligence assistant. Follow the formatting instructions given in each user message exactly — if JSON is requested return only JSON, if a conversational answer is requested respond in clear prose.',
         messages,
       }),
     });
@@ -48,14 +49,22 @@ export default async function handler(req, res) {
     const data = await response.json();
 
     if (!response.ok) {
-      return res.status(response.status).json({ error: data.error?.message || 'Anthropic API error' });
+      const errMsg = data?.error?.message || `Anthropic API error (${response.status})`;
+      console.error('[analyze] Anthropic API error:', response.status, errMsg);
+      return res.status(response.status).json({ error: 'AI service unavailable. Please try again.' });
     }
 
-    // Normalise to the shape the frontend already expects: { content: [{ type, text }] }
     const text = data.content?.[0]?.text ?? '';
+    if (!text) {
+      console.error('[analyze] Empty content in Anthropic response:', JSON.stringify(data));
+      return res.status(500).json({ error: 'AI service unavailable. Please try again.' });
+    }
+
+    // Return in the shape the frontend expects: { content: [{ type, text }] }
     return res.status(200).json({ content: [{ type: 'text', text }] });
 
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    console.error('[analyze] Unexpected error:', err);
+    return res.status(500).json({ error: 'AI service unavailable. Please try again.' });
   }
 }
