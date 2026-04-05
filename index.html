@@ -589,23 +589,42 @@ footer{border-top:1px solid var(--border);padding:32px 0;margin-top:80px}
 .ks-progress{margin-top:8px;font-family:var(--font-mono);font-size:10px;color:var(--text3);text-align:center;min-height:18px}
 
 /* ─── DIRECTION CARD ───────────────────────────── */
-.dir-card{margin-top:16px;border-radius:var(--radius-lg);padding:18px 20px;border:1px solid var(--border)}
-.dir-card.long{background:var(--green-dim);border-color:rgba(26,122,64,.25)}
-.dir-card.short{background:var(--red-dim);border-color:rgba(192,24,42,.2)}
-.dir-card.neutral{background:var(--bg2);border-color:var(--border)}
-.dir-card-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
-.dir-badge{font-family:var(--font-display);font-size:18px;font-weight:800;letter-spacing:1px}
-.dir-badge.long{color:var(--green)}
-.dir-badge.short{color:var(--red)}
-.dir-badge.neutral{color:var(--text3)}
-.dir-lev{font-family:var(--font-mono);font-size:11px;font-weight:700;padding:3px 10px;border-radius:99px;background:var(--panel)}
-.dir-price{font-family:var(--font-mono);font-size:12px;color:var(--text2);margin-bottom:10px}
-.dir-reasons{display:flex;flex-direction:column;gap:4px;margin-bottom:10px}
-.dir-reason{font-size:11px;color:var(--text2);display:flex;align-items:flex-start;gap:7px;line-height:1.45}
-.dir-reason::before{content:'→';color:var(--text3);flex-shrink:0;font-family:var(--font-mono)}
-.dir-footer{display:flex;align-items:center;justify-content:space-between}
-.dir-confidence{font-family:var(--font-mono);font-size:10px;color:var(--text3)}
-.dir-ks-warn{font-family:var(--font-mono);font-size:10px;color:var(--red);font-weight:700;padding:3px 8px;border-radius:99px;background:var(--red-dim);border:1px solid rgba(192,24,42,.2)}
+.dir-card{margin-top:20px;border-radius:var(--radius-lg);border:1px solid var(--border);background:var(--panel);overflow:hidden;box-shadow:var(--shadow)}
+.dir-ks-banner{padding:10px 18px;background:var(--red-dim);border-bottom:1px solid rgba(192,24,42,.2);font-family:var(--font-mono);font-size:11px;color:var(--red);font-weight:700;display:flex;align-items:center;gap:8px}
+.dir-card-inner{padding:20px 22px}
+.dir-eyebrow{font-family:var(--font-mono);font-size:9px;color:var(--text3);letter-spacing:2px;text-transform:uppercase;margin-bottom:14px}
+.dir-main{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:16px;gap:12px}
+.dir-dir-block{display:flex;align-items:center;gap:10px}
+.dir-arrow{font-size:34px;line-height:1;font-weight:900}
+.dir-arrow.long{color:var(--green)}
+.dir-arrow.short{color:var(--red)}
+.dir-arrow.neutral{color:var(--text3)}
+.dir-label{font-family:var(--font-display);font-size:30px;font-weight:800;letter-spacing:1.5px;line-height:1}
+.dir-label.long{color:var(--green)}
+.dir-label.short{color:var(--red)}
+.dir-label.neutral{color:var(--text3)}
+.dir-lev-block{text-align:right;flex-shrink:0}
+.dir-lev-num{font-family:var(--font-display);font-size:20px;font-weight:800;color:var(--text)}
+.dir-lev-sub{font-family:var(--font-mono);font-size:9px;color:var(--text3);letter-spacing:1.5px;text-transform:uppercase;margin-top:2px}
+.dir-lev-warn{font-size:10px;color:var(--red);margin-top:6px;max-width:160px;text-align:right;line-height:1.4}
+.dir-lev-note{font-size:10px;color:var(--text3);margin-top:6px;text-align:right;line-height:1.4}
+.dir-conf-row{margin-bottom:16px}
+.dir-conf-label{display:flex;align-items:center;justify-content:space-between;font-family:var(--font-mono);font-size:10px;color:var(--text3);letter-spacing:1px;text-transform:uppercase;margin-bottom:7px}
+.dir-conf-pct{color:var(--gold);font-weight:700}
+.dir-conf-track{height:7px;background:var(--bg3);border-radius:99px;overflow:hidden;border:1px solid var(--border)}
+.dir-conf-fill{height:100%;border-radius:99px;background:var(--gold);transition:width .5s ease}
+.dir-divider{height:1px;background:var(--border);margin:16px 0}
+.dir-section-lbl{font-family:var(--font-mono);font-size:9px;color:var(--text3);letter-spacing:2px;text-transform:uppercase;margin-bottom:10px}
+.dir-reason-item{display:flex;align-items:flex-start;gap:9px;font-size:12px;color:var(--text2);margin-bottom:7px;line-height:1.55}
+.dir-reason-dot{width:5px;height:5px;border-radius:50%;background:var(--gold);flex-shrink:0;margin-top:5px}
+.dir-neutral-note{text-align:center;padding:18px 8px;font-size:13px;color:var(--text3);font-style:italic}
+.dir-levels-table{width:100%;border-collapse:collapse}
+.dir-levels-table tr{border-bottom:1px solid var(--border)}
+.dir-levels-table tr:last-child{border-bottom:none}
+.dir-levels-table td{padding:8px 0;font-size:12px;vertical-align:middle}
+.dir-levels-table td:first-child{color:var(--text3);font-family:var(--font-mono);font-size:10px;letter-spacing:.3px;width:45%}
+.dir-levels-table td:last-child{font-family:var(--font-mono);font-weight:700;color:var(--text);text-align:right}
+.dir-rr-badge{display:inline-block;font-family:var(--font-mono);font-size:10px;font-weight:700;padding:2px 10px;border-radius:99px;background:var(--gold-dim);color:var(--gold);border:1px solid rgba(200,150,12,.3)}
 </style>
 </head>
 <body>
@@ -3328,72 +3347,132 @@ async function executeKillSwitch(){
 async function renderDirectionCard(ticker, ind, qd){
   const slot = document.getElementById('direction-card-slot');
   if(!slot) return;
-  slot.innerHTML = '<div style="margin-top:14px;font-family:var(--font-mono);font-size:11px;color:var(--text3);text-align:center;padding:12px">Fetching direction recommendation…</div>';
+  slot.innerHTML = '<div style="margin-top:16px;font-family:var(--font-mono);font-size:10px;color:var(--text3);text-align:center;padding:12px;letter-spacing:.5px">LOADING DIRECTION…</div>';
 
   const payload = {
-    symbol: ticker,
-    price: qd?.price ?? null,
+    action: 'direction',
     indicators: {
-      rsi:         ind.rsi?.value ?? null,
-      macdHist:    ind.macd?.histogram ?? null,
-      ema60:       ind.ema60 ?? null,
-      ema200:      ind.ema200 ?? null,
-      goldenCross: ind.golden_cross ?? null,
+      rsi:           ind?.rsi?.value          ?? null,
+      macdHistogram: ind?.macd?.histogram     ?? null,
+      ema60:         ind?.ema60               ?? null,
+      ema200:        ind?.ema200              ?? null,
+      goldenCross:   ind?.golden_cross        ?? null,
+      price:         qd?.price               ?? null,
     }
   };
 
-  let botData = null;
+  let rec = null;
   try{
-    const r = await fetch('/api/bot', {
+    const r = await fetch('/api/bot?action=direction', {
       method:'POST',
       headers:{'Content-Type':'application/json'},
       body: JSON.stringify(payload)
     });
-    botData = await r.json();
+    rec = await r.json();
   } catch(e){
     slot.innerHTML = '';
     return;
   }
 
-  if(!botData){ slot.innerHTML = ''; return; }
+  if(!rec){ slot.innerHTML = ''; return; }
 
-  const dir = botData.direction || 'NEUTRAL';
-  const dirClass = dir === 'LONG' ? 'long' : dir === 'SHORT' ? 'short' : 'neutral';
-  const dirLabel = dir === 'LONG' ? '↑ LONG' : dir === 'SHORT' ? '↓ SHORT' : '→ NEUTRAL';
-  const lev = botData.leverage ? botData.leverage + 'x' : '1x';
-  const conf = botData.confidence != null ? botData.confidence + '% confidence' : '';
-  const reasons = (botData.reasons || []).map(r => `<div class="dir-reason">${r}</div>`).join('');
+  // Normalise direction — bot returns 'NEUTRAL — no trade' for neutral
+  const rawDir  = (rec.direction || '').split(' ')[0].toUpperCase();
+  const dir     = ['LONG','SHORT'].includes(rawDir) ? rawDir : 'NEUTRAL';
+  const isLong  = dir === 'LONG';
+  const isShort = dir === 'SHORT';
+  const dirClass = isLong ? 'long' : isShort ? 'short' : 'neutral';
 
-  let limitPriceLine = '';
-  if(botData.limitPrice && dir !== 'NEUTRAL' && qd?.price){
-    const pctDiff = Math.abs((botData.limitPrice - qd.price) / qd.price * 100).toFixed(2);
-    limitPriceLine = `<div class="dir-price">Suggested limit: <strong>$${Number(botData.limitPrice).toFixed(2)}</strong> (${pctDiff}% slippage buffer)</div>`;
+  const leverage = rec.leverage || 1;
+  const conf     = Math.max(0, Math.min(100, rec.confidence || 0));
+  const price    = qd?.price ?? null;
+
+  // Split reasoning string into up to 3 bullet sentences
+  const reasoning = rec.reasoning || '';
+  const bullets = reasoning
+    .split(/(?<=\.)\s+/)
+    .map(s => s.replace(/\.\s*$/, '').trim())
+    .filter(s => s.length > 4)
+    .slice(0, 3);
+
+  // Kill switch banner
+  const ksActive = _tradingHalted || !!rec.killSwitch;
+  const ksBanner = ksActive
+    ? '<div class="dir-ks-banner">⚠ Kill switch is active — no trades will be executed</div>'
+    : '';
+
+  // Arrow glyph
+  const arrowChar = isLong ? '↑' : isShort ? '↓' : '—';
+
+  // Leverage warning / note
+  const levWarning = leverage > 1
+    ? `<div class="dir-lev-warn">Higher leverage increases risk — use position sizing carefully</div>`
+    : `<div class="dir-lev-note">No leverage recommended for this setup</div>`;
+
+  // Confidence bar
+  const confBar = `
+    <div class="dir-conf-row">
+      <div class="dir-conf-label">
+        <span>Confidence</span>
+        <span class="dir-conf-pct">${conf}%</span>
+      </div>
+      <div class="dir-conf-track">
+        <div class="dir-conf-fill" style="width:${conf}%"></div>
+      </div>
+    </div>`;
+
+  // Reasoning bullets or neutral message
+  let reasoningHtml = '';
+  if(dir === 'NEUTRAL'){
+    reasoningHtml = `<div class="dir-neutral-note">No clear edge detected — sit out this setup</div>`;
+  } else {
+    const items = bullets.length
+      ? bullets.map(b => `<div class="dir-reason-item"><div class="dir-reason-dot"></div><div>${b}</div></div>`).join('')
+      : `<div class="dir-reason-item"><div class="dir-reason-dot"></div><div>${reasoning.slice(0,200)}</div></div>`;
+    reasoningHtml = `<div class="dir-section-lbl">Reasoning</div>${items}`;
   }
 
-  const ksWarn = (_tradingHalted || botData.killSwitch)
-    ? '<span class="dir-ks-warn">⛔ TRADING HALTED</span>'
-    : '';
-
-  const validNote = botData.validationResult
-    ? `<div style="margin-top:8px;font-family:var(--font-mono);font-size:10px;color:${botData.validationResult.approved?'var(--green)':'var(--red)'};padding:6px 10px;background:var(--bg2);border-radius:var(--radius)">${botData.validationResult.approved ? '✓ Risk check passed' : '✗ ' + (botData.validationResult.reason || 'Risk check failed')}</div>`
-    : '';
+  // Limit order levels (calculated client-side from current price)
+  let levelsHtml = '';
+  if(dir !== 'NEUTRAL' && price != null){
+    const slip    = 0.001;                                          // 0.10%
+    const entry   = isLong ? price*(1+slip) : price*(1-slip);
+    const stop    = isLong ? entry*(1-0.02) : entry*(1+0.02);      // 2% stop
+    const risk    = Math.abs(entry - stop);
+    const target  = isLong ? entry + 2*risk : entry - 2*risk;      // 2:1 R/R
+    const fmt$    = v => '$' + Number(v).toFixed(2);
+    levelsHtml = `
+      <div class="dir-divider"></div>
+      <div class="dir-section-lbl">Limit Order Levels</div>
+      <table class="dir-levels-table">
+        <tr><td>Entry (limit)</td><td style="color:var(--gold)">${fmt$(entry)}</td></tr>
+        <tr><td>Target</td><td style="color:var(--green)">${fmt$(target)}</td></tr>
+        <tr><td>Stop Loss</td><td style="color:var(--red)">${fmt$(stop)}</td></tr>
+        <tr><td>Risk / Reward</td><td><span class="dir-rr-badge">2:1</span></td></tr>
+      </table>`;
+  }
 
   slot.innerHTML = `
-    <div class="dir-card ${dirClass}">
-      <div class="dir-card-header">
-        <div>
-          <div style="font-family:var(--font-mono);font-size:9px;color:var(--text3);letter-spacing:2px;text-transform:uppercase;margin-bottom:4px">Bot Direction</div>
-          <div class="dir-badge ${dirClass}">${dirLabel}</div>
+    <div class="dir-card">
+      ${ksBanner}
+      <div class="dir-card-inner">
+        <div class="dir-eyebrow">Trade Direction</div>
+        <div class="dir-main">
+          <div class="dir-dir-block">
+            <div class="dir-arrow ${dirClass}">${arrowChar}</div>
+            <div class="dir-label ${dirClass}">${dir}</div>
+          </div>
+          <div class="dir-lev-block">
+            <div class="dir-lev-num">${leverage}x</div>
+            <div class="dir-lev-sub">Max Leverage</div>
+            ${levWarning}
+          </div>
         </div>
-        <div class="dir-lev">${lev} leverage</div>
+        ${confBar}
+        <div class="dir-divider"></div>
+        ${reasoningHtml}
+        ${levelsHtml}
       </div>
-      ${limitPriceLine}
-      <div class="dir-reasons">${reasons}</div>
-      <div class="dir-footer">
-        <span class="dir-confidence">${conf}</span>
-        ${ksWarn}
-      </div>
-      ${validNote}
     </div>`;
 }
 

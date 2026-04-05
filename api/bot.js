@@ -254,6 +254,15 @@ module.exports = async function handler(req, res) {
     return res.status(200).json({ message: 'Risk rules updated', riskRules });
   }
 
+  // ── DIRECTION ONLY — recommend direction without full order validation ──────
+  if (action === 'direction' || (req.method === 'POST' && (req.body?.action === 'direction'))) {
+    if (req.method !== 'POST') return res.status(405).json({ error: 'POST required' });
+    const body = req.body || {};
+    const indicators = body.indicators || null;
+    const rec = recommendDirection(indicators);
+    return res.status(200).json({ ...rec, killSwitch });
+  }
+
   // ── GET CURRENT STATE ───────────────────────────────────────────────────────
   if (action === 'status' || (req.method === 'GET' && !action)) {
     resetDailyCountersIfNeeded();
