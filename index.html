@@ -512,8 +512,8 @@ footer{border-top:1px solid var(--border);padding:32px 0;margin-top:80px}
       <div class="index-divider"></div>
       <div class="index-item">
         <span class="index-sym">VIX</span>
-        <span class="skel" style="width:38px;height:13px"></span>
-        <span class="skel" style="width:38px;height:11px"></span>
+        <span class="index-price" style="color:var(--text3)">N/A</span>
+        <span class="index-chg na">unavailable</span>
       </div>
     </div>
     <div class="indices-meta">
@@ -1012,7 +1012,7 @@ function isMarketOpen(){
 }
 
 // All symbols needed across the page
-const ALL_SYMS=['SPY','QQQ','DIA','VIX','IWM','AAPL','NVDA','TSLA','AMZN','MSFT','META','GOOGL','AMD','NFLX','JPM','GLD','V','UNH','XOM','JNJ','WMT','MA','PG','HD','COST','ABBV','MRK','CVX','ADBE','CRM','PYPL','INTC','QCOM','TXN'];
+const ALL_SYMS=['SPY','QQQ','DIA','IWM','AAPL','NVDA','TSLA','AMZN','MSFT','META','GOOGL','AMD','NFLX','JPM','GLD','V','UNH','XOM','JNJ','WMT','MA','PG','HD','COST','ABBV','MRK','CVX','ADBE','CRM','PYPL','INTC','QCOM','TXN'];
 
 async function initAllData(){
   // Fetch all quotes in parallel; individual failures don't block others
@@ -1032,22 +1032,22 @@ async function initAllData(){
 
 /* ── MARKET INDICES BAR ─────────────────────────── */
 const INDEX_DEFS=[
-  {sym:'SPY'},{sym:'QQQ'},{sym:'DIA'},{sym:'VIX'},
+  {sym:'SPY'},{sym:'QQQ'},{sym:'DIA'},{sym:'VIX',noData:true,label:'Volatility Index'},
 ];
 let lastUpdatedSec=0;
 
 function renderIndicesLive(){
   const list=document.getElementById('indices-list');
   list.innerHTML=INDEX_DEFS.map((d,i)=>{
-    const q=Q[d.sym];
-    const price=q?fmt$(q.price):'--';
-    const chg=q?fmtChg(q.change):'--';
-    const cls=q?(q.up?'up':'dn'):'na';
+    const q=d.noData?null:Q[d.sym];
+    const price=d.noData?'N/A':q?fmt$(q.price):'--';
+    const chg=d.noData?'unavailable':q?fmtChg(q.change):'--';
+    const cls='na';
     return`${i>0?'<div class="index-divider"></div>':''}
     <div class="index-item">
       <span class="index-sym">${d.sym}</span>
-      <span class="index-price">${price}</span>
-      <span class="index-chg ${cls}">${chg}</span>
+      <span class="index-price" ${q?'style="color:var(--text)"':'style="color:var(--text3)"'}>${price}</span>
+      <span class="index-chg ${q?(q.up?'up':'dn'):cls}">${chg}</span>
     </div>`;
   }).join('');
 }
@@ -1099,7 +1099,7 @@ function renderFearGreedLive(){
     el.innerHTML=`<div class="empty-state">
       <div class="empty-icon">📉</div>
       <div class="empty-title">Fear &amp; Greed data unavailable</div>
-      <div class="empty-desc">VIX data could not be loaded. Check connection or try during market hours.</div>
+      <div class="empty-desc">VIX is not supported by this data provider. Fear &amp; Greed index cannot be calculated.</div>
     </div>`;
     return;
   }
@@ -1129,9 +1129,7 @@ function renderFearGreedLive(){
 }
 
 function retryFearGreed(){
-  const el=document.getElementById('fear-greed-content');
-  el.innerHTML='<div style="padding:16px;text-align:center;color:var(--text3);font-family:var(--font-mono);font-size:11px">Reconnecting…</div>';
-  loadQuote('VIX').then(()=>renderFearGreedLive());
+  renderFearGreedLive();
 }
 
 /* ── TOP MOVERS ─────────────────────────────────── */
@@ -1734,7 +1732,7 @@ function appendChat(role,text){
   const div=document.createElement('div');
   div.className='chat-bubble '+role;
   div.textContent=text;
-  chatMessages.insertBefore(div,typingIndicator);
+  chatMessages.appendChild(div);
   chatMessages.scrollTop=chatMessages.scrollHeight;
 }
 
