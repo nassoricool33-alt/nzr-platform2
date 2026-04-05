@@ -87,6 +87,7 @@ nav{position:sticky;top:0;z-index:200;backdrop-filter:blur(24px);-webkit-backdro
 /* Status */
 .nav-status{display:flex;align-items:center;gap:8px;font-family:var(--font-mono);font-size:11px;color:var(--text2);flex-shrink:0}
 .status-dot{width:6px;height:6px;border-radius:50%;background:var(--green);animation:blink 2s infinite}
+.status-dot.closed{background:var(--red);animation:none}
 @keyframes blink{0%,100%{opacity:1}50%{opacity:.4}}
 
 /* ─── MARKET INDICES BAR ───────────────────────────── */
@@ -480,8 +481,8 @@ footer{border-top:1px solid var(--border);padding:32px 0;margin-top:80px}
     </div>
 
     <div class="nav-status">
-      <div class="status-dot"></div>
-      <span>Markets live</span>
+      <div class="status-dot" id="market-status-dot"></div>
+      <span id="market-status-text">MARKET CLOSED</span>
       <span style="color:var(--text3);margin-left:6px" id="clock"></span>
     </div>
   </div>
@@ -1003,12 +1004,30 @@ async function loadQuote(sym){
   }catch{return null;}
 }
 
-function isMarketOpen(){
-  const et=new Date(new Date().toLocaleString('en-US',{timeZone:'America/New_York'}));
-  const day=et.getDay();
-  if(day===0||day===6)return false;
-  const mins=et.getHours()*60+et.getMinutes();
-  return mins>=570&&mins<960;
+function isMarketOpen() {
+  const now = new Date();
+  const et = new Date(now.toLocaleString("en-US", { timeZone: "America/New_York" }));
+  const day = et.getDay();
+  const hours = et.getHours();
+  const minutes = et.getMinutes();
+  const timeInMinutes = hours * 60 + minutes;
+  const isWeekday = day >= 1 && day <= 5;
+  const isDuringHours = timeInMinutes >= 570 && timeInMinutes < 960;
+  return isWeekday && isDuringHours;
+}
+
+function updateMarketStatus(){
+  const open=isMarketOpen();
+  // Nav dot
+  const dot=document.getElementById('market-status-dot');
+  const txt=document.getElementById('market-status-text');
+  if(dot){dot.className='status-dot'+(open?'':' closed');}
+  if(txt){txt.textContent=open?'MARKET OPEN':'MARKET CLOSED';txt.style.color=open?'var(--green)':'var(--red)';}
+  // Market-page badges (built dynamically by buildMarkets)
+  document.querySelectorAll('.market-badge').forEach(b=>{
+    b.className='market-badge '+(open?'open':'closed');
+    b.textContent=open?'● MARKET OPEN':'MARKET CLOSED';
+  });
 }
 
 // All symbols needed across the page
@@ -1026,6 +1045,8 @@ async function initAllData(){
   renderTopMoversPolygon();
   buildHotPlays();
   buildMarkets();
+  updateMarketStatus();
+  setInterval(updateMarketStatus, 60 * 1000);
   startLastUpdatedCounter();
   buildNewsWidget();
   buildEconCalendar();
@@ -1265,7 +1286,7 @@ function buildMarkets(){
     return`<div class="market-card">
       <div class="market-card-header">
         <div><div class="market-name">${m.name}</div><div class="market-sub">${m.sub}</div></div>
-        <div class="market-badge ${open?'open':'closed'}">${open?'● Open':'Closed'}</div>
+        <div class="market-badge ${open?'open':'closed'}">${open?'● MARKET OPEN':'MARKET CLOSED'}</div>
       </div>
       <div class="market-price">${price}</div>
       <div class="market-change ${up?'up':'dn'}">${chg} today</div>
