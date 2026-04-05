@@ -1020,7 +1020,7 @@ async function initAllData(){
   renderIndicesLive();
   renderTickerLive();
   renderFearGreedLive();
-  renderTopMoversLive();
+  renderTopMoversPolygon();
   buildHotPlays();
   buildMarkets();
   startLastUpdatedCounter();
@@ -1132,32 +1132,37 @@ function retryFearGreed(){
   renderFearGreedLive();
 }
 
-/* ── TOP MOVERS ─────────────────────────────────── */
-const MOVER_SYMS=['AAPL','NVDA','TSLA','AMZN','MSFT','META','GOOGL','AMD','NFLX','JPM','SPY','QQQ','V','XOM','COST','IWM'];
-
-function renderTopMoversLive(){
+/* ── TOP MOVERS (Polygon) ───────────────────────── */
+async function renderTopMoversPolygon(){
   const el=document.getElementById('top-movers-content');
-  const entries=MOVER_SYMS
-    .map(s=>({sym:s,...Q[s]}))
-    .filter(e=>e.price!=null)
-    .sort((a,b)=>Math.abs(b.change)-Math.abs(a.change))
-    .slice(0,6);
-  if(!entries.length){
+  try{
+    const r=await fetch('/api/polygon?type=movers');
+    if(!r.ok)throw new Error();
+    const data=await r.json();
+    const gainers=data.gainers||[];
+    const losers=data.losers||[];
+    if(!gainers.length&&!losers.length)throw new Error();
+    const row=(e,label)=>`
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border)">
+        <div style="display:flex;align-items:center;gap:10px">
+          <span style="font-family:var(--font-mono);font-size:9px;padding:2px 6px;border-radius:3px;background:${label==='G'?'var(--green-dim)':'var(--red-dim)'};color:${label==='G'?'var(--green)':'var(--red)'};font-weight:700">${label==='G'?'▲':'▼'}</span>
+          <span style="font-family:var(--font-mono);font-weight:700;font-size:12px;color:var(--gold);min-width:48px">${e.symbol}</span>
+          <span style="font-family:var(--font-mono);font-size:12px;color:var(--text)">${e.price!=null?fmt$(e.price):'--'}</span>
+        </div>
+        <span style="font-family:var(--font-mono);font-size:12px;font-weight:700;color:${label==='G'?'var(--green)':'var(--red)'}">${e.change!=null?(e.change>=0?'+':'')+e.change.toFixed(2)+'%':'--'}</span>
+      </div>`;
+    el.innerHTML='<div style="display:flex;flex-direction:column;padding:4px 0">'
+      +gainers.map(e=>row(e,'G')).join('')
+      +losers.map(e=>row(e,'L')).join('')
+      +'<div style="font-family:var(--font-mono);font-size:9px;color:var(--text3);padding-top:8px;letter-spacing:.3px">Data delayed · Polygon.io</div>'
+      +'</div>';
+  }catch{
     el.innerHTML=`<div class="empty-state">
       <div class="empty-icon">📊</div>
-      <div class="empty-title">Market data unavailable</div>
-      <div class="empty-desc">Top mover data is not available outside regular trading hours (9:30 AM – 4:00 PM ET).</div>
+      <div class="empty-title">Data unavailable</div>
+      <div class="empty-desc">Data unavailable — market may be closed or rate limit reached.</div>
     </div>`;
-    return;
   }
-  el.innerHTML='<div style="display:flex;flex-direction:column">'+entries.map((e,i)=>`
-    <div style="display:flex;align-items:center;justify-content:space-between;padding:9px 0;${i<entries.length-1?'border-bottom:1px solid var(--border)':''}">
-      <div style="display:flex;align-items:center;gap:10px">
-        <span style="font-family:var(--font-mono);font-weight:700;font-size:12px;color:var(--gold);min-width:48px">${e.sym}</span>
-        <span style="font-family:var(--font-mono);font-size:12px;color:var(--text)">${fmt$(e.price)}</span>
-      </div>
-      <span style="font-family:var(--font-mono);font-size:12px;font-weight:700;color:${e.up?'var(--green)':'var(--red)'}">${fmtChg(e.change)}</span>
-    </div>`).join('')+'</div>';
 }
 
 /* ── HOT PLAYS ──────────────────────────────────── */
@@ -1375,68 +1380,93 @@ async function buildNewsTicker(){
   }
 }
 
-/* ── OPTIONS FLOW (simulated) ───────────────────── */
-const flowData=[
-  {time:'10:42',sym:'NVDA',type:'CALL',strike:'900',exp:'04/18',prem:'$1.2M',vol:'4,820',oi:'12,400',tag:'sweep'},
-  {time:'10:38',sym:'SPY',type:'PUT',strike:'530',exp:'04/11',prem:'$880K',vol:'9,210',oi:'31,500',tag:'block'},
-  {time:'10:31',sym:'AAPL',type:'CALL',strike:'205',exp:'04/25',prem:'$640K',vol:'3,100',oi:'8,700',tag:'sweep'},
-  {time:'10:27',sym:'META',type:'CALL',strike:'520',exp:'05/16',prem:'$2.1M',vol:'2,450',oi:'6,800',tag:'block'},
-  {time:'10:19',sym:'TSLA',type:'PUT',strike:'230',exp:'04/18',prem:'$510K',vol:'7,300',oi:'22,100',tag:'sweep'},
-  {time:'10:08',sym:'QQQ',type:'CALL',strike:'470',exp:'04/11',prem:'$1.7M',vol:'11,200',oi:'48,300',tag:'block'},
-  {time:'09:52',sym:'AMD',type:'CALL',strike:'165',exp:'05/02',prem:'$390K',vol:'2,900',oi:'7,200',tag:'sweep'},
-  {time:'09:44',sym:'AMZN',type:'PUT',strike:'185',exp:'04/25',prem:'$720K',vol:'4,100',oi:'9,800',tag:'block'},
-];
-function buildFlowTable(){
-  const tbody=document.getElementById('flow-tbody');
-  if(!tbody)return;
-  tbody.innerHTML=flowData.map(f=>`
-    <tr>
-      <td>${f.time}</td>
-      <td style="font-family:var(--font-mono);font-weight:700;color:var(--gold)">${f.sym}</td>
-      <td class="${f.type==='CALL'?'flow-call':'flow-put'}">${f.type}</td>
-      <td>${f.strike}</td>
-      <td>${f.exp}</td>
-      <td class="flow-prem">${f.prem}</td>
-      <td>${f.vol}</td>
-      <td>${f.oi}</td>
-      <td><span class="flow-tag ${f.tag}">${f.tag.toUpperCase()}</span></td>
-    </tr>`).join('');
+/* ── OPTIONS FLOW (Polygon) ─────────────────────── */
+function fmtPrem(v){
+  if(v==null||isNaN(v))return'--';
+  if(v>=1e6)return'$'+(v/1e6).toFixed(1)+'M';
+  if(v>=1e3)return'$'+(v/1e3).toFixed(0)+'K';
+  return'$'+Math.round(v);
 }
-buildFlowTable();
+function fmtNum(v){
+  if(v==null||isNaN(v))return'--';
+  return Number(v).toLocaleString();
+}
+async function buildFlowTable(sym){
+  sym=sym||'SPY';
+  const tbody=document.getElementById('flow-tbody');
+  const note=document.getElementById('flow-note');
+  if(!tbody)return;
+  tbody.innerHTML=`<tr><td colspan="9" style="text-align:center;padding:24px;font-family:var(--font-mono);font-size:11px;color:var(--text3)">Loading options flow…</td></tr>`;
+  try{
+    const r=await fetch('/api/polygon?type=options&symbol='+encodeURIComponent(sym));
+    if(!r.ok)throw new Error();
+    const data=await r.json();
+    const items=data.options||[];
+    if(!items.length)throw new Error();
+    tbody.innerHTML=items.map(f=>`
+      <tr>
+        <td style="font-family:var(--font-mono);font-size:11px;color:var(--text3)">--</td>
+        <td style="font-family:var(--font-mono);font-weight:700;color:var(--gold)">${f.symbol}</td>
+        <td class="${f.type==='CALL'?'flow-call':'flow-put'}">${f.type}</td>
+        <td>${f.strike!=null?'$'+Number(f.strike).toFixed(0):'--'}</td>
+        <td>${f.expiry}</td>
+        <td class="flow-prem">${fmtPrem(f.premium)}</td>
+        <td>${fmtNum(f.volume)}</td>
+        <td>${fmtNum(f.open_interest)}</td>
+        <td><span class="flow-tag block">IV ${f.implied_volatility!=null?f.implied_volatility+'%':'--'}</span></td>
+      </tr>`).join('');
+    if(note)note.textContent='Live options data (delayed) · Polygon.io';
+  }catch{
+    tbody.innerHTML=`<tr><td colspan="9"><div class="empty-state" style="padding:36px 0">
+      <div class="empty-icon">📉</div>
+      <div class="empty-title">Data unavailable</div>
+      <div class="empty-desc">Data unavailable — market may be closed or rate limit reached.</div>
+    </div></td></tr>`;
+    if(note)note.textContent='Options data unavailable.';
+  }
+}
+buildFlowTable('SPY');
 
-/* ── EARNINGS CALENDAR ──────────────────────────── */
-const earningsData=[
-  {date:'Apr 07',sym:'LEVI',company:'Levi Strauss',time:'After Close',eps:'$0.14',impact:'low'},
-  {date:'Apr 09',sym:'DAL',company:'Delta Air Lines',time:'Pre-Market',eps:'$0.43',impact:'med'},
-  {date:'Apr 11',sym:'JPM',company:'JPMorgan Chase',time:'Pre-Market',eps:'$4.62',impact:'high'},
-  {date:'Apr 11',sym:'WFC',company:'Wells Fargo',time:'Pre-Market',eps:'$1.24',impact:'high'},
-  {date:'Apr 11',sym:'MS',company:'Morgan Stanley',time:'Pre-Market',eps:'$2.21',impact:'high'},
-  {date:'Apr 14',sym:'GS',company:'Goldman Sachs',time:'Pre-Market',eps:'$12.08',impact:'high'},
-  {date:'Apr 15',sym:'BAC',company:'Bank of America',time:'Pre-Market',eps:'$0.82',impact:'high'},
-  {date:'Apr 16',sym:'NFLX',company:'Netflix',time:'After Close',eps:'$5.74',impact:'high'},
-  {date:'Apr 22',sym:'TSLA',company:'Tesla',time:'After Close',eps:'$0.47',impact:'high'},
-  {date:'Apr 23',sym:'META',company:'Meta Platforms',time:'After Close',eps:'$5.25',impact:'high'},
-];
-function buildEarnings(){
+/* ── EARNINGS CALENDAR (Polygon) ────────────────── */
+function fmtRevenue(v){
+  if(v==null||isNaN(v))return'--';
+  if(Math.abs(v)>=1e9)return'$'+(v/1e9).toFixed(1)+'B';
+  if(Math.abs(v)>=1e6)return'$'+(v/1e6).toFixed(0)+'M';
+  return'$'+Math.round(v).toLocaleString();
+}
+async function buildEarnings(){
   const tbody=document.getElementById('earnings-tbody');
   if(!tbody)return;
-  if(!earningsData||earningsData.length===0){
-    tbody.innerHTML=`<tr><td colspan="6"><div class="empty-state">
+  tbody.innerHTML=`<tr><td colspan="6" style="text-align:center;padding:24px;font-family:var(--font-mono);font-size:11px;color:var(--text3)">Loading earnings data…</td></tr>`;
+  try{
+    const r=await fetch('/api/polygon?type=earnings');
+    if(!r.ok)throw new Error();
+    const data=await r.json();
+    const items=data.earnings||[];
+    if(!items.length)throw new Error();
+    tbody.innerHTML=items.map(e=>`
+      <tr>
+        <td style="font-family:var(--font-mono);font-size:12px;color:var(--text3)">${e.date||'--'}</td>
+        <td><span class="earnings-sym">${e.ticker||'--'}</span></td>
+        <td style="font-family:var(--font-mono);font-size:11px;color:var(--text3)">${e.period||''}${e.year?' '+e.year:''}</td>
+        <td style="font-family:var(--font-mono);font-size:11px;color:var(--text3)">Filed</td>
+        <td><span class="earnings-est">${fmtRevenue(e.revenue)}</span></td>
+        <td><span class="earnings-impact med">FILING</span></td>
+      </tr>`).join('');
+    const tbl=document.getElementById('earnings-table');
+    if(tbl){
+      const note=document.createElement('caption');
+      note.style.cssText='font-family:var(--font-mono);font-size:10px;color:var(--text3);padding:8px 16px;text-align:right;caption-side:bottom';
+      note.textContent='Recent financial filings (delayed) · Polygon.io';
+      tbl.appendChild(note);
+    }
+  }catch{
+    tbody.innerHTML=`<tr><td colspan="6"><div class="empty-state" style="padding:36px 0">
       <div class="empty-icon">📅</div>
-      <div class="empty-title">No earnings this week</div>
-      <div class="empty-desc">No high-impact events found for the current period.</div>
+      <div class="empty-title">Data unavailable</div>
+      <div class="empty-desc">Data unavailable — market may be closed or rate limit reached.</div>
     </div></td></tr>`;
-    return;
   }
-  tbody.innerHTML=earningsData.map(e=>`
-    <tr>
-      <td style="font-family:var(--font-mono);font-size:12px;color:var(--text3)">${e.date}</td>
-      <td><span class="earnings-sym">${e.sym}</span></td>
-      <td>${e.company}</td>
-      <td style="font-family:var(--font-mono);font-size:11px;color:var(--text3)">${e.time}</td>
-      <td><span class="earnings-est">${e.eps}</span></td>
-      <td><span class="earnings-impact ${e.impact}">${e.impact.toUpperCase()}</span></td>
-    </tr>`).join('');
 }
 buildEarnings();
 
