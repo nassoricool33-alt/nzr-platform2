@@ -1241,12 +1241,12 @@ footer{border-top:1px solid var(--border);padding:32px 0;margin-top:80px}
     <div class="bt-panel">
       <div class="input-group">
         <label class="input-label">Symbol</label>
-        <input class="bt-input" id="bt-symbol" type="text" placeholder="AAPL" maxlength="10" style="text-transform:uppercase"/>
+        <input class="bt-input" id="bt-symbol" type="text" placeholder="AAPL" maxlength="10" value="AAPL" style="text-transform:uppercase"/>
       </div>
 
       <div class="input-group">
         <label class="input-label">Start Date</label>
-        <input class="bt-input" id="bt-start" type="date" value="2022-01-01"/>
+        <input class="bt-input" id="bt-start" type="date"/>
       </div>
 
       <div class="input-group">
@@ -2664,10 +2664,16 @@ function buildScreener(){
 let _btChart = null;
 let _btTrades = [];
 
-// Set today as default end date
+// Set default dates and symbol
 (function(){
-  const el = document.getElementById('bt-end');
-  if (el) el.value = new Date().toISOString().split('T')[0];
+  const today = new Date();
+  const oneYearAgo = new Date(today);
+  oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
+  const fmt = d => d.toISOString().split('T')[0];
+  const startEl = document.getElementById('bt-start');
+  const endEl   = document.getElementById('bt-end');
+  if (startEl && !startEl.value) startEl.value = fmt(oneYearAgo);
+  if (endEl)   endEl.value = fmt(today);
 })();
 
 const BT_STRATEGY_DESCS = {
@@ -2697,51 +2703,52 @@ function btPctColor(v) {
 }
 
 async function runBacktest() {
-  const symbol   = (document.getElementById('bt-symbol').value || '').trim().toUpperCase();
+  const symbol    = (document.getElementById('bt-symbol').value || '').trim().toUpperCase();
   const startDate = document.getElementById('bt-start').value;
   const endDate   = document.getElementById('bt-end').value;
   const strategy  = document.getElementById('bt-strategy').value;
   const btn       = document.getElementById('bt-run-btn');
+  const placeholder = document.getElementById('bt-placeholder');
+  const summary     = document.getElementById('bt-summary');
 
-  if (!symbol)    { alert('Enter a ticker symbol'); return; }
-  if (!startDate || !endDate) { alert('Select start and end dates'); return; }
-  if (startDate >= endDate)   { alert('End date must be after start date'); return; }
+  if (!symbol)                  { alert('Enter a ticker symbol'); return; }
+  if (!startDate || !endDate)   { alert('Select start and end dates'); return; }
+  if (startDate >= endDate)     { alert('End date must be after start date'); return; }
 
   btn.disabled = true;
-  document.getElementById('bt-placeholder').style.display = 'none';
-  document.getElementById('bt-summary').style.display     = 'none';
-  document.getElementById('bt-results').innerHTML +=
-    '<div id="bt-loading" class="bt-loading"><div class="loading-ring"></div>Running backtest for ' + symbol + '…</div>';
+  placeholder.style.display = 'flex';
+  placeholder.innerHTML =
+    `<div class="loading-ring"></div>
+     <div style="font-family:var(--font-mono);font-size:12px;margin-top:10px">Running backtest for ${symbol}…</div>`;
+  summary.style.display = 'none';
 
   try {
-    const r = await fetch(
-      `/api/backtest?symbol=${encodeURIComponent(symbol)}&startDate=${startDate}&endDate=${endDate}&strategy=${strategy}`
-    );
+    const r = await fetch('/api/backtest', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ symbol, startDate, endDate, strategy }),
+    });
     const data = await r.json();
-
-    const loadingEl = document.getElementById('bt-loading');
-    if (loadingEl) loadingEl.remove();
+    console.log('[backtest] Response:', data);
 
     if (!r.ok || data.error) {
-      document.getElementById('bt-placeholder').style.display = 'flex';
-      document.getElementById('bt-placeholder').innerHTML =
-        `<div style="font-size:28px;opacity:.4">⚠</div>
-         <div style="color:var(--red)">${data.error || 'Backtest failed'}</div>`;
+      placeholder.style.display = 'flex';
+      placeholder.innerHTML =
+        `<div style="font-size:28px;opacity:.35">⚠</div>
+         <div style="color:var(--red);font-family:var(--font-mono);font-size:12px;max-width:320px;text-align:center">${data.error || 'Backtest failed — check symbol and date range'}</div>`;
       return;
     }
 
     _btTrades = data.trades || [];
+    placeholder.style.display = 'none';
     btRenderSummary(data.summary, data.strategy, data.barsUsed);
     btRenderTable(_btTrades);
     btRenderChart(data.summary.equityCurve || []);
-
-    document.getElementById('bt-summary').style.display = 'block';
+    summary.style.display = 'block';
 
   } catch (err) {
-    const loadingEl = document.getElementById('bt-loading');
-    if (loadingEl) loadingEl.remove();
-    document.getElementById('bt-placeholder').style.display = 'flex';
-    document.getElementById('bt-placeholder').innerHTML =
+    placeholder.style.display = 'flex';
+    placeholder.innerHTML =
       `<div style="color:var(--red);font-family:var(--font-mono);font-size:12px">⚠ ${err.message}</div>`;
   } finally {
     btn.disabled = false;
@@ -2810,18 +2817,42 @@ function btRenderTable(trades) {
 }
 
 function btRenderChart(equityCurve) {
+  const wrap   = document.querySelector('.bt-chart-wrap');
   const canvas = document.getElementById('bt-equity-chart');
-  if (!canvas || !equityCurve.length) return;
+  if (!canvas) return;
 
   if (_btChart) { _btChart.destroy(); _btChart = null; }
+
+  // Remove any previous empty-state message
+  const prev = wrap?.querySelector('.bt-chart-empty');
+  if (prev) prev.remove();
+
+  // Need at least 2 points to draw a meaningful line
+  if (!equityCurve || equityCurve.length < 2) {
+    canvas.style.display = 'none';
+    if (wrap) {
+      const msg = document.createElement('div');
+      msg.className = 'bt-chart-empty';
+      msg.style.cssText = 'text-align:center;padding:48px 24px;font-family:var(--font-mono);font-size:11px;color:var(--text3)';
+      msg.textContent = 'No trades generated for this period and strategy — try a longer date range or different strategy';
+      wrap.appendChild(msg);
+    }
+    return;
+  }
+  canvas.style.display = '';
 
   const labels = equityCurve.map(p => p.date || '');
   const values = equityCurve.map(p => p.equity);
   const startVal = values[0] || 10000;
   const endVal   = values[values.length - 1] || 10000;
-  const up       = endVal >= startVal;
-  const lineColor = up ? '#00e59b' : '#ff4466';
-  const fillColor = up ? 'rgba(0,229,155,.08)' : 'rgba(255,68,102,.08)';
+  const up        = endVal >= startVal;
+  const lineColor = up ? '#1a7a40' : '#c0182a';
+  const fillColor = up ? 'rgba(26,122,64,.08)' : 'rgba(192,24,42,.07)';
+
+  // Read computed CSS variable values for theming
+  const style     = getComputedStyle(document.documentElement);
+  const tickColor = style.getPropertyValue('--text3').trim() || '#8a8480';
+  const gridColor = style.getPropertyValue('--border').trim() || '#d8d4ca';
 
   _btChart = new Chart(canvas, {
     type: 'line',
@@ -2845,10 +2876,10 @@ function btRenderChart(equityCurve) {
       plugins: {
         legend: { display: false },
         tooltip: {
-          backgroundColor: '#0f1628',
-          titleColor: '#8892aa',
-          bodyColor: '#e8eaf2',
-          borderColor: '#1e2d52',
+          backgroundColor: '#ffffff',
+          titleColor: '#4a4540',
+          bodyColor: '#0a0808',
+          borderColor: '#d8d4ca',
           borderWidth: 1,
           callbacks: {
             label: ctx => ' $' + Number(ctx.parsed.y).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
@@ -2858,20 +2889,20 @@ function btRenderChart(equityCurve) {
       scales: {
         x: {
           ticks: {
-            color: '#4a5470',
+            color: tickColor,
             font: { family: "'Space Mono', monospace", size: 9 },
             maxTicksLimit: 10,
             maxRotation: 0,
           },
-          grid: { color: 'rgba(30,45,82,.4)' },
+          grid: { color: gridColor },
         },
         y: {
           ticks: {
-            color: '#4a5470',
+            color: tickColor,
             font: { family: "'Space Mono', monospace", size: 9 },
             callback: v => '$' + Number(v).toLocaleString(),
           },
-          grid: { color: 'rgba(30,45,82,.4)' },
+          grid: { color: gridColor },
         },
       },
     },

@@ -314,7 +314,8 @@ module.exports = async function handler(req, res) {
   // Accept params from query string (GET) or body (POST)
   const src = req.method === 'POST' ? (req.body || {}) : req.query;
 
-  const rawSym = String(src.symbol || '').replace(/[^A-Z0-9.\-]/g, '').slice(0, 10).toUpperCase();
+  // toUpperCase FIRST so lowercase input like "aapl" is accepted
+  const rawSym = String(src.symbol || '').toUpperCase().replace(/[^A-Z0-9.\-]/g, '').slice(0, 10);
   if (!rawSym) return res.status(400).json({ error: 'symbol is required' });
 
   const startDate = String(src.startDate || '').replace(/[^0-9\-]/g, '').slice(0, 10);
@@ -326,22 +327,40 @@ module.exports = async function handler(req, res) {
     return res.status(400).json({ error: 'strategy must be golden_cross, rsi_macd, or combined' });
   }
 
-  try {
-    const url = `https://api.polygon.io/v2/aggs/ticker/${rawSym}/range/1/day/${startDate}/${endDate}?adjusted=true&sort=asc&limit=500&apiKey=${key}`;
-    const data = await httpsGet(url);
+  console.log(`[backtest] Received request: ${rawSym} ${startDate} → ${endDate} strategy=${strategy}`);
 
-    if (!data.results || data.results.length < 50) {
-      return res.status(422).json({ error: `Insufficient data — need at least 50 bars, got ${data.results?.length ?? 0}. Widen the date range.` });
+  try {
+    // limit=5000 to handle multi-year date ranges (daily bars ~252/year)
+    const url = `https://api.polygon.io/v2/aggs/ticker/${rawSym}/range/1/day/${startDate}/${endDate}?adjusted=true&sort=asc&limit=5000&apiKey=${key}`;
+    console.log(`[backtest] Polygon URL: ${url.replace(key, 'REDACTED')}`);
+
+    const data = await httpsGet(url);
+    console.log(`[backtest] Polygon response status: ${data.status} resultsCount=${data.resultsCount ?? 0}`);
+    console.log(`[backtest] Raw bars received: ${data.results?.length ?? 0}`);
+
+    if (!data.results || data.results.length === 0) {
+      return res.status(422).json({
+        error: `No historical data found for ${rawSym} in this date range. Check the symbol and ensure the date range includes trading days.`,
+      });
+    }
+
+    if (data.results.length < 50) {
+      return res.status(422).json({
+        error: `Insufficient data — need at least 50 bars, got ${data.results.length}. Widen the date range to at least 3 months.`,
+      });
     }
 
     const bars = data.results.map(b => ({
-      t: b.t,   // timestamp ms
-      o: b.o,
-      h: b.h,
-      l: b.l,
-      c: b.c,
-      v: b.v,
+      t: b.t, o: b.o, h: b.h, l: b.l, c: b.c, v: b.v,
     }));
+
+    // EMA200 requires at least 210 bars to produce any valid signals (200 warmup + buffer)
+    const needsEMA200 = strategy === 'golden_cross' || strategy === 'combined';
+    if (needsEMA200 && bars.length < 210) {
+      return res.status(422).json({
+        error: `Not enough historical data — ${bars.length} bars found but EMA200 needs at least 210. Select a longer date range (minimum ~1 year).`,
+      });
+    }
 
     let trades;
     if (strategy === 'golden_cross') {
@@ -351,6 +370,8 @@ module.exports = async function handler(req, res) {
     } else {
       trades = simulateCombined(bars);
     }
+
+    console.log(`[backtest] Trades generated: ${trades.length}`);
 
     // Tag each trade with symbol + strategy
     trades = trades.map(t => ({ symbol: rawSym, strategy, ...t }));
