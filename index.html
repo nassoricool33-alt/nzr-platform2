@@ -335,6 +335,14 @@ nav{position:sticky;top:0;z-index:200;backdrop-filter:blur(24px);-webkit-backdro
 .earnings-impact.low{background:rgba(0,0,0,.05);color:var(--text3)}
 .earnings-est{color:var(--text);font-weight:500;font-family:var(--font-mono);font-size:12px}
 
+/* ─── ECON CALENDAR ────────────────────────────────── */
+.econ-impact-high{font-family:var(--font-mono);font-size:9px;padding:2px 8px;border-radius:99px;letter-spacing:.5px;background:var(--red-dim);color:var(--red);border:1px solid rgba(192,24,42,.2)}
+.econ-impact-med{font-family:var(--font-mono);font-size:9px;padding:2px 8px;border-radius:99px;letter-spacing:.5px;background:rgba(200,112,42,.1);color:#c8702a;border:1px solid rgba(200,112,42,.2)}
+.econ-impact-low{font-family:var(--font-mono);font-size:9px;padding:2px 8px;border-radius:99px;letter-spacing:.5px;background:rgba(0,0,0,.05);color:var(--text3);border:1px solid var(--border)}
+.econ-filter-btn{background:none;border:1px solid var(--border);border-radius:99px;padding:4px 12px;font-family:var(--font-mono);font-size:10px;color:var(--text2);cursor:pointer;transition:all .15s;letter-spacing:.5px}
+.econ-filter-btn:hover{border-color:var(--border2);color:var(--text)}
+.econ-filter-btn.active{background:var(--gold-dim);border-color:rgba(200,150,12,.4);color:var(--gold)}
+
 /* ─── AI CHAT ──────────────────────────────────────── */
 .chat-layout{display:flex;flex-direction:column;height:calc(100vh - 200px);min-height:500px;max-height:800px;background:var(--panel);border:1px solid var(--border);border-radius:var(--radius-lg);overflow:hidden;box-shadow:var(--shadow)}
 .chat-header{padding:18px 24px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px;flex-shrink:0}
@@ -1339,35 +1347,87 @@ function buildSessions(){
     </div>`).join('');
 }
 
+/* ── ECONOMIC CALENDAR ──────────────────────────── */
+let econFilter='high';
+
+function normalizeImpact(val){
+  if(!val)return'low';
+  const v=String(val).toLowerCase();
+  if(v==='high'||v==='3')return'high';
+  if(v==='medium'||v==='med'||v==='2')return'medium';
+  return'low';
+}
+
+function renderEconTable(el,allItems){
+  const filtered=econFilter==='high'
+    ? allItems.filter(e=>normalizeImpact(e.impact)==='high')
+    : allItems;
+  const fmtDate=s=>{
+    if(!s)return'--';
+    const d=new Date(s);
+    return isNaN(d.getTime())?s:d.toLocaleDateString('en-US',{month:'short',day:'numeric'});
+  };
+  const fmtVal=(v,unit)=>{
+    if(v==null||v==='')return'--';
+    return Number(v).toFixed(2)+(unit&&unit!=='%'?' '+unit:unit||'');
+  };
+  el.innerHTML=`
+    <div style="padding:14px 20px 12px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--border);flex-wrap:wrap;gap:8px">
+      <div style="font-family:var(--font-mono);font-size:10px;color:var(--text3);letter-spacing:.3px">${filtered.length} event${filtered.length!==1?'s':''} · next 30 days · US macro</div>
+      <div style="display:flex;gap:6px">
+        <button class="econ-filter-btn${econFilter==='high'?' active':''}" onclick="setEconFilter('high')">HIGH ONLY</button>
+        <button class="econ-filter-btn${econFilter==='all'?' active':''}" onclick="setEconFilter('all')">ALL IMPACT</button>
+      </div>
+    </div>
+    <div style="overflow-x:auto">
+    <table class="earnings-table">
+      <thead><tr><th>Date</th><th>Event</th><th>Country</th><th>Impact</th><th>Actual</th><th>Forecast</th><th>Previous</th></tr></thead>
+      <tbody>${filtered.length?filtered.map(e=>{
+        const imp=normalizeImpact(e.impact);
+        const badgeCls=imp==='high'?'econ-impact-high':imp==='medium'?'econ-impact-med':'econ-impact-low';
+        const badgeTxt=imp==='high'?'HIGH':imp==='medium'?'MED':'LOW';
+        return`<tr>
+          <td style="font-family:var(--font-mono);font-size:11px;color:var(--text3);white-space:nowrap">${fmtDate(e.time)}</td>
+          <td style="min-width:220px;font-size:13px">${e.event||'--'}</td>
+          <td style="font-family:var(--font-mono);font-size:11px;color:var(--text2)">${e.country||'--'}</td>
+          <td><span class="${badgeCls}">${badgeTxt}</span></td>
+          <td style="font-family:var(--font-mono);font-size:12px;color:var(--text)">${fmtVal(e.actual,e.unit)}</td>
+          <td style="font-family:var(--font-mono);font-size:12px;color:var(--text2)">${fmtVal(e.estimate,e.unit)}</td>
+          <td style="font-family:var(--font-mono);font-size:12px;color:var(--text3)">${fmtVal(e.prev,e.unit)}</td>
+        </tr>`;}).join(''):`<tr><td colspan="7" style="text-align:center;padding:28px;font-family:var(--font-mono);font-size:11px;color:var(--text3)">No ${econFilter==='high'?'high-impact ':''}US macro events found in the next 30 days.</td></tr>`}
+      </tbody>
+    </table>
+    </div>`;
+}
+
+function setEconFilter(filter){
+  econFilter=filter;
+  const el=document.getElementById('econ-calendar');
+  if(el&&el._econData)renderEconTable(el,el._econData);
+}
+
 async function buildEconCalendar(){
   const el=document.getElementById('econ-calendar');
+  if(!el)return;
+  el.innerHTML=`<div style="padding:28px;text-align:center;font-family:var(--font-mono);font-size:11px;color:var(--text3)">Loading economic calendar…</div>`;
   try{
     const today=new Date();
     const from=today.toISOString().split('T')[0];
-    const to=new Date(today.getTime()+14*86400000).toISOString().split('T')[0];
-    const r=await fetch('/api/news?type=earnings&from='+from+'&to='+to);
+    const to=new Date(today.getTime()+30*86400000).toISOString().split('T')[0];
+    const r=await fetch('/api/news?type=economic&from='+from+'&to='+to);
     if(!r.ok)throw new Error('fetch failed');
     const data=await r.json();
-    const items=(data.earningsCalendar||[])
-      .filter(e=>e.symbol&&e.date)
-      .slice(0,12);
+    const items=(data.economicCalendar||[])
+      .filter(e=>e.event&&e.country)
+      .sort((a,b)=>new Date(a.time||0)-new Date(b.time||0));
     if(!items.length)throw new Error('empty');
-    el.innerHTML=`<table class="earnings-table">
-      <thead><tr><th>Date</th><th>Ticker</th><th>Company</th><th>Time</th><th>Est. EPS</th></tr></thead>
-      <tbody>${items.map(e=>`
-        <tr>
-          <td style="font-family:var(--font-mono);font-size:12px;color:var(--text3)">${e.date}</td>
-          <td><span class="earnings-sym">${e.symbol}</span></td>
-          <td style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${e.name||'--'}</td>
-          <td style="font-family:var(--font-mono);font-size:11px;color:var(--text3)">${e.hour==='bmo'?'Pre-Market':e.hour==='amc'?'After Close':'--'}</td>
-          <td><span class="earnings-est">${e.epsEstimate!=null?'$'+Number(e.epsEstimate).toFixed(2):'--'}</span></td>
-        </tr>`).join('')}
-      </tbody></table>`;
+    el._econData=items;
+    renderEconTable(el,items);
   }catch{
     el.innerHTML=`<div class="empty-state" style="padding:36px 24px">
       <div class="empty-icon">📅</div>
-      <div class="empty-title">No high-impact events found for this week</div>
-      <div class="empty-desc">The earnings calendar is currently unavailable. Check back during market hours.</div>
+      <div class="empty-title">Economic calendar unavailable</div>
+      <div class="empty-desc">Macro event data could not be loaded. Check back during market hours.</div>
     </div>`;
   }
 }

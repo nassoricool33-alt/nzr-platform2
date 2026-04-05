@@ -35,6 +35,13 @@ module.exports = async function handler(req, res) {
         'https://finnhub.io/api/v1/calendar/earnings?from=' + from + '&to=' + to + '&token=' + key
       );
       return res.status(200).json(data);
+    } else if (type === 'economic') {
+      const from = (req.query.from || new Date().toISOString().split('T')[0]);
+      const to   = (req.query.to   || new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0]);
+      const data = await httpsGet(
+        'https://finnhub.io/api/v1/calendar/economic?from=' + from + '&to=' + to + '&token=' + key
+      );
+      return res.status(200).json(data);
     } else {
       // General market news
       const data = await httpsGet(
