@@ -958,7 +958,7 @@ footer{border-top:1px solid var(--border);padding:32px 0;margin-top:80px}
     <table class="earnings-table" id="earnings-table">
       <thead>
         <tr>
-          <th>Date</th><th>Ticker</th><th>Company</th><th>Time</th><th>Est. EPS</th><th>Impact</th>
+          <th>Date</th><th>Ticker</th><th>Period</th><th>Revenue</th><th>Net Income</th><th>EPS</th>
         </tr>
       </thead>
       <tbody id="earnings-tbody"></tbody>
@@ -1085,7 +1085,7 @@ async function loadQuote(sym){
     if(!r.ok)return null;
     const d=await r.json();
     if(d.error||!d.price)return null;
-    Q[sym]={price:d.price,change:d.change,up:d.change>=0,prevClose:d.prevClose};
+    Q[sym]={price:d.price,change:d.changePercent??d.change,up:(d.changePercent??d.change)>=0,prevClose:d.prevClose,open:d.open,high:d.high,low:d.low,volume:d.volume};
     return Q[sym];
   }catch{return null;}
 }
@@ -1120,7 +1120,7 @@ function updateMarketStatus(){
 const ALL_SYMS=['SPY','QQQ','DIA','IWM','AAPL','NVDA','TSLA','AMZN','MSFT','META','GOOGL','AMD','NFLX','JPM','GLD','V','UNH','XOM','JNJ','WMT','MA','PG','HD','COST','ABBV','MRK','CVX','ADBE','CRM','PYPL','INTC','QCOM','TXN','GS','BAC','PFE','COP','SLB'];
 
 async function initAllData(){
-  // Fetch Finnhub quotes and VIX (Yahoo Finance proxy) in parallel
+  // Fetch Polygon quotes and VIX in parallel
   await Promise.allSettled([
     ...ALL_SYMS.map(s=>loadQuote(s)),
     loadVix(),
@@ -1271,19 +1271,26 @@ async function renderTopMoversPolygon(){
     const gainers=data.gainers||[];
     const losers=data.losers||[];
     if(!gainers.length&&!losers.length)throw new Error();
-    const row=(e,label)=>`
+    const row=(e,label)=>{
+      const pct=e.changePercent;
+      return`
       <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border)">
         <div style="display:flex;align-items:center;gap:10px">
           <span style="font-family:var(--font-mono);font-size:9px;padding:2px 6px;border-radius:3px;background:${label==='G'?'var(--green-dim)':'var(--red-dim)'};color:${label==='G'?'var(--green)':'var(--red)'};font-weight:700">${label==='G'?'▲':'▼'}</span>
           <span style="font-family:var(--font-mono);font-weight:700;font-size:12px;color:var(--gold);min-width:48px">${e.symbol}</span>
           <span style="font-family:var(--font-mono);font-size:12px;color:var(--text)">${e.price!=null?fmt$(e.price):'--'}</span>
         </div>
-        <span style="font-family:var(--font-mono);font-size:12px;font-weight:700;color:${label==='G'?'var(--green)':'var(--red)'}">${e.change!=null?(e.change>=0?'+':'')+e.change.toFixed(2)+'%':'--'}</span>
+        <span style="font-family:var(--font-mono);font-size:12px;font-weight:700;color:${label==='G'?'var(--green)':'var(--red)'}">${pct!=null?(pct>=0?'+':'')+pct.toFixed(2)+'%':'--'}</span>
       </div>`;
+    };
+    const ts=new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
     el.innerHTML='<div style="display:flex;flex-direction:column;padding:4px 0">'
       +gainers.map(e=>row(e,'G')).join('')
       +losers.map(e=>row(e,'L')).join('')
-      +'<div style="font-family:var(--font-mono);font-size:9px;color:var(--text3);padding-top:8px;letter-spacing:.3px">Data delayed · Polygon.io</div>'
+      +`<div style="display:flex;align-items:center;justify-content:space-between;padding-top:8px">
+          <div style="font-family:var(--font-mono);font-size:9px;color:var(--text3);letter-spacing:.3px">Last updated: ${ts}</div>
+          <span style="font-family:var(--font-mono);font-size:9px;padding:2px 8px;border-radius:99px;background:var(--green-dim);color:var(--green);border:1px solid rgba(0,229,155,.2)">● LIVE</span>
+        </div>`
       +'</div>';
   }catch{
     el.innerHTML=`<div class="empty-state">
@@ -1529,11 +1536,16 @@ async function buildNewsWidget(){
     const data=await r.json();
     const items=(data.news||[]).slice(0,5);
     if(!items.length)throw new Error('empty');
+    const ts=new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
     el.innerHTML=items.map(n=>`
       <a class="news-item" href="${n.url}" target="_blank" rel="noopener noreferrer">
         <div class="news-source">${n.source||'News'} · ${timeAgo(n.datetime)}</div>
         <div class="news-headline">${n.headline}</div>
-      </a>`).join('');
+      </a>`).join('')
+      +`<div style="display:flex;align-items:center;justify-content:space-between;padding-top:10px;margin-top:4px;border-top:1px solid var(--border)">
+          <span style="font-family:var(--font-mono);font-size:9px;color:var(--text3)">Polygon.io · ${ts}</span>
+          <span style="font-family:var(--font-mono);font-size:9px;padding:2px 8px;border-radius:99px;background:var(--green-dim);color:var(--green);border:1px solid rgba(0,229,155,.2)">● LIVE</span>
+        </div>`;
   }catch{
     el.innerHTML=`<div style="padding:12px 0;color:var(--text3);font-family:var(--font-mono);font-size:11px;text-align:center">
       News feed unavailable. Check back during market hours.
@@ -1596,7 +1608,8 @@ async function buildFlowTable(sym){
         <td>${fmtNum(f.open_interest)}</td>
         <td><span class="flow-tag block">IV ${f.implied_volatility!=null?f.implied_volatility+'%':'--'}</span></td>
       </tr>`).join('');
-    if(note)note.textContent='Live options data (delayed) · Polygon.io';
+    const ts=new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+    if(note)note.innerHTML=`<span style="font-family:var(--font-mono);font-size:9px;padding:2px 8px;border-radius:99px;background:var(--green-dim);color:var(--green);border:1px solid rgba(0,229,155,.2);margin-right:8px">● LIVE</span>Options data · Polygon.io · Last updated: ${ts}`;
   }catch{
     tbody.innerHTML=`<tr><td colspan="9"><div class="empty-state" style="padding:36px 0">
       <div class="empty-icon">📉</div>
@@ -1625,20 +1638,21 @@ async function buildEarnings(){
     const data=await r.json();
     const items=data.earnings||[];
     if(!items.length)throw new Error();
+    const ts=new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
     tbody.innerHTML=items.map(e=>`
       <tr>
         <td style="font-family:var(--font-mono);font-size:12px;color:var(--text3)">${e.date||'--'}</td>
         <td><span class="earnings-sym">${e.ticker||'--'}</span></td>
         <td style="font-family:var(--font-mono);font-size:11px;color:var(--text3)">${e.period||''}${e.year?' '+e.year:''}</td>
-        <td style="font-family:var(--font-mono);font-size:11px;color:var(--text3)">Filed</td>
         <td><span class="earnings-est">${fmtRevenue(e.revenue)}</span></td>
-        <td><span class="earnings-impact med">FILING</span></td>
+        <td style="font-family:var(--font-mono);font-size:12px;color:var(--text2)">${fmtRevenue(e.netIncome)}</td>
+        <td style="font-family:var(--font-mono);font-size:12px;color:var(--text)">${e.eps!=null?'$'+Number(e.eps).toFixed(2):'--'}</td>
       </tr>`).join('');
     const tbl=document.getElementById('earnings-table');
     if(tbl){
       const note=document.createElement('caption');
-      note.style.cssText='font-family:var(--font-mono);font-size:10px;color:var(--text3);padding:8px 16px;text-align:right;caption-side:bottom';
-      note.textContent='Recent financial filings (delayed) · Polygon.io';
+      note.style.cssText='font-family:var(--font-mono);font-size:10px;color:var(--text3);padding:8px 16px;text-align:right;caption-side:bottom;display:flex;align-items:center;justify-content:flex-end;gap:8px';
+      note.innerHTML=`<span style="font-family:var(--font-mono);font-size:9px;padding:2px 8px;border-radius:99px;background:var(--green-dim);color:var(--green);border:1px solid rgba(0,229,155,.2)">● LIVE</span> Financial filings · Polygon.io · Last updated: ${ts}`;
       tbl.appendChild(note);
     }
   }catch{
@@ -1835,8 +1849,8 @@ async function runAnalyze(){
   // ── Step 1: show data-fetch loading state
   panel.innerHTML=`<div class="result-loading"><div class="loading-ring"></div><div class="loading-label">Fetching live data for ${ticker}…</div></div>`;
 
-  // ── Step 2: fetch quote + indicators in parallel, failures are non-fatal
-  let qd=null, ind=null;
+  // ── Step 2: fetch quote + indicators + historical in parallel, failures non-fatal
+  let qd=null, ind=null, hist=null;
   await Promise.allSettled([
     fetch('/api/quote?symbol='+ticker)
       .then(r=>r.ok?r.json():Promise.reject())
@@ -1846,14 +1860,18 @@ async function runAnalyze(){
       .then(r=>r.ok?r.json():Promise.reject())
       .then(d=>{if(d&&d.rsi&&!d.error)ind=d;})
       .catch(()=>{}),
+    fetch('/api/polygon?type=historical&symbol='+ticker+'&timeframe=1D')
+      .then(r=>r.ok?r.json():Promise.reject())
+      .then(d=>{if(d&&d.bars&&d.bars.length)hist=d;})
+      .catch(()=>{}),
   ]);
 
   // ── Step 3: determine data quality
-  const dqLevel = qd&&ind?'full':qd?'partial':'limited';
+  const dqLevel = (qd&&ind&&hist)?'full':qd?'partial':'limited';
   const dqLabel = dqLevel==='full'
-    ? '● Live data — full accuracy'
+    ? '● Full live data'
     : dqLevel==='partial'
-    ? '◑ Partial data — indicators delayed'
+    ? '◑ Partial data — some indicators unavailable'
     : '○ Limited data — analysis may be less accurate';
 
   // ── Step 4: update loading label with quality status
@@ -1865,37 +1883,50 @@ async function runAnalyze(){
 
   // ── Step 5: build enriched prompt
   const p2=(v,d=2)=>v!=null&&!isNaN(v)?Number(v).toFixed(d):'N/A';
+  const fetchedAt=new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
 
   const priceSection=qd
-    ?`Price Data:
+    ?`Price Data (fetched ${fetchedAt} ET):
 - Current Price: $${p2(qd.price)}
-- Change: ${p2(qd.change)}%
+- Change: ${p2(qd.changePercent??qd.change)}%
 - Today High: $${p2(qd.high)} | Low: $${p2(qd.low)}
-- Open: $${p2(qd.open)} | Prev Close: $${p2(qd.prevClose)}`
+- Open: $${p2(qd.open)} | Prev Close: $${p2(qd.prevClose)}
+- Volume: ${qd.volume!=null?Number(qd.volume).toLocaleString():'N/A'}`
     :`Price Data: unavailable — use general knowledge of typical price levels for this stock`;
 
+  let gcLine='';
+  if(ind&&ind.golden_cross){gcLine=`\n- SMA Cross: ${ind.golden_cross.signal} (SMA50: $${p2(ind.golden_cross.sma50)} / SMA200: $${p2(ind.golden_cross.sma200)})`;}
+
   const indSection=ind
-    ?`Technical Indicators:
+    ?`Technical Indicators (Polygon.io):
 - RSI (14): ${p2(ind.rsi.value)} — ${ind.rsi.signal}
 - MACD: ${p2(ind.macd.macd,4)} | Signal: ${p2(ind.macd.signal,4)} | Histogram: ${p2(ind.macd.histogram,4)} — ${ind.macd.signal_label}
-- Bollinger Bands: Upper $${p2(ind.bbands.upper)} | Mid $${p2(ind.bbands.middle)} | Lower $${p2(ind.bbands.lower)}${ind.golden_cross?`\n- SMA Cross: ${ind.golden_cross.signal} (SMA50: $${p2(ind.golden_cross.sma50)} / SMA200: $${p2(ind.golden_cross.sma200)})`:''}`
-    :`Technical Indicators: unavailable — ${qd?'Alpha Vantage rate limit reached or market closed':'no data could be fetched'}. Derive signals from price action only.`;
+- EMA20: $${p2(ind.ema20)} | SMA50: $${p2(ind.sma50)} | SMA200: $${p2(ind.sma200)}${gcLine}`
+    :`Technical Indicators: unavailable — ${qd?'indicator service unavailable or market closed':'no data could be fetched'}. Derive signals from price action only.`;
+
+  let histLine='';
+  if(hist&&hist.bars.length>=2){
+    const last=hist.bars[hist.bars.length-1];
+    const prev=hist.bars[hist.bars.length-2];
+    const dayChg=prev.c?((last.c-prev.c)/prev.c*100):null;
+    histLine=`\nRecent Daily Price Action: Close $${p2(last.c)}, ${dayChg!=null?(dayChg>=0?'+':'')+dayChg.toFixed(2)+'% from prior session':''}, ${hist.bars.length} trading days of data available.`;
+  }
 
   const missingNote=(!qd||!ind)
     ?`\nNote: ${!qd?'Price data is unavailable. ':''}${!ind?'Technical indicators are unavailable.':''} Acknowledge missing data in your analysis.`
     :'';
 
-  const prompt=`Analyze ${ticker} based on this LIVE real-time data:
+  const prompt=`Analyze ${ticker} based on this LIVE real-time data from Polygon.io:
 
 ${priceSection}
 
-${indSection}
+${indSection}${histLine}
 ${missingNote}
 Timeframe selected: ${tfLabels[activeTf]}
 
 Based ONLY on this real data, provide:
 1. Market bias (Bullish/Bearish/Neutral) with confidence %
-2. Key support and resistance levels derived from the Bollinger Bands and price action
+2. Key support and resistance levels derived from the moving averages and price action
 3. Specific entry price, target price, and stop loss based on the real current price
 4. Risk/reward ratio
 5. NZR Score out of 100 based on the technical setup
@@ -1904,7 +1935,7 @@ Based ONLY on this real data, provide:
 Be specific with real numbers. Do not guess or use generic statements.
 
 Return ONLY raw JSON, no markdown, no backticks:
-{"valid":true,"ticker":"${ticker}","company":"Full company name","timeframe":"${tfLabels[activeTf]}","signals":{"trend":"Bullish or Bearish or Neutral","momentum":"Strong or Moderate or Weak","volume":"High or Average or Low","risk":"High or Medium or Low"},"nzrScore":85,"entry":"specific entry price based on real data","target":"specific price target with number","stop":"specific stop loss price with number","summary":"4 sentences using real data: (1) current technical picture with actual indicator readings, (2) key price levels from BBands/price data, (3) catalysts or risks, (4) trade thesis for this timeframe.","indicators":"Exact indicator readings provided: RSI value, MACD direction, BBand position.","bestFor":"type of trader","edge":"one specific reason using the real data above"}
+{"valid":true,"ticker":"${ticker}","company":"Full company name","timeframe":"${tfLabels[activeTf]}","signals":{"trend":"Bullish or Bearish or Neutral","momentum":"Strong or Moderate or Weak","volume":"High or Average or Low","risk":"High or Medium or Low"},"nzrScore":85,"entry":"specific entry price based on real data","target":"specific price target with number","stop":"specific stop loss price with number","summary":"4 sentences using real data: (1) current technical picture with actual indicator readings, (2) key price levels from MAs/price data, (3) catalysts or risks, (4) trade thesis for this timeframe.","indicators":"Exact indicator readings: RSI value, MACD direction, EMA20/SMA50/SMA200 levels, golden/death cross status.","bestFor":"type of trader","edge":"one specific reason using the real data above"}
 
 If invalid ticker: {"valid":false,"error":"reason"}
 nzrScore must be 0-100, derived directly from the indicator readings above, not a guess.`;
@@ -1939,16 +1970,18 @@ nzrScore must be 0-100, derived directly from the indicator readings above, not 
     const arr=r.signals.trend==='Bullish'?'↑':r.signals.trend==='Bearish'?'↓':'→';
     const circumference=2*Math.PI*26;
     const offset=circumference*(1-score/100);
+    const chg=qd?.changePercent??qd?.change;
 
-    // Build live data snapshot block (shown only when data was fetched)
+    // Build live data snapshot block
     const liveBlock=qd?`
       <div class="live-data-block">
         <div class="live-data-item"><span class="live-data-lbl">Price</span><span class="live-data-val">$${p2(qd.price)}</span></div>
-        <div class="live-data-item"><span class="live-data-lbl">Change</span><span class="live-data-val" style="color:${qd.change>=0?'var(--green)':'var(--red)'}">${qd.change>=0?'+':''}${p2(qd.change)}%</span></div>
-        <div class="live-data-item"><span class="live-data-lbl">High / Low</span><span class="live-data-val">${p2(qd.high)} / ${p2(qd.low)}</span></div>
+        <div class="live-data-item"><span class="live-data-lbl">Change</span><span class="live-data-val" style="color:${(chg??0)>=0?'var(--green)':'var(--red)'}">${(chg??0)>=0?'+':''}${p2(chg)}%</span></div>
+        <div class="live-data-item"><span class="live-data-lbl">High / Low</span><span class="live-data-val">$${p2(qd.high)} / $${p2(qd.low)}</span></div>
         ${ind?`<div class="live-data-item"><span class="live-data-lbl">RSI (14)</span><span class="live-data-val">${p2(ind.rsi.value)} · ${ind.rsi.signal}</span></div>
         <div class="live-data-item"><span class="live-data-lbl">MACD</span><span class="live-data-val" style="color:${ind.macd.signal_label==='Bullish'?'var(--green)':'var(--red)'}">${ind.macd.signal_label}</span></div>
-        <div class="live-data-item"><span class="live-data-lbl">BB Mid</span><span class="live-data-val">$${p2(ind.bbands.middle)}</span></div>`:''}
+        <div class="live-data-item"><span class="live-data-lbl">EMA20</span><span class="live-data-val">$${p2(ind.ema20)}</span></div>`:''}
+        <div class="live-data-item" style="grid-column:1/-1"><span class="live-data-lbl">Data fetched</span><span class="live-data-val" style="font-size:10px">${fetchedAt} ET · Polygon.io</span></div>
       </div>`:'';
 
     panel.innerHTML=`<div class="result-content">
@@ -2285,10 +2318,96 @@ function buildScreener(){
   }).join('');
 }
 
+/* ── WEBSOCKET REAL-TIME PRICE STREAMING ─────────── */
+// Tickers to subscribe to for real-time trade updates
+const WS_TICKERS=['AAPL','NVDA','TSLA','SPY','QQQ'];
+let _wsConn=null, _wsReconnectTimer=null, _wsToken=null;
+
+// Refresh UI elements that display live price for a symbol
+function wsUpdateSymbol(sym,price,ts){
+  if(!Q[sym])Q[sym]={price,change:0,up:true};
+  const prev=Q[sym].prevClose;
+  Q[sym].price=price;
+  if(prev){
+    Q[sym].change=((price-prev)/prev)*100;
+    Q[sym].up=price>=prev;
+  }
+  // Update ticker tape items in-place
+  const track=document.getElementById('ticker-track');
+  if(track){
+    track.querySelectorAll('.ticker-item').forEach(el=>{
+      const symEl=el.querySelector('.ticker-sym');
+      if(symEl&&symEl.textContent===sym){
+        const priceEl=el.querySelector('.ticker-price');
+        const chgEl=el.querySelector('.ticker-chg');
+        if(priceEl)priceEl.textContent=fmt$(price);
+        if(chgEl&&prev){
+          const pct=((price-prev)/prev)*100;
+          chgEl.textContent=fmtChg(pct);
+          chgEl.className='ticker-chg '+(pct>=0?'up':'dn');
+        }
+      }
+    });
+  }
+  // Update index bar
+  renderIndicesLive();
+}
+
+async function wsConnect(){
+  if(_wsConn&&(_wsConn.readyState===WebSocket.OPEN||_wsConn.readyState===WebSocket.CONNECTING))return;
+  try{
+    if(!_wsToken){
+      const r=await fetch('/api/wstoken');
+      if(!r.ok)return;
+      const d=await r.json();
+      _wsToken=d.token;
+    }
+    const ws=new WebSocket('wss://socket.polygon.io/stocks');
+    _wsConn=ws;
+
+    ws.onopen=()=>{
+      ws.send(JSON.stringify({action:'auth',params:_wsToken}));
+    };
+
+    ws.onmessage=(e)=>{
+      try{
+        const msgs=JSON.parse(e.data);
+        msgs.forEach(m=>{
+          if(m.ev==='authenticated'){
+            // Subscribe to trades for watched tickers
+            ws.send(JSON.stringify({action:'subscribe',params:WS_TICKERS.map(t=>'T.'+t).join(',')}));
+          } else if(m.ev==='T'&&m.sym&&m.p!=null){
+            // Trade event: m.sym = symbol, m.p = price, m.t = timestamp ms
+            wsUpdateSymbol(m.sym,m.p,m.t);
+          }
+        });
+      }catch{}
+    };
+
+    ws.onerror=()=>{_wsToken=null;};
+    ws.onclose=()=>{
+      _wsConn=null;
+      // Reconnect after 10s
+      if(_wsReconnectTimer)clearTimeout(_wsReconnectTimer);
+      _wsReconnectTimer=setTimeout(wsConnect,10000);
+    };
+  }catch{}
+}
+
+// Start WebSocket when market is open; poll every 60s to check
+function initWebSocket(){
+  if(isMarketOpen()){wsConnect();}
+  setInterval(()=>{
+    if(isMarketOpen()){wsConnect();}
+    else if(_wsConn){_wsConn.close();_wsConn=null;}
+  },60000);
+}
+
 /* ── INIT ───────────────────────────────────────── */
 buildGuideCards();
 initSupabase();
 initAllData(); // fetches all live quotes then renders every data section
+initWebSocket(); // start WebSocket for real-time price streaming
 </script>
 </body>
 </html>

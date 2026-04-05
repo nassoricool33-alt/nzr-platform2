@@ -1,24 +1,24 @@
 const https = require('https');
 
+const ALLOWED_ORIGINS = ['https://nzr-platform2.vercel.app', 'http://localhost:3000'];
+
 const rateLimit = new Map();
 function checkRate(ip) {
   const now = Date.now(), w = 60000, max = 20;
-  if (!rateLimit.has(ip)) { rateLimit.set(ip, {c: 1, s: now}); return true; }
+  if (!rateLimit.has(ip)) { rateLimit.set(ip, { c: 1, s: now }); return true; }
   const e = rateLimit.get(ip);
-  if (now - e.s > w) { rateLimit.set(ip, {c: 1, s: now}); return true; }
+  if (now - e.s > w) { rateLimit.set(ip, { c: 1, s: now }); return true; }
   if (e.c >= max) return false;
   e.c++;
   return true;
 }
 
-const ALLOWED_ORIGINS = ['https://nzr-platform2.vercel.app', 'http://localhost:3000'];
-
-function fetchAV(path) {
+function httpsGet(url) {
   return new Promise((resolve, reject) => {
-    https.get('https://www.alphavantage.co/query?' + path, (r) => {
+    https.get(url, (r) => {
       let d = '';
       r.on('data', c => d += c);
-      r.on('end', () => { try { resolve(JSON.parse(d)); } catch (e) { reject(e); } });
+      r.on('end', () => { try { resolve(JSON.parse(d)); } catch (e) { reject(new Error('Invalid JSON')); } });
     }).on('error', reject);
   });
 }
@@ -28,86 +28,93 @@ module.exports = async function handler(req, res) {
   if (ALLOWED_ORIGINS.includes(origin)) {
     res.setHeader('Access-Control-Allow-Origin', origin);
   }
-  res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+
   if (req.method === 'OPTIONS') return res.status(200).end();
-  if (req.method !== 'GET') return res.status(405).json({error: 'Method not allowed'});
+  if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
-  const ip = req.headers['x-forwarded-for'] || 'unknown';
-  if (!checkRate(ip)) return res.status(429).json({error: 'Too many requests'});
+  const ip = req.headers['x-forwarded-for'] || req.socket?.remoteAddress || 'unknown';
+  if (!checkRate(ip)) return res.status(429).json({ error: 'Too many requests' });
 
-  const key = process.env.ALPHA_VANTAGE_KEY;
-  if (!key) return res.status(500).json({error: 'Not configured'});
+  const key = process.env.POLYGON_API_KEY;
+  if (!key) return res.status(500).json({ error: 'Not configured' });
 
   const symbol = (req.query.symbol || '').replace(/[^A-Z0-9.\-]/g, '').slice(0, 10).toUpperCase();
-  if (!symbol) return res.status(400).json({error: 'Symbol required'});
+  if (!symbol) return res.status(400).json({ error: 'Symbol required' });
+
+  const base = `https://api.polygon.io/v1/indicators`;
+  const common = `timespan=day&adjusted=true&series_type=close&order=desc&limit=2&apiKey=${key}`;
 
   try {
-    const [rsiData, macdData, bbandsData, sma50Data, sma200Data] = await Promise.all([
-      fetchAV('function=RSI&symbol=' + symbol + '&interval=daily&time_period=14&series_type=close&apikey=' + key),
-      fetchAV('function=MACD&symbol=' + symbol + '&interval=daily&series_type=close&apikey=' + key),
-      fetchAV('function=BBANDS&symbol=' + symbol + '&interval=daily&time_period=20&series_type=close&apikey=' + key),
-      fetchAV('function=SMA&symbol=' + symbol + '&interval=daily&time_period=50&series_type=close&apikey=' + key),
-      fetchAV('function=SMA&symbol=' + symbol + '&interval=daily&time_period=200&series_type=close&apikey=' + key),
+    const [rsiRes, macdRes, sma50Res, sma200Res, ema20Res] = await Promise.allSettled([
+      httpsGet(`${base}/rsi/${symbol}?${common}&window=14`),
+      httpsGet(`${base}/macd/${symbol}?${common}&short_window=12&long_window=26&signal_window=9`),
+      httpsGet(`${base}/sma/${symbol}?${common}&window=50`),
+      httpsGet(`${base}/sma/${symbol}?${common}&window=200`),
+      httpsGet(`${base}/ema/${symbol}?${common}&window=20`),
     ]);
 
-    if (rsiData.Note || rsiData.Information || macdData.Note || macdData.Information || bbandsData.Note || bbandsData.Information || sma50Data.Note || sma50Data.Information || sma200Data.Note || sma200Data.Information) {
-      return res.status(429).json({error: 'Alpha Vantage rate limit reached. Please wait and try again.'});
-    }
+    const get = (r) => r.status === 'fulfilled' ? r.value : null;
+    const rsiData   = get(rsiRes);
+    const macdData  = get(macdRes);
+    const sma50Data = get(sma50Res);
+    const sma200Data= get(sma200Res);
+    const ema20Data = get(ema20Res);
 
-    const rsiSeries = rsiData['Technical Analysis: RSI'];
-    if (!rsiSeries) return res.status(502).json({error: 'RSI data unavailable'});
-    const rsiDate = Object.keys(rsiSeries)[0];
-    const rsiVal = parseFloat(rsiSeries[rsiDate]['RSI']);
+    // RSI
+    const rsiResults = rsiData?.results?.values;
+    if (!rsiResults?.length) return res.status(502).json({ error: 'RSI data unavailable' });
+    const rsiVal = rsiResults[0].value;
     const rsiSignal = rsiVal >= 70 ? 'Overbought' : rsiVal <= 30 ? 'Oversold' : 'Neutral';
 
-    const macdSeries = macdData['Technical Analysis: MACD'];
-    if (!macdSeries) return res.status(502).json({error: 'MACD data unavailable'});
-    const macdDate = Object.keys(macdSeries)[0];
-    const macdEntry = macdSeries[macdDate];
-    const macdVal = parseFloat(macdEntry['MACD']);
-    const macdSignalVal = parseFloat(macdEntry['MACD_Signal']);
-    const macdHist = parseFloat(macdEntry['MACD_Hist']);
-    const macdLabel = macdHist >= 0 ? 'Bullish' : 'Bearish';
+    // MACD
+    const macdResults = macdData?.results?.values;
+    if (!macdResults?.length) return res.status(502).json({ error: 'MACD data unavailable' });
+    const macdEntry   = macdResults[0];
+    const macdVal     = macdEntry.value;
+    const macdSignal  = macdEntry.signal;
+    const macdHist    = macdEntry.histogram;
+    const macdLabel   = macdHist >= 0 ? 'Bullish' : 'Bearish';
 
-    const bbSeries = bbandsData['Technical Analysis: BBANDS'];
-    if (!bbSeries) return res.status(502).json({error: 'Bollinger Bands data unavailable'});
-    const bbDate = Object.keys(bbSeries)[0];
-    const bbEntry = bbSeries[bbDate];
-    const bbUpper = parseFloat(bbEntry['Real Upper Band']);
-    const bbMiddle = parseFloat(bbEntry['Real Middle Band']);
-    const bbLower = parseFloat(bbEntry['Real Lower Band']);
-
-    const sma50Series = sma50Data['Technical Analysis: SMA'];
-    const sma200Series = sma200Data['Technical Analysis: SMA'];
+    // SMA50 & SMA200 (golden/death cross)
+    const sma50Values  = sma50Data?.results?.values;
+    const sma200Values = sma200Data?.results?.values;
     let goldenCross = null;
-    if (sma50Series && sma200Series) {
-      const sma50Keys = Object.keys(sma50Series);
-      const sma200Keys = Object.keys(sma200Series);
-      const sma50Now = parseFloat(sma50Series[sma50Keys[0]]['SMA']);
-      const sma200Now = parseFloat(sma200Series[sma200Keys[0]]['SMA']);
-      const sma50Prev = sma50Keys[1] ? parseFloat(sma50Series[sma50Keys[1]]['SMA']) : null;
-      const sma200Prev = sma200Keys[1] ? parseFloat(sma200Series[sma200Keys[1]]['SMA']) : null;
-      // Detect fresh crossover: lines swapped sides between yesterday and today
-      const crossedGolden = sma50Prev !== null && sma200Prev !== null && sma50Prev <= sma200Prev && sma50Now > sma200Now;
-      const crossedDeath  = sma50Prev !== null && sma200Prev !== null && sma50Prev >= sma200Prev && sma50Now < sma200Now;
+    if (sma50Values?.length && sma200Values?.length) {
+      const sma50Now  = sma50Values[0].value;
+      const sma200Now = sma200Values[0].value;
+      const sma50Prev  = sma50Values[1]?.value ?? null;
+      const sma200Prev = sma200Values[1]?.value ?? null;
       let signal;
-      if (crossedGolden)      signal = 'Golden Cross';
-      else if (crossedDeath)  signal = 'Death Cross';
-      else if (sma50Now > sma200Now) signal = 'Golden Cross';
-      else                           signal = 'Death Cross';
-      goldenCross = {sma50: sma50Now, sma200: sma200Now, signal};
+      if (sma50Prev !== null && sma200Prev !== null && sma50Prev <= sma200Prev && sma50Now > sma200Now) {
+        signal = 'Golden Cross';
+      } else if (sma50Prev !== null && sma200Prev !== null && sma50Prev >= sma200Prev && sma50Now < sma200Now) {
+        signal = 'Death Cross';
+      } else {
+        signal = sma50Now > sma200Now ? 'Golden Cross' : 'Death Cross';
+      }
+      goldenCross = { signal, sma50: sma50Now, sma200: sma200Now };
     }
+
+    // EMA20
+    const ema20Values = ema20Data?.results?.values;
+    const ema20 = ema20Values?.[0]?.value ?? null;
 
     return res.status(200).json({
       symbol,
-      date: rsiDate,
-      rsi: {value: rsiVal, signal: rsiSignal},
-      macd: {macd: macdVal, signal: macdSignalVal, histogram: macdHist, signal_label: macdLabel},
-      bbands: {upper: bbUpper, middle: bbMiddle, lower: bbLower},
+      rsi:         { value: rsiVal, signal: rsiSignal },
+      macd:        { macd: macdVal, signal: macdSignal, histogram: macdHist, signal_label: macdLabel },
+      sma50:       sma50Values?.[0]?.value ?? null,
+      sma200:      sma200Values?.[0]?.value ?? null,
+      ema20,
       golden_cross: goldenCross,
     });
-  } catch (e) {
-    return res.status(500).json({error: 'Failed to fetch indicators'});
+  } catch (err) {
+    console.error('[indicators]', symbol, err.message);
+    return res.status(500).json({ error: 'Indicators unavailable.' });
   }
 };
