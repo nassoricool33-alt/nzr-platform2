@@ -7,7 +7,10 @@
     "api/news.js":      { "memory": 256, "maxDuration": 10 },
     "api/vix.js":       { "memory": 128, "maxDuration": 10 },
     "api/feargreed.js": { "memory": 128, "maxDuration": 10 },
-    "api/wstoken.js":   { "memory": 128, "maxDuration": 5  }
+    "api/wstoken.js":   { "memory": 128, "maxDuration": 5  },
+    "api/bot.js":       { "memory": 256, "maxDuration": 10 },
+    "api/backtest.js":  { "memory": 512, "maxDuration": 30 },
+    "api/alpaca.js":    { "memory": 256, "maxDuration": 15 }
   },
   "headers": [
     {
