@@ -2647,9 +2647,17 @@ nzrScore must be 0-100. The EMA 60/200 cross is a high-weight signal: add +20 fo
       body:JSON.stringify({max_tokens:1000,messages:[{role:'user',content:prompt}]})
     });
     if(!resp.ok){
-      let errBody='';
-      try{const j=await resp.json();errBody=j.error||'';}catch{}
-      throw new Error(`Server error ${resp.status}${errBody?' — '+errBody:''}`);
+      const status=resp.status;
+      let errBody={};
+      try{errBody=await resp.json();}catch{}
+      let friendlyMsg;
+      if(status===429)      friendlyMsg='AI is busy — please wait 30 seconds and try again';
+      else if(status===503) friendlyMsg='AI service temporarily unavailable';
+      else if(status===500||status===529) friendlyMsg='AI service error — retrying automatically';
+      else                  friendlyMsg=`AI error ${status}${errBody.detail?' — '+errBody.detail:''}`;
+      const err=new Error(friendlyMsg);
+      err.status=status;
+      throw err;
     }
     const data=await resp.json();
     const raw=(data.content||[]).map(b=>b.text||'').join('').trim();
@@ -2775,10 +2783,18 @@ nzrScore must be 0-100. The EMA 60/200 cross is a high-weight signal: add +20 fo
     }
 
   }catch(err){
+    const isTimeout = err.name==='AbortError'||err.message.toLowerCase().includes('timeout');
+    const shouldRetry = err.status===500||err.status===529;
+    const displayMsg = isTimeout
+      ? 'Analysis timed out — try a shorter timeframe'
+      : err.message||'Unexpected error';
     panel.innerHTML=`<div style="padding:40px;text-align:center">
-      <div style="color:var(--red);font-family:var(--font-mono);font-size:12px;margin-bottom:8px">⚠ ${err.message}</div>
-      <div style="color:var(--text3);font-size:12px">Check your API configuration and try again.</div>
+      <div style="color:var(--red);font-family:var(--font-mono);font-size:13px;margin-bottom:10px">⚠ ${displayMsg}</div>
+      <div style="color:var(--text3);font-size:12px">${shouldRetry?'Retrying in 3 seconds…':'Check your API configuration and try again.'}</div>
     </div>`;
+    btn.disabled=false;
+    if(shouldRetry){setTimeout(()=>runAnalyze(),3000);}
+    return;
   }
   btn.disabled=false;
 }
@@ -3904,10 +3920,11 @@ async function pollStatus(){
 
   let aiOk = null;
   try{
-    const r = await fetch('/api/analyze', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({max_tokens:1,messages:[{role:'user',content:'ping'}]}) });
-    aiOk = r.status < 500;
+    const r = await fetch('/api/analyze'); // GET = health check, no Anthropic call
+    const d = await r.json();
+    aiOk = r.ok && d.configured === true;
   } catch{ aiOk = false; }
-  setStatusRow('st-anthropic', aiOk, aiOk ? 'Connected' : 'Error');
+  setStatusRow('st-anthropic', aiOk, aiOk ? 'Connected' : 'Not configured');
 
   let alpacaOk = null;
   try {
