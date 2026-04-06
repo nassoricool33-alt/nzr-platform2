@@ -1774,12 +1774,15 @@ function fmtChg(c){
 async function loadQuote(sym){
   try{
     const r=await fetch('/api/quote?symbol='+sym);
-    if(!r.ok)return null;
+    if(!r.ok){console.warn('[price] HTTP',r.status,'for',sym);return null;}
     const d=await r.json();
-    if(d.error||!d.price)return null;
-    Q[sym]={price:d.price,change:d.changePercent??d.change,up:(d.changePercent??d.change)>=0,prevClose:d.prevClose,open:d.open,high:d.high,low:d.low,volume:d.volume};
+    console.log('[price render]',sym,d);
+    if(d.error){console.warn('[price] API error for',sym,d.error);return null;}
+    if(d.price==null){console.warn('[price] null price for',sym);return null;}
+    const chg=d.changePercent??d.change??0;
+    Q[sym]={price:d.price,change:chg,up:chg>=0,prevClose:d.prevClose,open:d.open,high:d.high,low:d.low,volume:d.volume};
     return Q[sym];
-  }catch{return null;}
+  }catch(e){console.error('[price] fetch error for',sym,e);return null;}
 }
 
 function isMarketOpen() {
@@ -1852,6 +1855,7 @@ async function loadVix(){
 
 function renderIndicesLive(){
   const list=document.getElementById('indices-list');
+  if(!list){console.warn('[price] #indices-list not found');return;}
   list.innerHTML=INDEX_DEFS.map((d,i)=>{
     const q=Q[d.sym];
     const price=q?fmt$(q.price):'--';
@@ -1881,6 +1885,7 @@ const TICKER_SYMS=['SPY','QQQ','AAPL','NVDA','TSLA','AMZN','MSFT','META','GOOGL'
 
 function renderTickerLive(){
   const track=document.getElementById('ticker-track');
+  if(!track){console.warn('[price] #ticker-track not found');return;}
   const items=TICKER_SYMS.map(s=>{
     const q=Q[s];
     return{s,p:q?fmt$(q.price):'--',c:q?fmtChg(q.change):'--',up:q?q.up:true};

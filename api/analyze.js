@@ -1,4 +1,7 @@
 module.exports = async function handler(req, res) {
+  console.log('[analyze] env check - ANTHROPIC_API_KEY:', !!process.env.ANTHROPIC_API_KEY);
+  console.log('[analyze] method:', req.method);
+
   if (req.method === 'OPTIONS') {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
@@ -30,10 +33,14 @@ module.exports = async function handler(req, res) {
 
   console.log('[analyze] Request body:', JSON.stringify(req.body));
 
+  if (!req.body || !req.body.messages) {
+    return res.status(400).json({ error: 'Missing messages in request body' });
+  }
   const messages = Array.isArray(req.body.messages) ? req.body.messages : null;
   if (!messages || messages.length === 0) {
-    return res.status(400).json({ error: 'messages array is required' });
+    return res.status(400).json({ error: 'messages array is required and must not be empty' });
   }
+  console.log('[analyze] messages count:', messages.length, 'max_tokens:', req.body.max_tokens);
 
   const max_tokens = (req.body.max_tokens && Number.isInteger(req.body.max_tokens))
     ? Math.min(req.body.max_tokens, 2048)
@@ -67,12 +74,12 @@ module.exports = async function handler(req, res) {
     const data = await response.json();
 
     if (!response.ok) {
-      console.error('[analyze] Anthropic response:', response.status, JSON.stringify(data));
+      console.error('[analyze] Anthropic error:', response.status, JSON.stringify(data));
       return res.status(response.status).json({
-        error: data?.error?.message || 'AI analysis failed',
-        status: response.status,
+        error: 'Anthropic API error',
         detail: data?.error?.message,
         type: data?.error?.type,
+        status: response.status,
       });
     }
 
