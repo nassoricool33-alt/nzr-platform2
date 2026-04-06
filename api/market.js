@@ -65,34 +65,60 @@ function scoreToRating(score) {
 }
 
 async function handleFearGreed() {
+  // Try CNN endpoint with multiple extraction paths
   try {
     const data = await httpsGet(
       'https://production.dataviz.cnn.io/index/fearandgreed/graphdata',
       { headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' } }
     );
 
-    // API may return fear_and_greed.score as a number, or nested under .score.value
+    console.log('[feargreed] raw response:', JSON.stringify(data).slice(0, 500));
+
+    // Try all known extraction paths in order
     const fg = data?.fear_and_greed;
-    if (!fg) {
-      return { value: null, rating: 'Unavailable', error: 'Fear & Greed data unavailable' };
+    let rawScore =
+      fg?.score?.value                  ??  // nested object
+      (typeof fg?.score === 'number' ? fg.score : null) ??  // direct number
+      fg?.current_value                 ??  // alternate field
+      data?.score?.value                ??  // top-level score object
+      (Array.isArray(data) ? data[0]?.value : null) ?? // array response
+      null;
+
+    if (rawScore != null) {
+      const score = Math.round(Number(rawScore));
+      const rawRating = fg?.score?.description ?? fg?.rating ?? null;
+      const rating = rawRating
+        ? rawRating.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ')
+        : scoreToRating(score);
+      return { value: score, rating, timestamp: fg?.timestamp || null };
     }
 
-    const rawScore = fg.score?.value ?? fg.score ?? null;
-    if (rawScore == null) {
-      return { value: null, rating: 'Unavailable', error: 'Fear & Greed data unavailable' };
-    }
-
-    const score = Math.round(Number(rawScore));
-    const rawRating = fg.score?.description ?? fg.rating ?? null;
-    const rating = rawRating
-      ? rawRating.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ')
-      : scoreToRating(score);
-
-    return { value: score, rating, timestamp: fg.timestamp || null };
+    console.warn('[feargreed] no score found in CNN response, falling back to VIX estimate');
   } catch (err) {
-    console.error('[market/feargreed]', err.message);
-    return { value: null, rating: 'Unavailable', error: 'Fear & Greed data unavailable' };
+    console.error('[market/feargreed] CNN fetch error:', err.message);
   }
+
+  // VIX-based fallback
+  try {
+    const vixData = await httpsGet(
+      'https://query1.finance.yahoo.com/v8/finance/chart/%5EVIX?interval=1d&range=1d',
+      { headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' } }
+    );
+    const vix = vixData?.chart?.result?.[0]?.meta?.regularMarketPrice ?? null;
+    if (vix != null) {
+      let value, rating;
+      if (vix > 30)      { value = 20; rating = 'Extreme Fear'; }
+      else if (vix > 20) { value = 35; rating = 'Fear'; }
+      else if (vix > 15) { value = 50; rating = 'Neutral'; }
+      else if (vix > 12) { value = 65; rating = 'Greed'; }
+      else               { value = 80; rating = 'Extreme Greed'; }
+      return { value, rating, note: 'Estimated from VIX — CNN data unavailable', vix };
+    }
+  } catch (err) {
+    console.error('[market/feargreed] VIX fallback error:', err.message);
+  }
+
+  return { value: null, rating: 'Unavailable', error: 'Fear & Greed data unavailable' };
 }
 
 // ── type=wstoken ──────────────────────────────────────────────────────────────

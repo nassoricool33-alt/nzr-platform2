@@ -1326,15 +1326,14 @@ footer{border-top:1px solid var(--border);padding:32px 0;margin-top:80px}
             <th style="padding:10px 16px;text-align:left;color:var(--text3);font-weight:600;white-space:nowrap">Date</th>
             <th style="padding:10px 16px;text-align:left;color:var(--text3);font-weight:600">Ticker</th>
             <th style="padding:10px 16px;text-align:left;color:var(--text3);font-weight:600">Drug</th>
-            <th style="padding:10px 16px;text-align:left;color:var(--text3);font-weight:600">Type</th>
+            <th style="padding:10px 16px;text-align:left;color:var(--text3);font-weight:600">Phase</th>
             <th style="padding:10px 16px;text-align:left;color:var(--text3);font-weight:600">Indication</th>
             <th style="padding:10px 16px;text-align:left;color:var(--text3);font-weight:600">Days Away</th>
             <th style="padding:10px 16px;text-align:left;color:var(--text3);font-weight:600">Halal</th>
-            <th style="padding:10px 16px;text-align:left;color:var(--text3);font-weight:600">Catalyst</th>
           </tr>
         </thead>
         <tbody id="pharma-cal-tbody">
-          <tr><td colspan="8" style="padding:24px;text-align:center;color:var(--text3)">No data loaded</td></tr>
+          <tr><td colspan="7" style="padding:24px;text-align:center;color:var(--text3)">No data loaded</td></tr>
         </tbody>
       </table>
     </div>
@@ -1426,8 +1425,8 @@ footer{border-top:1px solid var(--border);padding:32px 0;margin-top:80px}
             <th style="padding:10px 16px;text-align:right;color:var(--text3);font-weight:600">Price</th>
             <th style="padding:10px 16px;text-align:right;color:var(--text3);font-weight:600">Change</th>
             <th style="padding:10px 16px;text-align:right;color:var(--text3);font-weight:600">Rel Vol</th>
-            <th style="padding:10px 16px;text-align:right;color:var(--text3);font-weight:600">RSI</th>
-            <th style="padding:10px 16px;text-align:right;color:var(--text3);font-weight:600">Squeeze Score</th>
+            <th style="padding:10px 16px;text-align:right;color:var(--text3);font-weight:600">Score</th>
+            <th style="padding:10px 16px;text-align:center;color:var(--text3);font-weight:600">Intensity</th>
             <th style="padding:10px 16px;text-align:left;color:var(--text3);font-weight:600">Halal</th>
           </tr>
         </thead>
@@ -1750,6 +1749,7 @@ function showPage(id){
     _pharmaLoaded=true;
     pharmaLoadCalendar();
     pharmaLoadScan();
+    pharmaLoadShorts();
   }
 }
 document.querySelectorAll('.nav-tab').forEach(t=>{
@@ -4396,36 +4396,56 @@ async function pharmaBotCheck() {
 }
 
 // ── Pharma: FDA Calendar ─────────────────────────────────────────
+function fdaFmtDate(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso + 'T12:00:00Z'); // noon UTC avoids timezone flip
+  if (isNaN(d)) return iso;
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+function fdaPhaseBadge(phase) {
+  if (!phase) return '—';
+  const p = phase.trim();
+  if (p === 'PDUFA')    return `<span style="font-size:10px;font-weight:600;padding:2px 7px;border-radius:4px;background:rgba(33,150,243,.15);color:#42a5f5;letter-spacing:.04em">PDUFA</span>`;
+  if (p === 'Phase 3')  return `<span style="font-size:10px;font-weight:600;padding:2px 7px;border-radius:4px;background:rgba(255,152,0,.15);color:#ff9800;letter-spacing:.04em">Phase 3</span>`;
+  if (p === 'Phase 2')  return `<span style="font-size:10px;font-weight:600;padding:2px 7px;border-radius:4px;background:rgba(255,235,59,.15);color:#ffd600;letter-spacing:.04em">Phase 2</span>`;
+  return `<span style="font-size:10px;font-weight:600;padding:2px 7px;border-radius:4px;background:rgba(100,100,100,.15);color:var(--text3)">${p}</span>`;
+}
 async function pharmaLoadCalendar() {
   const status = document.getElementById('pharma-cal-status');
   const tbody  = document.getElementById('pharma-cal-tbody');
   status.textContent = 'Loading...';
-  tbody.innerHTML = '<tr><td colspan="8" style="padding:24px;text-align:center;color:var(--text3)">Loading FDA calendar...</td></tr>';
+  tbody.innerHTML = '<tr><td colspan="7" style="padding:24px;text-align:center;color:var(--text3)">Loading PDUFA calendar...</td></tr>';
   try {
     const r = await fetch('/api/pharma?action=fda');
     const d = await r.json();
     if (!d.events?.length) {
-      tbody.innerHTML = '<tr><td colspan="8" style="padding:24px;text-align:center;color:var(--text3)">No events found</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="7" style="padding:24px;text-align:center;color:var(--text3)">No upcoming PDUFA events found</td></tr>';
       status.textContent = 'No events';
       return;
     }
     tbody.innerHTML = d.events.map(ev => {
-      const imminent = ev.catalystImminent;
-      const daysStr = ev.daysAway != null ? (ev.daysAway === 0 ? 'TODAY' : ev.daysAway + 'd') : '—';
-      return `<tr style="border-bottom:1px solid var(--border);${imminent ? 'background:rgba(255,152,0,.06)' : ''}">
-        <td style="padding:10px 16px;color:var(--text1);white-space:nowrap">${ev.date || '—'}</td>
-        <td style="padding:10px 16px;font-weight:600;color:var(--accent)">${ev.ticker || '—'}</td>
-        <td style="padding:10px 16px;color:var(--text2)">${ev.drug || '—'}</td>
-        <td style="padding:10px 16px;color:var(--text3)">${ev.type || '—'}</td>
-        <td style="padding:10px 16px;color:var(--text3);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${ev.indication || '—'}</td>
-        <td style="padding:10px 16px;text-align:center;font-weight:600;color:${imminent ? '#ff9800' : 'var(--text2)'}">${daysStr}</td>
+      const imminent = ev.catalystImminent; // daysAway <= 7
+      let daysStr;
+      if (ev.daysAway === 0)       daysStr = 'TODAY';
+      else if (ev.daysAway <= 7)   daysStr = ev.daysAway + ' days';
+      else if (ev.daysAway != null) daysStr = ev.daysAway + ' days';
+      else                          daysStr = '—';
+      const imminentBadge = imminent
+        ? `<span style="font-size:10px;font-weight:700;color:#ff9800;animation:pulse 1.2s infinite;letter-spacing:.06em">⚡ IMMINENT</span>`
+        : '';
+      return `<tr style="border-bottom:1px solid var(--border);${imminent ? 'background:rgba(255,152,0,.05)' : ''}">
+        <td style="padding:10px 16px;color:var(--text2);white-space:nowrap;font-family:var(--font-mono);font-size:12px">${fdaFmtDate(ev.date)}</td>
+        <td style="padding:10px 16px;font-family:var(--font-mono);font-weight:700;color:var(--gold)">${ev.ticker || '—'}</td>
+        <td style="padding:10px 16px;color:var(--text1)">${ev.drug || '—'}</td>
+        <td style="padding:10px 16px">${fdaPhaseBadge(ev.phase || ev.type)}</td>
+        <td style="padding:10px 16px;color:var(--text3);max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${ev.indication || '—'}</td>
+        <td style="padding:10px 16px;text-align:center;font-family:var(--font-mono);font-size:12px;font-weight:600;color:${imminent ? '#ff9800' : 'var(--text2)'}">${daysStr}${imminentBadge ? '<br>'+imminentBadge : ''}</td>
         <td style="padding:10px 16px">${pharmaHalalBadge(ev.halalStatus)}</td>
-        <td style="padding:10px 16px">${imminent ? '<span style="font-size:10px;font-weight:700;color:#ff9800;letter-spacing:.06em">⚡ IMMINENT</span>' : ''}</td>
       </tr>`;
     }).join('');
-    status.textContent = `${d.count} events loaded`;
+    status.textContent = `${d.count} upcoming events`;
   } catch(e) {
-    tbody.innerHTML = '<tr><td colspan="8" style="padding:24px;text-align:center;color:#ef5350">Error loading calendar</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="7" style="padding:24px;text-align:center;color:#ef5350">Error loading calendar</td></tr>';
     status.textContent = 'Error: ' + e.message;
   }
 }
@@ -4505,6 +4525,12 @@ async function pharmaAnalyzeSignal() {
 }
 
 // ── Pharma: Short Squeeze Scanner ────────────────────────────────
+let _shortsLastScan = null;
+function _shortsScoreColor(score) {
+  if (score > 60) return '#ef5350';
+  if (score >= 40) return '#ff9800';
+  return 'var(--text3)';
+}
 async function pharmaLoadShorts() {
   const status = document.getElementById('pharma-shorts-status');
   const tbody  = document.getElementById('pharma-shorts-tbody');
@@ -4513,29 +4539,51 @@ async function pharmaLoadShorts() {
   try {
     const r = await fetch('/api/pharma?action=shorts');
     const d = await r.json();
-    if (!d.candidates?.length) {
-      tbody.innerHTML = '<tr><td colspan="7" style="padding:24px;text-align:center;color:var(--text3)">No short squeeze candidates found today</td></tr>';
-      status.textContent = 'No candidates';
+    const candidates = d.candidates || [];
+    _shortsLastScan = { candidates, scannedAt: d.scannedAt };
+    const ts = d.scannedAt ? new Date(d.scannedAt).toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'}) : '';
+    const allLow = candidates.every(c => c.squeezeScore < 20);
+    if (allLow) {
+      tbody.innerHTML = '<tr><td colspan="7" style="padding:24px;text-align:center;color:var(--text3)">No squeeze candidates detected</td></tr>';
+      status.textContent = `Scanned ${candidates.length} symbols · ${ts}`;
       return;
     }
-    tbody.innerHTML = d.candidates.map(c => {
-      const chg = c.changePct ?? 0;
-      return `<tr style="border-bottom:1px solid var(--border)">
-        <td style="padding:10px 16px;font-weight:600;color:var(--accent)">${c.symbol}</td>
-        <td style="padding:10px 16px;text-align:right;color:var(--text1)">${pharmaFmt$(c.price)}</td>
-        <td style="padding:10px 16px;text-align:right;color:${chg >= 0 ? '#26a69a' : '#ef5350'};font-weight:600">${pharmaFmtPct(chg)}</td>
-        <td style="padding:10px 16px;text-align:right;color:#ff9800;font-weight:600">${c.relVolume ?? '—'}×</td>
-        <td style="padding:10px 16px;text-align:right;color:${c.rsi > 80 ? '#ef5350' : '#ff9800'}">${c.rsi?.toFixed(1) ?? '—'}</td>
-        <td style="padding:10px 16px;text-align:right;color:var(--text2)">${c.squeezeScore?.toFixed(2) ?? '—'}</td>
+    tbody.innerHTML = candidates.map(c => {
+      const chg   = c.changePct ?? 0;
+      const score = c.squeezeScore ?? 0;
+      const scoreColor = _shortsScoreColor(score);
+      const alertBadge = c.squeezeAlert
+        ? `<span style="font-size:10px;font-weight:700;padding:2px 7px;border-radius:4px;background:rgba(239,83,80,.15);color:#ef5350;margin-left:6px;animation:pulse 1s infinite">SQUEEZE ALERT</span>`
+        : '';
+      return `<tr style="border-bottom:1px solid var(--border);${c.squeezeAlert ? 'background:rgba(239,83,80,.04)' : ''}">
+        <td style="padding:10px 16px;font-family:var(--font-mono);font-weight:700;color:var(--gold)">${c.symbol}${alertBadge}</td>
+        <td style="padding:10px 16px;text-align:right;color:var(--text1);font-family:var(--font-mono)">${pharmaFmt$(c.price)}</td>
+        <td style="padding:10px 16px;text-align:right;font-family:var(--font-mono);font-weight:600;color:${chg >= 0 ? '#26a69a' : '#ef5350'}">${pharmaFmtPct(chg)}</td>
+        <td style="padding:10px 16px;text-align:right;font-family:var(--font-mono);font-weight:600;color:${c.relVolume >= 2 ? '#ff9800' : 'var(--text2)'}">${c.relVolume != null ? c.relVolume+'×' : '—'}</td>
+        <td style="padding:10px 16px;text-align:right;font-family:var(--font-mono);font-size:14px;font-weight:700;color:${scoreColor}">${score}</td>
+        <td style="padding:10px 16px;text-align:center">
+          <div style="width:60px;background:rgba(0,0,0,.1);border-radius:4px;height:6px;overflow:hidden;display:inline-block">
+            <div style="width:${Math.min(score,100)}%;height:100%;background:${scoreColor};border-radius:4px"></div>
+          </div>
+        </td>
         <td style="padding:10px 16px">${pharmaHalalBadge(c.halalStatus)}</td>
       </tr>`;
     }).join('');
-    status.textContent = `${d.count} candidate(s) · ${d.scannedAt?.slice(0,10) ?? ''}`;
+    const alertCount = candidates.filter(c => c.squeezeAlert).length;
+    status.textContent = `${candidates.length} symbols · ${alertCount} alert${alertCount !== 1 ? 's' : ''} · ${ts}`;
   } catch(e) {
-    tbody.innerHTML = '<tr><td colspan="7" style="padding:24px;text-align:center;color:#ef5350">Error scanning</td></tr>';
-    status.textContent = 'Error: ' + e.message;
+    // If market closed, show last scan results
+    if (_shortsLastScan) {
+      const ts = _shortsLastScan.scannedAt ? new Date(_shortsLastScan.scannedAt).toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'}) : '';
+      status.textContent = `Showing last scan · ${ts} (market may be closed)`;
+    } else {
+      tbody.innerHTML = '<tr><td colspan="7" style="padding:24px;text-align:center;color:#ef5350">Scan failed — market may be closed</td></tr>';
+      status.textContent = 'Error: ' + e.message;
+    }
   }
 }
+// Auto-scan every 5 minutes during market hours
+setInterval(() => { if (isMarketOpen() && _pharmaLoaded) pharmaLoadShorts(); }, 5 * 60 * 1000);
 
 // ── Pharma: Watchlist Scan ────────────────────────────────────────
 async function pharmaLoadScan() {
