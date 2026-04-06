@@ -3517,6 +3517,15 @@ function setStatusRow(id, ok, label){
   el.innerHTML = `<span class="status-dot-sm ${dotCls}"></span>${label}`;
 }
 
+function setAlpacaStatusRow(ok, label){
+  const el = document.getElementById('st-alpaca');
+  if(!el) return;
+  const dotCls  = ok === null ? 'loading' : ok ? 'ok' : 'err';
+  const txtColor = ok ? 'var(--green)' : ok === null ? '' : 'var(--red)';
+  const style    = txtColor ? ` style="color:${txtColor};font-weight:700"` : '';
+  el.innerHTML   = `<span class="status-dot-sm ${dotCls}"></span><span${style}>${label}</span>`;
+}
+
 async function sbSetCapital(){
   const input = document.getElementById('sb-capital-input');
   const cap   = parseFloat(input?.value);
@@ -3625,14 +3634,24 @@ async function pollStatus(){
   } catch{ aiOk = false; }
   setStatusRow('st-anthropic', aiOk, aiOk ? 'Connected' : 'Error');
 
-  let alpacaOk = null, alpacaLabel = '—';
-  try{
+  let alpacaOk = null;
+  try {
     const r = await fetch('/api/alpaca?action=account');
     const d = await r.json();
-    alpacaOk = !!(d && d.connected);
-    alpacaLabel = alpacaOk ? (d.status||'Connected') : 'Not configured';
-  } catch{ alpacaOk = false; alpacaLabel = 'Error'; }
-  setStatusRow('st-alpaca', alpacaOk, alpacaLabel);
+    if (d && d.connected && d.equity != null) {
+      alpacaOk = true;
+      const eq  = parseFloat(d.equity);
+      const bal = isNaN(eq) ? '' : ' · $' + eq.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      setAlpacaStatusRow(true, 'CONNECTED' + bal);
+    } else {
+      alpacaOk = false;
+      const reason = d?.error || 'Auth failed';
+      setAlpacaStatusRow(false, 'DISCONNECTED · ' + reason);
+    }
+  } catch(e) {
+    alpacaOk = false;
+    setAlpacaStatusRow(false, 'DISCONNECTED · Network error');
+  }
 
   let botOk = null, botLabel = '—';
   try{
