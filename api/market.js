@@ -36,17 +36,18 @@ function httpsGet(url, opts = {}, timeoutMs = 10000) {
 }
 
 // ── type=vix ─────────────────────────────────────────────────────────────────
-async function handleVix(key) {
+async function handleVix() {
   try {
     const data = await httpsGet(
-      `https://api.polygon.io/v2/aggs/ticker/I:VIX/prev?adjusted=true&apiKey=${key}`
+      'https://query1.finance.yahoo.com/v8/finance/chart/%5EVIX?interval=1d&range=1d',
+      { headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' } }
     );
-    const bar = data?.results?.[0];
-    if (!bar) return { symbol: 'VIX', price: null, error: 'VIX data unavailable' };
+    const meta = data?.chart?.result?.[0]?.meta;
+    if (!meta) return { symbol: 'VIX', price: null, error: 'VIX data unavailable' };
 
-    const price     = bar.c;
-    const prevClose = bar.o;
-    const change    = prevClose ? ((price - prevClose) / prevClose) * 100 : null;
+    const price     = meta.regularMarketPrice ?? null;
+    const prevClose = meta.chartPreviousClose ?? meta.previousClose ?? null;
+    const change    = price != null && prevClose ? ((price - prevClose) / prevClose) * 100 : null;
     return { symbol: 'VIX', price, change, changePercent: change };
   } catch (err) {
     console.error('[market/vix]', err.message);
@@ -70,14 +71,21 @@ async function handleFearGreed() {
       { headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' } }
     );
 
+    // API may return fear_and_greed.score as a number, or nested under .score.value
     const fg = data?.fear_and_greed;
-    if (!fg || fg.score == null) {
+    if (!fg) {
       return { value: null, rating: 'Unavailable', error: 'Fear & Greed data unavailable' };
     }
 
-    const score = Math.round(Number(fg.score));
-    const rating = fg.rating
-      ? fg.rating.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ')
+    const rawScore = fg.score?.value ?? fg.score ?? null;
+    if (rawScore == null) {
+      return { value: null, rating: 'Unavailable', error: 'Fear & Greed data unavailable' };
+    }
+
+    const score = Math.round(Number(rawScore));
+    const rawRating = fg.score?.description ?? fg.rating ?? null;
+    const rating = rawRating
+      ? rawRating.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ')
       : scoreToRating(score);
 
     return { value: score, rating, timestamp: fg.timestamp || null };
@@ -116,7 +124,7 @@ module.exports = async function handler(req, res) {
   const key = process.env.POLYGON_API_KEY;
   if (!key) return res.status(500).json({ error: 'POLYGON_API_KEY not configured' });
 
-  if (type === 'vix')       return res.status(200).json(await handleVix(key));
+  if (type === 'vix')       return res.status(200).json(await handleVix());
   if (type === 'feargreed') return res.status(200).json(await handleFearGreed());
   if (type === 'wstoken')   return res.status(200).json(handleWsToken(key));
 

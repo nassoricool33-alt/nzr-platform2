@@ -13,13 +13,15 @@ function checkRate(ip) {
   return true;
 }
 
-function httpsGet(url) {
+function httpsGet(url, timeoutMs = 10000) {
   return new Promise((resolve, reject) => {
-    https.get(url, (r) => {
+    const req = https.get(url, (r) => {
       let d = '';
       r.on('data', c => d += c);
       r.on('end', () => { try { resolve(JSON.parse(d)); } catch (e) { reject(new Error('Invalid JSON')); } });
-    }).on('error', reject);
+    });
+    req.setTimeout(timeoutMs, () => { req.destroy(new Error('Request timed out')); });
+    req.on('error', reject);
   });
 }
 

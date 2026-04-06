@@ -318,29 +318,64 @@ async function handleCalendar(key, anthropicKey) {
 }
 
 async function handleScan(key) {
-  const results = await Promise.all(
-    PHARMA_SYMBOLS.map(async sym => {
-      try {
-        const prev = await getPrevDay(sym, key);
-        if (!prev) return null;
-        const changePct = prev.o > 0 ? ((prev.c - prev.o) / prev.o) * 100 : 0;
-        const range     = prev.h - prev.l;
-        const rangePct  = prev.o > 0 ? (range / prev.o) * 100 : 0;
-        return {
-          symbol: sym, close: prev.c, open: prev.o, high: prev.h, low: prev.l,
-          volume: prev.v, vwap: prev.vw || null,
-          changePct: +changePct.toFixed(2), rangePct: +rangePct.toFixed(2),
-          halalStatus: HALAL_VERIFIED.has(sym) ? 'HALAL VERIFIED' : 'UNVERIFIED',
-          catalystImminent: false,
-        };
-      } catch { return null; }
-    })
-  );
-  const valid  = results.filter(Boolean);
-  const volAvg = valid.reduce((s, r) => s + r.volume, 0) / (valid.length || 1);
+  // Use snapshot endpoint — one call for all tickers
+  const tickerList = PHARMA_SYMBOLS.join(',');
+  let snapshotData;
+  try {
+    snapshotData = await polyGet(
+      `/v2/snapshot/locale/us/markets/stocks/tickers?tickers=${tickerList}`, key
+    );
+  } catch (err) {
+    console.error('[pharma/scan] snapshot failed:', err.message);
+    snapshotData = null;
+  }
 
-  for (const r of valid) {
-    r.relVolume = volAvg > 0 ? +(r.volume / (volAvg / valid.length)).toFixed(2) : 1;
+  const tickers = snapshotData?.tickers || [];
+  const results = tickers.map(t => {
+    const day  = t.day  || {};
+    const prev = t.prevDay || {};
+    const close = day.c ?? prev.c ?? null;
+    const open  = day.o ?? prev.o ?? null;
+    if (!close) return null;
+    const changePct = open > 0 ? ((close - open) / open) * 100 : 0;
+    const range     = (day.h ?? prev.h ?? close) - (day.l ?? prev.l ?? close);
+    const rangePct  = open > 0 ? (range / open) * 100 : 0;
+    return {
+      symbol: t.ticker, close, open,
+      high: day.h ?? prev.h ?? null, low: day.l ?? prev.l ?? null,
+      volume: day.v ?? prev.v ?? null, vwap: day.vw ?? null,
+      changePct: +changePct.toFixed(2), rangePct: +rangePct.toFixed(2),
+      halalStatus: HALAL_VERIFIED.has(t.ticker) ? 'HALAL VERIFIED' : 'UNVERIFIED',
+      catalystImminent: false,
+    };
+  }).filter(Boolean);
+
+  // Fall back to individual prev-day calls if snapshot returned nothing
+  if (results.length === 0) {
+    const fallback = await Promise.all(
+      PHARMA_SYMBOLS.map(async sym => {
+        try {
+          const prev = await getPrevDay(sym, key);
+          if (!prev) return null;
+          const changePct = prev.o > 0 ? ((prev.c - prev.o) / prev.o) * 100 : 0;
+          const range     = prev.h - prev.l;
+          const rangePct  = prev.o > 0 ? (range / prev.o) * 100 : 0;
+          return {
+            symbol: sym, close: prev.c, open: prev.o, high: prev.h, low: prev.l,
+            volume: prev.v, vwap: prev.vw || null,
+            changePct: +changePct.toFixed(2), rangePct: +rangePct.toFixed(2),
+            halalStatus: HALAL_VERIFIED.has(sym) ? 'HALAL VERIFIED' : 'UNVERIFIED',
+            catalystImminent: false,
+          };
+        } catch { return null; }
+      })
+    );
+    results.push(...fallback.filter(Boolean));
+  }
+
+  const volAvg = results.reduce((s, r) => s + (r.volume || 0), 0) / (results.length || 1);
+  for (const r of results) {
+    r.relVolume = volAvg > 0 ? +(r.volume / (volAvg / results.length)).toFixed(2) : 1;
     const fdaMatch = FDA_HARDCODED.find(e => e.ticker === r.symbol);
     if (fdaMatch) {
       const daysAway = Math.ceil((new Date(fdaMatch.date) - new Date()) / 86400000);
@@ -349,12 +384,12 @@ async function handleScan(key) {
       r.catalystDrug = fdaMatch.drug;
     }
   }
-  valid.sort((a, b) => {
+  results.sort((a, b) => {
     const sA = Math.abs(a.changePct) * 0.4 + a.rangePct * 0.3 + Math.min(a.relVolume, 5) * 0.3;
     const sB = Math.abs(b.changePct) * 0.4 + b.rangePct * 0.3 + Math.min(b.relVolume, 5) * 0.3;
     return sB - sA;
   });
-  return { symbols: valid, count: valid.length, scannedAt: new Date().toISOString() };
+  return { symbols: results, count: results.length, scannedAt: new Date().toISOString() };
 }
 
 async function handleSignal(symbol, key, anthropicKey) {
@@ -826,6 +861,7 @@ module.exports = async function handler(req, res) {
   const anthropicKey = process.env.ANTHROPIC_API_KEY;
   const action       = String(req.query.action || '').toLowerCase();
 
+  console.log('[pharma] action:', action);
   console.log('[pharma] POLYGON_API_KEY present:', !!polyKey);
 
   // Bot status/start/stop/check/rules/validate don't all need Polygon

@@ -1355,6 +1355,17 @@ footer{border-top:1px solid var(--border);padding:32px 0;margin-top:80px}
       </div>
       <button class="btn-primary" onclick="pharmaAnalyzeSignal()" style="padding:9px 24px;font-size:13px">Analyze</button>
     </div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px">
+      <span style="font-size:11px;color:var(--text3);align-self:center;margin-right:2px">Quick:</span>
+      <button onclick="pharmaQuickSignal('MRNA')" style="padding:4px 10px;font-size:11px;background:var(--bg2);border:1px solid var(--border);border-radius:4px;color:var(--text2);cursor:pointer">MRNA</button>
+      <button onclick="pharmaQuickSignal('PFE')" style="padding:4px 10px;font-size:11px;background:var(--bg2);border:1px solid var(--border);border-radius:4px;color:var(--text2);cursor:pointer">PFE</button>
+      <button onclick="pharmaQuickSignal('BIIB')" style="padding:4px 10px;font-size:11px;background:var(--bg2);border:1px solid var(--border);border-radius:4px;color:var(--text2);cursor:pointer">BIIB</button>
+      <button onclick="pharmaQuickSignal('VRTX')" style="padding:4px 10px;font-size:11px;background:var(--bg2);border:1px solid var(--border);border-radius:4px;color:var(--text2);cursor:pointer">VRTX</button>
+      <button onclick="pharmaQuickSignal('GILD')" style="padding:4px 10px;font-size:11px;background:var(--bg2);border:1px solid var(--border);border-radius:4px;color:var(--text2);cursor:pointer">GILD</button>
+      <button onclick="pharmaQuickSignal('LLY')" style="padding:4px 10px;font-size:11px;background:var(--bg2);border:1px solid var(--border);border-radius:4px;color:var(--text2);cursor:pointer">LLY</button>
+      <button onclick="pharmaQuickSignal('NVAX')" style="padding:4px 10px;font-size:11px;background:var(--bg2);border:1px solid var(--border);border-radius:4px;color:var(--text2);cursor:pointer">NVAX</button>
+      <button onclick="pharmaQuickSignal('REGN')" style="padding:4px 10px;font-size:11px;background:var(--bg2);border:1px solid var(--border);border-radius:4px;color:var(--text2);cursor:pointer">REGN</button>
+    </div>
     <div id="pharma-signal-result" style="margin-top:20px;display:none">
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:20px">
         <div style="background:var(--bg2);border-radius:8px;padding:14px">
@@ -1725,6 +1736,7 @@ function updateClock(){
 setInterval(updateClock,1000);updateClock();
 
 /* ── PAGE NAV ───────────────────────────────────── */
+let _pharmaLoaded=false;
 function showPage(id){
   document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
   document.querySelectorAll('.nav-tab').forEach(t=>t.classList.remove('active'));
@@ -1733,6 +1745,12 @@ function showPage(id){
   const tab=document.querySelector(`.nav-tab[data-page="${id}"]`);
   if(tab)tab.classList.add('active');
   window.scrollTo({top:0,behavior:'smooth'});
+  // Auto-load pharma data on first visit
+  if(id==='pharma'&&!_pharmaLoaded){
+    _pharmaLoaded=true;
+    pharmaLoadCalendar();
+    pharmaLoadScan();
+  }
 }
 document.querySelectorAll('.nav-tab').forEach(t=>{
   t.addEventListener('click',()=>showPage(t.dataset.page));
@@ -4184,6 +4202,16 @@ initStatusPolling();
 initAllData(); // fetches all live quotes then renders every data section
 initWebSocket(); // start WebSocket for real-time price streaming
 
+// 30-second price refresh during market hours
+async function refreshPrices(){
+  if(!isMarketOpen())return;
+  await Promise.allSettled(ALL_SYMS.map(s=>loadQuote(s)));
+  renderIndicesLive();
+  renderTickerLive();
+  buildMarkets();
+}
+setInterval(refreshPrices,30000);
+
 /* ═══════════════════════════════════════════════════════════════════
    PHARMA TAB — client-side logic
 ═══════════════════════════════════════════════════════════════════ */
@@ -4344,6 +4372,11 @@ async function pharmaLoadCalendar() {
 }
 
 // ── Pharma: Signal Analyzer ──────────────────────────────────────
+function pharmaQuickSignal(sym) {
+  document.getElementById('pharma-signal-sym').value = sym;
+  pharmaAnalyzeSignal();
+}
+
 async function pharmaAnalyzeSignal() {
   const sym = (document.getElementById('pharma-signal-sym').value || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 10);
   if (!sym) return;

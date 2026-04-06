@@ -53,6 +53,8 @@ module.exports = async function handler(req, res) {
   const symbol = (req.query.symbol || '').replace(/[^A-Z0-9.\-]/g, '').slice(0, 10).toUpperCase();
   if (!symbol) return res.status(400).json({ error: 'Symbol required' });
 
+  console.log('[quote] fetching:', symbol);
+
   try {
     // Primary: previous day aggregate (reliable OHLCV)
     let bar = null;
@@ -88,6 +90,7 @@ module.exports = async function handler(req, res) {
     const livePrice = lastPrice ?? prevClose;
     const change    = prevClose ? ((livePrice - prevClose) / prevClose) * 100 : null;
 
+    console.log('[quote] result:', symbol, 'price:', livePrice);
     return res.status(200).json({
       symbol,
       price: livePrice,
@@ -98,6 +101,7 @@ module.exports = async function handler(req, res) {
       volume,
       change,
       changePercent: change,
+      timestamp: Date.now(),
     });
   } catch (err) {
     console.error('[quote]', symbol, err.message);

@@ -2,13 +2,15 @@ const https = require('https');
 
 const ALLOWED_ORIGINS = ['https://nzr-platform2.vercel.app', 'http://localhost:3000'];
 
-function httpsGet(url) {
+function httpsGet(url, opts = {}, timeoutMs = 10000) {
   return new Promise((resolve, reject) => {
-    https.get(url, (r) => {
+    const req = https.get(url, opts, (r) => {
       let d = '';
       r.on('data', c => d += c);
       r.on('end', () => { try { resolve(JSON.parse(d)); } catch (e) { reject(new Error('Invalid JSON')); } });
-    }).on('error', reject);
+    });
+    req.setTimeout(timeoutMs, () => { req.destroy(new Error('Request timed out')); });
+    req.on('error', reject);
   });
 }
 
