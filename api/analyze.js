@@ -67,11 +67,12 @@ module.exports = async function handler(req, res) {
     const data = await response.json();
 
     if (!response.ok) {
-      console.error('[analyze] Anthropic error:', response.status, JSON.stringify(data));
+      console.error('[analyze] Anthropic response:', response.status, JSON.stringify(data));
       return res.status(response.status).json({
-        error: 'AI analysis failed',
+        error: data?.error?.message || 'AI analysis failed',
         status: response.status,
         detail: data?.error?.message,
+        type: data?.error?.type,
       });
     }
 

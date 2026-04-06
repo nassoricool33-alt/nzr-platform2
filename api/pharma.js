@@ -3,7 +3,7 @@
  * Merged: pharma.js + pharmabot.js
  * Data endpoints  (?action=): calendar, scan, signal, shorts, fda
  * Bot endpoints   (?action=): botstatus, botstart, botstop, botcheck, botrules, validate
- * Requires env vars: POLYGON_KEY, ANTHROPIC_API_KEY, ALPACA_API_KEY, ALPACA_SECRET_KEY
+ * Requires env vars: POLYGON_API_KEY, ANTHROPIC_API_KEY, ALPACA_API_KEY, ALPACA_SECRET_KEY
  */
 
 const https = require('https');
@@ -822,15 +822,17 @@ module.exports = async function handler(req, res) {
   const ip = req.headers['x-forwarded-for'] || req.socket?.remoteAddress || 'unknown';
   if (!checkRate(ip)) return res.status(429).json({ error: 'Rate limit reached' });
 
-  const polyKey     = process.env.POLYGON_KEY;
+  const polyKey      = process.env.POLYGON_API_KEY;
   const anthropicKey = process.env.ANTHROPIC_API_KEY;
-  const action      = String(req.query.action || '').toLowerCase();
+  const action       = String(req.query.action || '').toLowerCase();
+
+  console.log('[pharma] POLYGON_API_KEY present:', !!polyKey);
 
   // Bot status/start/stop/check/rules/validate don't all need Polygon
   const botOnlyActions = new Set(['botstatus','botstart','botstop']);
 
   if (!polyKey && !botOnlyActions.has(action))
-    return res.status(503).json({ error: 'POLYGON_KEY not configured' });
+    return res.status(500).json({ error: 'Market data not configured' });
 
   try {
     // ── Pharma data endpoints (GET) ──────────────────────────────────────────
