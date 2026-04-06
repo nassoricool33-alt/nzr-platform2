@@ -1430,11 +1430,16 @@ footer{border-top:1px solid var(--border);padding:32px 0;margin-top:80px}
                 <th>Entry Date</th><th>Symbol</th><th>Mode</th><th>Dir</th><th>Entry $</th>
                 <th>Exit Date</th><th>Exit $</th>
                 <th>P&amp;L $</th><th>P&amp;L %</th><th>Result</th><th>Days</th><th>Exit Reason</th>
+                <th>Stop $</th><th>Target $</th><th>R:R</th><th>ATR</th><th>Fees</th><th>Vol✓</th>
               </tr>
             </thead>
             <tbody id="bt-tbody"></tbody>
           </table>
         </div>
+        <!-- Skipped signals info -->
+        <div id="bt-skipped-info" style="display:none;font-family:var(--font-mono);font-size:10px;color:var(--text3);padding:10px 4px;line-height:1.7;border-top:1px solid var(--border);margin-top:4px"></div>
+        <!-- Benchmark row -->
+        <div id="bt-benchmark-row" style="display:none;background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);padding:14px 18px;margin-top:16px;font-family:var(--font-mono);font-size:11px;color:var(--text2);line-height:1.8"></div>
       </div>
     </div>
 
@@ -2900,12 +2905,14 @@ async function runBacktest() {
       btShowMessage(data.dayResult?.message || data.swingResult?.message);
       btRenderBothSummary(data);
       btRenderTable(_btTrades);
+      btRenderSkippedSignals(null, data);
       btRenderChart(data.dayResult?.summary?.equityCurve || [], data.swingResult?.summary?.equityCurve || [], data);
     } else {
       _btTrades = data.trades || [];
       btShowMessage(data.message);
-      btRenderSummary(data.summary, data.strategy || data.mode, data.barsUsed, data.capital, data.deployedCapital);
+      btRenderSummary(data.summary, data.strategy || data.mode, data.barsUsed, data.capital, data.deployedCapital, data);
       btRenderTable(_btTrades);
+      btRenderSkippedSignals(data.summary);
       btRenderChart(data.summary.equityCurve || [], [], data);
     }
 
@@ -2926,16 +2933,20 @@ function btShowMessage(msg) {
   else       el.style.display = 'none';
 }
 
-function btRenderSummary(s, strategyKey, barsUsed, totalCap, deployedCap) {
-  const winColor  = s.winRate >= 55 ? 'var(--green)' : s.winRate >= 45 ? 'var(--gold)' : 'var(--red)';
-  const pnlColor  = btPctColor(s.totalPnlPct);
-  const ddColor   = s.maxDrawdown > 20 ? 'var(--red)' : s.maxDrawdown > 10 ? 'var(--gold)' : 'var(--green)';
-  const pfColor   = s.profitFactor >= 1.5 ? 'var(--green)' : s.profitFactor >= 1 ? 'var(--gold)' : 'var(--red)';
-  const NAMES     = { macd_crossover:'MACD Cross', rsi_mean_reversion:'RSI Reversion', ema_cross:'EMA 20/50', combined:'Combined', golden_cross:'Golden Cross', rsi_macd:'RSI+MACD' };
-  const stratName = NAMES[strategyKey] || strategyKey;
-  const capStr    = deployedCap ? btFmt$(deployedCap) : btFmt$(s.startCapital || 10000);
+function btRenderSummary(s, strategyKey, barsUsed, totalCap, deployedCap, data) {
+  const winColor   = s.winRate >= 55 ? 'var(--green)' : s.winRate >= 45 ? 'var(--gold)' : 'var(--red)';
+  const pnlColor   = btPctColor(s.totalPnlPct);
+  const ddColor    = s.maxDrawdown > 20 ? 'var(--red)' : s.maxDrawdown > 10 ? 'var(--gold)' : 'var(--green)';
+  const pfColor    = s.profitFactor >= 1.5 ? 'var(--green)' : s.profitFactor >= 1 ? 'var(--gold)' : 'var(--red)';
+  const sr         = s.sharpeRatio ?? 0;
+  const srColor    = sr > 1.0 ? 'var(--green)' : sr >= 0.5 ? 'var(--gold)' : 'var(--red)';
+  const srLabel    = sr > 2.0 ? 'Excellent' : sr > 1.0 ? 'Good' : sr >= 0.5 ? 'Acceptable' : 'Poor';
+  const alphaColor = (s.alphaPct ?? 0) >= 0 ? 'var(--green)' : 'var(--red)';
+  const cbCount    = s.circuitBreakerTriggered ?? 0;
+  const NAMES      = { macd:'MACD Cross', macd_crossover:'MACD Cross', rsi:'RSI Reversion', rsi_mean_reversion:'RSI Reversion', ema2050:'EMA 20/50', ema_cross:'EMA 20/50', combined:'Combined', golden_cross:'Golden Cross', rsi_macd:'RSI+MACD' };
+  const stratName  = NAMES[strategyKey] || strategyKey;
+  const capStr     = deployedCap ? btFmt$(deployedCap) : btFmt$(totalCap || 10000);
 
-  // Update chart title
   const titleEl = document.getElementById('bt-chart-title');
   if (titleEl) titleEl.textContent = `Equity Curve — ${capStr} Capital`;
   const legendEl = document.getElementById('bt-chart-legend');
@@ -2953,10 +2964,24 @@ function btRenderSummary(s, strategyKey, barsUsed, totalCap, deployedCap) {
       <div class="bt-stat-sub">${btFmtPct(s.totalPnlPct, true)} · ${capStr} → ${btFmt$(s.finalEquity)}</div></div>
     <div class="bt-stat"><div class="bt-stat-lbl">Max Drawdown</div>
       <div class="bt-stat-val" style="color:${ddColor}">-${s.maxDrawdown}%</div>
-      <div class="bt-stat-sub">Avg win: +${s.avgWin}%</div></div>
+      <div class="bt-stat-sub">Avg win: +${s.avgWin}% · Avg loss: ${s.avgLoss}%</div></div>
     <div class="bt-stat"><div class="bt-stat-lbl">Profit Factor</div>
       <div class="bt-stat-val" style="color:${pfColor}">${s.profitFactor}x</div>
-      <div class="bt-stat-sub">Avg loss: ${s.avgLoss}%</div></div>`;
+      <div class="bt-stat-sub">Gross win / gross loss ratio</div></div>
+    <div class="bt-stat"><div class="bt-stat-lbl">Sharpe Ratio</div>
+      <div class="bt-stat-val" style="color:${srColor}">${sr}</div>
+      <div class="bt-stat-sub" style="color:${srColor}">${srLabel} · annualised</div></div>
+    <div class="bt-stat"><div class="bt-stat-lbl">Alpha vs B&amp;H</div>
+      <div class="bt-stat-val" style="color:${alphaColor}">${(s.alphaPct ?? 0) >= 0 ? '+' : ''}${s.alphaPct ?? 0}%</div>
+      <div class="bt-stat-sub">B&amp;H: ${btFmtPct(s.benchmarkReturn ?? 0, true)}</div></div>
+    <div class="bt-stat"><div class="bt-stat-lbl">Circuit Breaker</div>
+      <div class="bt-stat-val" style="color:${cbCount > 0 ? 'var(--red)' : 'var(--green)'}">${cbCount}×</div>
+      <div class="bt-stat-sub">${cbCount > 0 ? '3 consec. losses → 5-bar pause' : 'Not triggered'}</div></div>
+    <div class="bt-stat"><div class="bt-stat-lbl">Avg Position</div>
+      <div class="bt-stat-val">${btFmt$(s.avgPositionValue ?? 0)}</div>
+      <div class="bt-stat-sub">ATR-sized per trade</div></div>`;
+
+  btRenderBenchmarkRow(s);
 }
 
 function btRenderBothSummary(data) {
@@ -3009,11 +3034,50 @@ function btRenderBothSummary(data) {
       <div class="bt-stat-sub">Worst single mode</div></div>`;
 }
 
+function btRenderBenchmarkRow(s) {
+  const el = document.getElementById('bt-benchmark-row');
+  if (!el) return;
+  const bhr  = s.benchmarkReturn ?? 0;
+  const bhp  = s.benchmarkPnl ?? 0;
+  const alp  = s.alphaPct ?? 0;
+  const alpC = alp >= 0 ? 'var(--green)' : 'var(--red)';
+  el.style.display = 'block';
+  el.innerHTML = `<span style="color:var(--text3);letter-spacing:1px;text-transform:uppercase;font-size:9px">Benchmark (Buy &amp; Hold)</span>
+    <span style="margin-left:16px">Would have returned <strong style="color:${btPctColor(bhr)}">${btFmtPct(bhr, true)}</strong>
+    (<strong style="color:${btPctColor(bhr)}">${btFmt$(bhp)}</strong>) · Strategy alpha:
+    <strong style="color:${alpC}">${alp >= 0 ? '+' : ''}${alp}%</strong></span>`;
+}
+
+function btRenderSkippedSignals(summary, bothData) {
+  const el = document.getElementById('bt-skipped-info');
+  if (!el) return;
+  let skipped = null;
+  if (summary?.skippedSignals) {
+    skipped = summary.skippedSignals;
+  } else if (bothData) {
+    const ds = bothData.dayResult?.summary?.skippedSignals   || {};
+    const ss = bothData.swingResult?.summary?.skippedSignals || {};
+    skipped  = {
+      vol:      (ds.vol      || 0) + (ss.vol      || 0),
+      trend:    (ds.trend    || 0) + (ss.trend    || 0),
+      earnings: (ds.earnings || 0) + (ss.earnings || 0),
+    };
+  }
+  if (!skipped) { el.style.display = 'none'; return; }
+  const total = (skipped.vol || 0) + (skipped.trend || 0) + (skipped.earnings || 0);
+  if (total === 0) { el.style.display = 'none'; return; }
+  el.style.display = 'block';
+  el.innerHTML = `<span style="color:var(--gold);font-weight:700">${total} signal${total !== 1 ? 's' : ''} skipped by realism filters:</span>
+    &nbsp;Low volume: <strong>${skipped.vol || 0}</strong>
+    &nbsp;|&nbsp; Against trend (EMA200): <strong>${skipped.trend || 0}</strong>
+    &nbsp;|&nbsp; Earnings blackout: <strong>${skipped.earnings || 0}</strong>`;
+}
+
 function btRenderTable(trades) {
   const tbody = document.getElementById('bt-tbody');
   if (!tbody) return;
   if (!trades.length) {
-    tbody.innerHTML = '<tr><td colspan="11" style="text-align:center;padding:28px;color:var(--text3);font-family:var(--font-mono);font-size:11px">No trades found — try a longer date range or different strategy</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="18" style="text-align:center;padding:28px;color:var(--text3);font-family:var(--font-mono);font-size:11px">No trades found — try a longer date range or different strategy</td></tr>';
     return;
   }
   const MODECOLORS = { day:'var(--gold)', swing:'#1a5c96' };
@@ -3023,20 +3087,29 @@ function btRenderTable(trades) {
     const pnlStyle = `color:${t.pnl >= 0 ? 'var(--green)' : 'var(--red)'};font-weight:700`;
     const modeColor = MODECOLORS[t.mode] || 'var(--text3)';
     const holdStr  = t.holdingBars != null ? `${t.holdingBars}d` : t.mode === 'day' ? (t.holdingMins != null ? `${t.holdingMins}m` : '0d') : `${t.holdingDays ?? 0}d`;
-    const exitReasonColor = t.exitReason === 'Stop Loss' ? 'var(--red)' : t.exitReason === 'Take Profit' ? 'var(--green)' : 'var(--text3)';
+    const exitReasonColor = t.exitReason === 'Stop Loss' || t.exitReason?.startsWith('Stop Loss') ? 'var(--red)' : t.exitReason === 'Take Profit' ? 'var(--green)' : 'var(--text3)';
+    const rrColor  = t.riskReward >= 2 ? 'var(--green)' : t.riskReward >= 1 ? 'var(--gold)' : 'var(--red)';
+    const volBadge = t.volumeConfirmed ? '<span style="color:var(--green);font-size:11px">✓</span>' : '<span style="color:var(--text3);font-size:11px">–</span>';
+    const gapFlag  = t.gapRisk ? ` <span title="Gap ${t.gapPct}%" style="color:var(--red);font-size:9px">⚡${t.gapPct}%</span>` : '';
     return `<tr class="${cls}">
       <td style="font-family:var(--font-mono);color:var(--text3)">${t.entryDate}</td>
       <td style="font-family:var(--font-mono);font-weight:700;color:var(--gold)">${t.symbol||''}</td>
       <td style="font-family:var(--font-mono);font-size:9px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:${modeColor}">${t.mode||''}</td>
       <td style="font-family:var(--font-mono);font-weight:700;color:var(--green)">${t.direction||'LONG'}</td>
       <td style="font-family:var(--font-mono)">${btFmt$(t.entryPrice)}</td>
-      <td style="font-family:var(--font-mono);color:var(--text3)">${t.exitDate}</td>
+      <td style="font-family:var(--font-mono);color:var(--text3)">${t.exitDate}${gapFlag}</td>
       <td style="font-family:var(--font-mono)">${btFmt$(t.exitPrice)}</td>
       <td style="font-family:var(--font-mono);${pnlStyle}">${t.pnl >= 0 ? '+' : ''}${btFmt$(t.pnl)}</td>
       <td style="font-family:var(--font-mono);${pnlStyle}">${btFmtPct(t.pnlPct, true)}</td>
       <td>${badge}</td>
       <td style="font-family:var(--font-mono);color:var(--text3)">${holdStr}</td>
       <td style="font-family:var(--font-mono);font-size:10px;color:${exitReasonColor}">${t.exitReason||''}</td>
+      <td style="font-family:var(--font-mono);font-size:11px;color:var(--red)">${t.stopLoss != null ? btFmt$(t.stopLoss) : '—'}</td>
+      <td style="font-family:var(--font-mono);font-size:11px;color:var(--green)">${t.takeProfit != null ? btFmt$(t.takeProfit) : '—'}</td>
+      <td style="font-family:var(--font-mono);font-size:11px;color:${rrColor}">${t.riskReward != null ? t.riskReward + 'x' : '—'}</td>
+      <td style="font-family:var(--font-mono);font-size:10px;color:var(--text3)">${t.atr != null ? t.atr : '—'}</td>
+      <td style="font-family:var(--font-mono);font-size:11px;color:var(--text3)">${t.commission != null ? btFmt$(t.commission) : '—'}</td>
+      <td style="text-align:center">${volBadge}</td>
     </tr>`;
   }).join('');
 }
@@ -3179,13 +3252,15 @@ function btChartOptions(tickColor, gridColor) {
 
 function btExportCSV() {
   if (!_btTrades.length) return;
-  const header = 'Symbol,Mode,Strategy,Direction,Entry Date,Entry Price,Exit Date,Exit Price,P&L $,P&L %,Result,Hold,Exit Reason';
+  const header = 'Symbol,Mode,Strategy,Direction,Entry Date,Entry Price,Exit Date,Exit Price,P&L $,P&L %,Result,Hold,Exit Reason,Stop $,Target $,R:R,ATR,Fees,Vol Confirmed';
   const rows = _btTrades.map(t => [
     t.symbol||'', t.mode||'', t.strategy||'', t.direction||'LONG',
     t.entryDate, t.entryPrice, t.exitDate, t.exitPrice,
     t.pnl, t.pnlPct, t.result,
     t.holdingBars != null ? `${t.holdingBars}d` : t.mode === 'day' ? `${t.holdingMins ?? 0}m` : `${t.holdingDays ?? 0}d`,
     t.exitReason||'',
+    t.stopLoss ?? '', t.takeProfit ?? '', t.riskReward ?? '', t.atr ?? '',
+    t.commission ?? '', t.volumeConfirmed ? 'Yes' : 'No',
   ].join(','));
   const csv  = [header, ...rows].join('\n');
   const blob = new Blob([csv], { type: 'text/csv' });
