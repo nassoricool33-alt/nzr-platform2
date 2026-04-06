@@ -744,6 +744,7 @@ footer{border-top:1px solid var(--border);padding:32px 0;margin-top:80px}
       <!-- Intelligence group -->
       <div class="nav-group">
         <button class="nav-tab" data-page="flow">Flow</button>
+        <button class="nav-tab" data-page="pharma">Pharma</button>
         <button class="nav-tab" data-page="earnings">Earnings</button>
         <button class="nav-tab" data-page="backtest">Backtest</button>
         <button class="nav-tab" data-page="aichat">AI Chat</button>
@@ -1252,6 +1253,250 @@ footer{border-top:1px solid var(--border);padding:32px 0;margin-top:80px}
 
 </div>
 </div>
+
+<!-- ══════════════════════════════════ PHARMA ══ -->
+<div id="page-pharma" class="page">
+<div class="wrapper" style="padding-top:40px;padding-bottom:80px">
+
+  <!-- Command Center Header -->
+  <div class="section-header sec-fade">
+    <div class="section-eyebrow">Intelligence</div>
+    <div class="section-title">Pharma <span>Trading Bot</span></div>
+    <p style="color:var(--text3);margin-top:8px;font-size:13px">AI-powered pharmaceutical catalyst trading with halal compliance screening.</p>
+  </div>
+
+  <!-- Bot Controls -->
+  <div class="stat-card sec-fade" style="animation-delay:50ms;padding:24px">
+    <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+      <div style="font-size:13px;font-weight:600;color:var(--text2);letter-spacing:.05em;text-transform:uppercase">Pharma Bot</div>
+      <div id="pharma-bot-status-dot" style="width:10px;height:10px;border-radius:50%;background:var(--text3)"></div>
+      <div id="pharma-bot-status-text" style="font-size:13px;color:var(--text3)">OFFLINE</div>
+      <div style="flex:1"></div>
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text2);cursor:pointer">
+        <input type="checkbox" id="pharma-halal-only" style="accent-color:var(--accent)">
+        Halal Only
+      </label>
+      <select id="pharma-bot-mode" style="background:var(--bg2);border:1px solid var(--border);color:var(--text1);border-radius:6px;padding:6px 10px;font-size:13px">
+        <option value="day">Day Trading</option>
+        <option value="swing">Swing Trading</option>
+      </select>
+      <button id="pharma-start-btn" class="btn-primary" onclick="pharmaBotStart()" style="padding:8px 20px;font-size:13px">Start Bot</button>
+      <button id="pharma-stop-btn" class="btn-secondary" onclick="pharmaBotStop()" style="padding:8px 20px;font-size:13px;display:none">Stop Bot</button>
+      <button class="btn-secondary" onclick="pharmaBotCheck()" style="padding:8px 20px;font-size:13px">Check Positions</button>
+    </div>
+    <div id="pharma-bot-msg" style="margin-top:12px;font-size:12px;color:var(--text3);min-height:16px"></div>
+  </div>
+
+  <!-- Stats row -->
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-top:16px" class="sec-fade" style="animation-delay:80ms">
+    <div class="stat-card" style="padding:16px;text-align:center">
+      <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:.06em">Open Positions</div>
+      <div id="pharma-stat-positions" style="font-size:26px;font-weight:700;color:var(--text1);margin-top:4px">0</div>
+    </div>
+    <div class="stat-card" style="padding:16px;text-align:center">
+      <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:.06em">Wins</div>
+      <div id="pharma-stat-wins" style="font-size:26px;font-weight:700;color:#26a69a;margin-top:4px">0</div>
+    </div>
+    <div class="stat-card" style="padding:16px;text-align:center">
+      <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:.06em">Losses</div>
+      <div id="pharma-stat-losses" style="font-size:26px;font-weight:700;color:#ef5350;margin-top:4px">0</div>
+    </div>
+    <div class="stat-card" style="padding:16px;text-align:center">
+      <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:.06em">Total P&amp;L</div>
+      <div id="pharma-stat-pnl" style="font-size:26px;font-weight:700;color:var(--text1);margin-top:4px">$0</div>
+    </div>
+  </div>
+
+  <!-- FDA Catalyst Calendar -->
+  <div class="section-header sec-fade" style="margin-top:48px;animation-delay:100ms">
+    <div class="section-eyebrow">Catalysts</div>
+    <div class="section-title">FDA <span>Calendar</span></div>
+  </div>
+  <div class="stat-card sec-fade" style="animation-delay:120ms;padding:0;overflow:hidden">
+    <div style="padding:16px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px">
+      <button class="btn-secondary" onclick="pharmaLoadCalendar()" style="padding:7px 16px;font-size:12px">Refresh Calendar</button>
+      <span id="pharma-cal-status" style="font-size:12px;color:var(--text3)">Click to load FDA events</span>
+    </div>
+    <div style="overflow-x:auto">
+      <table style="width:100%;border-collapse:collapse;font-size:13px">
+        <thead>
+          <tr style="border-bottom:1px solid var(--border)">
+            <th style="padding:10px 16px;text-align:left;color:var(--text3);font-weight:600;white-space:nowrap">Date</th>
+            <th style="padding:10px 16px;text-align:left;color:var(--text3);font-weight:600">Ticker</th>
+            <th style="padding:10px 16px;text-align:left;color:var(--text3);font-weight:600">Drug</th>
+            <th style="padding:10px 16px;text-align:left;color:var(--text3);font-weight:600">Type</th>
+            <th style="padding:10px 16px;text-align:left;color:var(--text3);font-weight:600">Indication</th>
+            <th style="padding:10px 16px;text-align:left;color:var(--text3);font-weight:600">Days Away</th>
+            <th style="padding:10px 16px;text-align:left;color:var(--text3);font-weight:600">Halal</th>
+            <th style="padding:10px 16px;text-align:left;color:var(--text3);font-weight:600">Catalyst</th>
+          </tr>
+        </thead>
+        <tbody id="pharma-cal-tbody">
+          <tr><td colspan="8" style="padding:24px;text-align:center;color:var(--text3)">No data loaded</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Signal Analyzer -->
+  <div class="section-header sec-fade" style="margin-top:48px;animation-delay:140ms">
+    <div class="section-eyebrow">Analysis</div>
+    <div class="section-title">Signal <span>Analyzer</span></div>
+  </div>
+  <div class="stat-card sec-fade" style="animation-delay:160ms;padding:24px">
+    <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end">
+      <div class="input-group" style="flex:1;min-width:140px">
+        <label style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;display:block;margin-bottom:6px">Symbol</label>
+        <input id="pharma-signal-sym" type="text" placeholder="MRNA" maxlength="10"
+          style="width:100%;background:var(--bg2);border:1px solid var(--border);color:var(--text1);border-radius:6px;padding:9px 12px;font-size:14px;text-transform:uppercase"
+          onkeydown="if(event.key==='Enter')pharmaAnalyzeSignal()">
+      </div>
+      <button class="btn-primary" onclick="pharmaAnalyzeSignal()" style="padding:9px 24px;font-size:13px">Analyze</button>
+    </div>
+    <div id="pharma-signal-result" style="margin-top:20px;display:none">
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:20px">
+        <div style="background:var(--bg2);border-radius:8px;padding:14px">
+          <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:.06em">Signal</div>
+          <div id="pharma-sig-signal" style="font-size:22px;font-weight:700;margin-top:4px">—</div>
+          <div id="pharma-sig-strength" style="font-size:11px;color:var(--text3);margin-top:2px">—</div>
+        </div>
+        <div style="background:var(--bg2);border-radius:8px;padding:14px">
+          <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:.06em">Price</div>
+          <div id="pharma-sig-price" style="font-size:22px;font-weight:700;margin-top:4px">—</div>
+          <div id="pharma-sig-change" style="font-size:11px;margin-top:2px">—</div>
+        </div>
+        <div style="background:var(--bg2);border-radius:8px;padding:14px">
+          <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:.06em">RSI</div>
+          <div id="pharma-sig-rsi" style="font-size:22px;font-weight:700;margin-top:4px">—</div>
+          <div id="pharma-sig-vol" style="font-size:11px;color:var(--text3);margin-top:2px">Rel Vol: —</div>
+        </div>
+        <div style="background:var(--bg2);border-radius:8px;padding:14px">
+          <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:.06em">Combined Score</div>
+          <div id="pharma-sig-score" style="font-size:22px;font-weight:700;margin-top:4px">—</div>
+          <div id="pharma-sig-halal" style="font-size:11px;margin-top:2px">—</div>
+        </div>
+        <div style="background:var(--bg2);border-radius:8px;padding:14px">
+          <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:.06em">Stop / Target</div>
+          <div id="pharma-sig-stop" style="font-size:13px;color:#ef5350;margin-top:6px">Stop: —</div>
+          <div id="pharma-sig-tp" style="font-size:13px;color:#26a69a;margin-top:2px">Target: —</div>
+        </div>
+        <div style="background:var(--bg2);border-radius:8px;padding:14px">
+          <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:.06em">Sentiment</div>
+          <div id="pharma-sig-sent" style="font-size:16px;font-weight:600;margin-top:6px">—</div>
+          <div id="pharma-sig-sent-sum" style="font-size:11px;color:var(--text3);margin-top:4px;line-height:1.4">—</div>
+        </div>
+      </div>
+      <div id="pharma-sig-news" style="display:none">
+        <div style="font-size:12px;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px">Recent News</div>
+        <div id="pharma-sig-news-list" style="display:flex;flex-direction:column;gap:8px"></div>
+      </div>
+    </div>
+    <div id="pharma-signal-loading" style="display:none;padding:20px;text-align:center;color:var(--text3);font-size:13px">Analyzing... fetching data &amp; running AI sentiment...</div>
+    <div id="pharma-signal-error" style="display:none;padding:20px;text-align:center;color:#ef5350;font-size:13px"></div>
+  </div>
+
+  <!-- Short Squeeze Scanner -->
+  <div class="section-header sec-fade" style="margin-top:48px;animation-delay:180ms">
+    <div class="section-eyebrow">Momentum</div>
+    <div class="section-title">Short Squeeze <span>Scanner</span></div>
+  </div>
+  <div class="stat-card sec-fade" style="animation-delay:200ms;padding:0;overflow:hidden">
+    <div style="padding:16px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px">
+      <button class="btn-secondary" onclick="pharmaLoadShorts()" style="padding:7px 16px;font-size:12px">Scan Short Squeezes</button>
+      <span id="pharma-shorts-status" style="font-size:12px;color:var(--text3)">relVol &gt;3×, change &gt;10%, RSI &gt;70</span>
+    </div>
+    <div style="overflow-x:auto">
+      <table style="width:100%;border-collapse:collapse;font-size:13px">
+        <thead>
+          <tr style="border-bottom:1px solid var(--border)">
+            <th style="padding:10px 16px;text-align:left;color:var(--text3);font-weight:600">Symbol</th>
+            <th style="padding:10px 16px;text-align:right;color:var(--text3);font-weight:600">Price</th>
+            <th style="padding:10px 16px;text-align:right;color:var(--text3);font-weight:600">Change</th>
+            <th style="padding:10px 16px;text-align:right;color:var(--text3);font-weight:600">Rel Vol</th>
+            <th style="padding:10px 16px;text-align:right;color:var(--text3);font-weight:600">RSI</th>
+            <th style="padding:10px 16px;text-align:right;color:var(--text3);font-weight:600">Squeeze Score</th>
+            <th style="padding:10px 16px;text-align:left;color:var(--text3);font-weight:600">Halal</th>
+          </tr>
+        </thead>
+        <tbody id="pharma-shorts-tbody">
+          <tr><td colspan="7" style="padding:24px;text-align:center;color:var(--text3)">No data loaded</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Pharma Watchlist / Screener -->
+  <div class="section-header sec-fade" style="margin-top:48px;animation-delay:220ms">
+    <div class="section-eyebrow">Screener</div>
+    <div class="section-title">Pharma <span>Watchlist</span></div>
+  </div>
+  <div class="stat-card sec-fade" style="animation-delay:240ms;padding:0;overflow:hidden">
+    <div style="padding:16px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+      <button class="btn-secondary" onclick="pharmaLoadScan()" style="padding:7px 16px;font-size:12px">Scan 30 Symbols</button>
+      <span id="pharma-scan-status" style="font-size:12px;color:var(--text3)">Sorted by volume + volatility score</span>
+      <div style="flex:1"></div>
+      <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text3);cursor:pointer">
+        <input type="checkbox" id="pharma-halal-filter" onchange="pharmaFilterScan()" style="accent-color:var(--accent)">
+        Show Halal Only
+      </label>
+    </div>
+    <div style="overflow-x:auto">
+      <table style="width:100%;border-collapse:collapse;font-size:13px">
+        <thead>
+          <tr style="border-bottom:1px solid var(--border)">
+            <th style="padding:10px 16px;text-align:left;color:var(--text3);font-weight:600">#</th>
+            <th style="padding:10px 16px;text-align:left;color:var(--text3);font-weight:600">Symbol</th>
+            <th style="padding:10px 16px;text-align:right;color:var(--text3);font-weight:600">Price</th>
+            <th style="padding:10px 16px;text-align:right;color:var(--text3);font-weight:600">Change</th>
+            <th style="padding:10px 16px;text-align:right;color:var(--text3);font-weight:600">Volume</th>
+            <th style="padding:10px 16px;text-align:right;color:var(--text3);font-weight:600">Rel Vol</th>
+            <th style="padding:10px 16px;text-align:right;color:var(--text3);font-weight:600">Range %</th>
+            <th style="padding:10px 16px;text-align:left;color:var(--text3);font-weight:600">Halal</th>
+            <th style="padding:10px 16px;text-align:left;color:var(--text3);font-weight:600">Catalyst</th>
+          </tr>
+        </thead>
+        <tbody id="pharma-scan-tbody">
+          <tr><td colspan="9" style="padding:24px;text-align:center;color:var(--text3)">No data loaded</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Trade Log -->
+  <div class="section-header sec-fade" style="margin-top:48px;animation-delay:260ms">
+    <div class="section-eyebrow">History</div>
+    <div class="section-title">Bot <span>Trade Log</span></div>
+  </div>
+  <div class="stat-card sec-fade" style="animation-delay:280ms;padding:0;overflow:hidden">
+    <div style="padding:16px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px">
+      <button class="btn-secondary" onclick="pharmaLoadTradeLog()" style="padding:7px 16px;font-size:12px">Refresh Log</button>
+      <span id="pharma-log-count" style="font-size:12px;color:var(--text3)">0 trades</span>
+    </div>
+    <div style="overflow-x:auto">
+      <table style="width:100%;border-collapse:collapse;font-size:13px">
+        <thead>
+          <tr style="border-bottom:1px solid var(--border)">
+            <th style="padding:10px 16px;text-align:left;color:var(--text3);font-weight:600">Time</th>
+            <th style="padding:10px 16px;text-align:left;color:var(--text3);font-weight:600">Symbol</th>
+            <th style="padding:10px 16px;text-align:left;color:var(--text3);font-weight:600">Action</th>
+            <th style="padding:10px 16px;text-align:right;color:var(--text3);font-weight:600">Qty</th>
+            <th style="padding:10px 16px;text-align:right;color:var(--text3);font-weight:600">Entry $</th>
+            <th style="padding:10px 16px;text-align:right;color:var(--text3);font-weight:600">Exit $</th>
+            <th style="padding:10px 16px;text-align:right;color:var(--text3);font-weight:600">P&amp;L</th>
+            <th style="padding:10px 16px;text-align:left;color:var(--text3);font-weight:600">Reason</th>
+            <th style="padding:10px 16px;text-align:left;color:var(--text3);font-weight:600">Halal</th>
+          </tr>
+        </thead>
+        <tbody id="pharma-log-tbody">
+          <tr><td colspan="9" style="padding:24px;text-align:center;color:var(--text3)">No trades yet</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+</div>
+</div>
+<!-- ══ end PHARMA ══ -->
 
 <!-- ══════════════════════════════════ AI CHAT ══ -->
 <div id="page-aichat" class="page">
@@ -3930,6 +4175,355 @@ initNotifications();
 initStatusPolling();
 initAllData(); // fetches all live quotes then renders every data section
 initWebSocket(); // start WebSocket for real-time price streaming
+
+/* ═══════════════════════════════════════════════════════════════════
+   PHARMA TAB — client-side logic
+═══════════════════════════════════════════════════════════════════ */
+
+// ── Pharma: cached scan data for filter ──────────────────────────
+let _pharmaScanData = [];
+
+// ── Pharma: helper formatters ────────────────────────────────────
+function pharmaFmt$(v) {
+  if (v == null) return '—';
+  return '$' + Number(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+function pharmaFmtPct(v) {
+  if (v == null) return '—';
+  const n = Number(v);
+  return (n >= 0 ? '+' : '') + n.toFixed(2) + '%';
+}
+function pharmaFmtVol(v) {
+  if (!v) return '—';
+  if (v >= 1e6) return (v / 1e6).toFixed(1) + 'M';
+  if (v >= 1e3) return (v / 1e3).toFixed(0) + 'K';
+  return String(v);
+}
+function pharmaHalalBadge(status) {
+  const ok = status === 'HALAL VERIFIED';
+  return `<span style="font-size:10px;font-weight:600;padding:2px 7px;border-radius:4px;background:${ok ? 'rgba(38,166,154,.18)' : 'rgba(120,120,120,.15)'};color:${ok ? '#26a69a' : 'var(--text3)'};">${ok ? '✓ HALAL' : 'UNVERIFIED'}</span>`;
+}
+
+// ── Pharma Bot: status polling ────────────────────────────────────
+async function pharmaBotRefreshStatus() {
+  try {
+    const r = await fetch('/api/pharmabot?action=status');
+    if (!r.ok) return;
+    const d = await r.json();
+    const dot  = document.getElementById('pharma-bot-status-dot');
+    const txt  = document.getElementById('pharma-bot-status-text');
+    const startBtn = document.getElementById('pharma-start-btn');
+    const stopBtn  = document.getElementById('pharma-stop-btn');
+
+    if (d.running) {
+      dot.style.background = '#26a69a';
+      txt.style.color = '#26a69a';
+      txt.textContent = `RUNNING · ${d.mode.toUpperCase()} · ${d.positionCount}/${d.maxPositions} positions`;
+      startBtn.style.display = 'none';
+      stopBtn.style.display  = '';
+    } else {
+      dot.style.background = 'var(--text3)';
+      txt.style.color = 'var(--text3)';
+      txt.textContent = 'OFFLINE';
+      startBtn.style.display = '';
+      stopBtn.style.display  = 'none';
+    }
+    document.getElementById('pharma-stat-positions').textContent = d.positionCount ?? 0;
+    document.getElementById('pharma-stat-wins').textContent = d.stats?.wins ?? 0;
+    document.getElementById('pharma-stat-losses').textContent = d.stats?.losses ?? 0;
+    const pnl = d.stats?.totalPnl ?? 0;
+    const pnlEl = document.getElementById('pharma-stat-pnl');
+    pnlEl.textContent = (pnl >= 0 ? '+' : '') + pharmaFmt$(pnl);
+    pnlEl.style.color = pnl >= 0 ? '#26a69a' : '#ef5350';
+
+    if (d.tradeLog?.length) pharmaRenderTradeLog(d.tradeLog);
+  } catch { /* silent */ }
+}
+
+async function pharmaBotStart() {
+  const mode = document.getElementById('pharma-bot-mode').value;
+  const halalOnly = document.getElementById('pharma-halal-only').checked;
+  const msg = document.getElementById('pharma-bot-msg');
+  msg.textContent = 'Starting...';
+  try {
+    const r = await fetch('/api/pharmabot?action=start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode, halalOnly }),
+    });
+    const d = await r.json();
+    if (d.ok) {
+      msg.style.color = '#26a69a';
+      msg.textContent = `Bot started — ${d.mode.toUpperCase()} mode${d.halalOnly ? ' · Halal Only' : ''}`;
+      pharmaBotRefreshStatus();
+    } else {
+      msg.style.color = '#ef5350';
+      msg.textContent = d.error || 'Failed to start';
+    }
+  } catch(e) {
+    msg.style.color = '#ef5350';
+    msg.textContent = 'Network error: ' + e.message;
+  }
+}
+
+async function pharmaBotStop() {
+  const msg = document.getElementById('pharma-bot-msg');
+  try {
+    const r = await fetch('/api/pharmabot?action=stop', { method: 'POST' });
+    const d = await r.json();
+    msg.style.color = 'var(--text3)';
+    msg.textContent = d.message || 'Bot stopped';
+    pharmaBotRefreshStatus();
+  } catch(e) {
+    msg.style.color = '#ef5350';
+    msg.textContent = 'Error: ' + e.message;
+  }
+}
+
+async function pharmaBotCheck() {
+  const msg = document.getElementById('pharma-bot-msg');
+  msg.style.color = 'var(--text3)';
+  msg.textContent = 'Checking positions...';
+  try {
+    const r = await fetch('/api/pharmabot?action=check', { method: 'POST' });
+    const d = await r.json();
+    if (d.closed?.length) {
+      msg.style.color = '#26a69a';
+      msg.textContent = `Closed: ${d.closed.join(', ')}`;
+    } else {
+      msg.textContent = `Checked ${d.checked ?? 0} positions — no exits triggered`;
+    }
+    pharmaBotRefreshStatus();
+  } catch(e) {
+    msg.style.color = '#ef5350';
+    msg.textContent = 'Error: ' + e.message;
+  }
+}
+
+// ── Pharma: FDA Calendar ─────────────────────────────────────────
+async function pharmaLoadCalendar() {
+  const status = document.getElementById('pharma-cal-status');
+  const tbody  = document.getElementById('pharma-cal-tbody');
+  status.textContent = 'Loading...';
+  tbody.innerHTML = '<tr><td colspan="8" style="padding:24px;text-align:center;color:var(--text3)">Loading FDA calendar...</td></tr>';
+  try {
+    const r = await fetch('/api/pharma?action=calendar');
+    const d = await r.json();
+    if (!d.events?.length) {
+      tbody.innerHTML = '<tr><td colspan="8" style="padding:24px;text-align:center;color:var(--text3)">No events found</td></tr>';
+      status.textContent = 'No events';
+      return;
+    }
+    tbody.innerHTML = d.events.map(ev => {
+      const imminent = ev.catalystImminent;
+      const daysStr = ev.daysAway != null ? (ev.daysAway === 0 ? 'TODAY' : ev.daysAway + 'd') : '—';
+      return `<tr style="border-bottom:1px solid var(--border);${imminent ? 'background:rgba(255,152,0,.06)' : ''}">
+        <td style="padding:10px 16px;color:var(--text1);white-space:nowrap">${ev.date || '—'}</td>
+        <td style="padding:10px 16px;font-weight:600;color:var(--accent)">${ev.ticker || '—'}</td>
+        <td style="padding:10px 16px;color:var(--text2)">${ev.drug || '—'}</td>
+        <td style="padding:10px 16px;color:var(--text3)">${ev.type || '—'}</td>
+        <td style="padding:10px 16px;color:var(--text3);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${ev.indication || '—'}</td>
+        <td style="padding:10px 16px;text-align:center;font-weight:600;color:${imminent ? '#ff9800' : 'var(--text2)'}">${daysStr}</td>
+        <td style="padding:10px 16px">${pharmaHalalBadge(ev.halalStatus)}</td>
+        <td style="padding:10px 16px">${imminent ? '<span style="font-size:10px;font-weight:700;color:#ff9800;letter-spacing:.06em">⚡ IMMINENT</span>' : ''}</td>
+      </tr>`;
+    }).join('');
+    status.textContent = `${d.count} events loaded`;
+  } catch(e) {
+    tbody.innerHTML = '<tr><td colspan="8" style="padding:24px;text-align:center;color:#ef5350">Error loading calendar</td></tr>';
+    status.textContent = 'Error: ' + e.message;
+  }
+}
+
+// ── Pharma: Signal Analyzer ──────────────────────────────────────
+async function pharmaAnalyzeSignal() {
+  const sym = (document.getElementById('pharma-signal-sym').value || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 10);
+  if (!sym) return;
+
+  const result  = document.getElementById('pharma-signal-result');
+  const loading = document.getElementById('pharma-signal-loading');
+  const errEl   = document.getElementById('pharma-signal-error');
+
+  result.style.display  = 'none';
+  errEl.style.display   = 'none';
+  loading.style.display = '';
+
+  try {
+    const r = await fetch(`/api/pharma?action=signal&symbol=${encodeURIComponent(sym)}`);
+    const d = await r.json();
+    loading.style.display = 'none';
+
+    if (d.error) {
+      errEl.textContent = d.error;
+      errEl.style.display = '';
+      return;
+    }
+
+    const signalColor = d.signal === 'BUY' ? '#26a69a' : d.signal === 'SELL' ? '#ef5350' : 'var(--text3)';
+    document.getElementById('pharma-sig-signal').textContent = d.signal || '—';
+    document.getElementById('pharma-sig-signal').style.color = signalColor;
+    document.getElementById('pharma-sig-strength').textContent = d.signalStrength || '';
+    document.getElementById('pharma-sig-price').textContent = pharmaFmt$(d.price);
+    const chg = d.changePct ?? 0;
+    const chgEl = document.getElementById('pharma-sig-change');
+    chgEl.textContent = pharmaFmtPct(chg);
+    chgEl.style.color = chg >= 0 ? '#26a69a' : '#ef5350';
+    document.getElementById('pharma-sig-rsi').textContent = d.rsi != null ? d.rsi.toFixed(1) : '—';
+    document.getElementById('pharma-sig-vol').textContent = `Rel Vol: ${d.relVolume ?? '—'}×`;
+    const scoreEl = document.getElementById('pharma-sig-score');
+    const score = d.combinedScore ?? 0.5;
+    scoreEl.textContent = (score * 100).toFixed(0) + '/100';
+    scoreEl.style.color = score >= 0.62 ? '#26a69a' : score <= 0.38 ? '#ef5350' : 'var(--text2)';
+    document.getElementById('pharma-sig-halal').innerHTML = pharmaHalalBadge(d.halalStatus);
+    document.getElementById('pharma-sig-stop').textContent = `Stop: ${pharmaFmt$(d.stopLoss)}`;
+    document.getElementById('pharma-sig-tp').textContent   = `Target: ${pharmaFmt$(d.takeProfit)}`;
+
+    const sentColor = d.sentimentLabel === 'BULLISH' ? '#26a69a' : d.sentimentLabel === 'BEARISH' ? '#ef5350' : 'var(--text3)';
+    document.getElementById('pharma-sig-sent').textContent = d.sentimentLabel || 'NEUTRAL';
+    document.getElementById('pharma-sig-sent').style.color = sentColor;
+    document.getElementById('pharma-sig-sent-sum').textContent = d.sentimentSummary || '';
+
+    if (d.news?.length) {
+      document.getElementById('pharma-sig-news').style.display = '';
+      document.getElementById('pharma-sig-news-list').innerHTML = d.news.map(n =>
+        `<a href="${n.url || '#'}" target="_blank" rel="noopener noreferrer"
+          style="display:block;padding:8px 12px;background:var(--bg2);border-radius:6px;font-size:12px;color:var(--text2);text-decoration:none;line-height:1.4;border:1px solid var(--border)">
+          ${n.title || ''}
+          <span style="color:var(--text3);margin-left:6px">${n.published ? n.published.slice(0,10) : ''}</span>
+        </a>`
+      ).join('');
+    } else {
+      document.getElementById('pharma-sig-news').style.display = 'none';
+    }
+
+    result.style.display = '';
+  } catch(e) {
+    loading.style.display = 'none';
+    errEl.textContent = 'Network error: ' + e.message;
+    errEl.style.display = '';
+  }
+}
+
+// ── Pharma: Short Squeeze Scanner ────────────────────────────────
+async function pharmaLoadShorts() {
+  const status = document.getElementById('pharma-shorts-status');
+  const tbody  = document.getElementById('pharma-shorts-tbody');
+  status.textContent = 'Scanning...';
+  tbody.innerHTML = '<tr><td colspan="7" style="padding:24px;text-align:center;color:var(--text3)">Scanning pharma universe...</td></tr>';
+  try {
+    const r = await fetch('/api/pharma?action=shorts');
+    const d = await r.json();
+    if (!d.candidates?.length) {
+      tbody.innerHTML = '<tr><td colspan="7" style="padding:24px;text-align:center;color:var(--text3)">No short squeeze candidates found today</td></tr>';
+      status.textContent = 'No candidates';
+      return;
+    }
+    tbody.innerHTML = d.candidates.map(c => {
+      const chg = c.changePct ?? 0;
+      return `<tr style="border-bottom:1px solid var(--border)">
+        <td style="padding:10px 16px;font-weight:600;color:var(--accent)">${c.symbol}</td>
+        <td style="padding:10px 16px;text-align:right;color:var(--text1)">${pharmaFmt$(c.price)}</td>
+        <td style="padding:10px 16px;text-align:right;color:${chg >= 0 ? '#26a69a' : '#ef5350'};font-weight:600">${pharmaFmtPct(chg)}</td>
+        <td style="padding:10px 16px;text-align:right;color:#ff9800;font-weight:600">${c.relVolume ?? '—'}×</td>
+        <td style="padding:10px 16px;text-align:right;color:${c.rsi > 80 ? '#ef5350' : '#ff9800'}">${c.rsi?.toFixed(1) ?? '—'}</td>
+        <td style="padding:10px 16px;text-align:right;color:var(--text2)">${c.squeezeScore?.toFixed(2) ?? '—'}</td>
+        <td style="padding:10px 16px">${pharmaHalalBadge(c.halalStatus)}</td>
+      </tr>`;
+    }).join('');
+    status.textContent = `${d.count} candidate(s) · ${d.scannedAt?.slice(0,10) ?? ''}`;
+  } catch(e) {
+    tbody.innerHTML = '<tr><td colspan="7" style="padding:24px;text-align:center;color:#ef5350">Error scanning</td></tr>';
+    status.textContent = 'Error: ' + e.message;
+  }
+}
+
+// ── Pharma: Watchlist Scan ────────────────────────────────────────
+async function pharmaLoadScan() {
+  const status = document.getElementById('pharma-scan-status');
+  const tbody  = document.getElementById('pharma-scan-tbody');
+  status.textContent = 'Scanning 30 symbols...';
+  tbody.innerHTML = '<tr><td colspan="9" style="padding:24px;text-align:center;color:var(--text3)">Scanning pharma universe...</td></tr>';
+  try {
+    const r = await fetch('/api/pharma?action=scan');
+    const d = await r.json();
+    _pharmaScanData = d.symbols || [];
+    pharmaRenderScan(_pharmaScanData);
+    status.textContent = `${d.count} symbols · ${d.scannedAt?.slice(0,10) ?? ''}`;
+  } catch(e) {
+    tbody.innerHTML = '<tr><td colspan="9" style="padding:24px;text-align:center;color:#ef5350">Error scanning</td></tr>';
+    status.textContent = 'Error: ' + e.message;
+  }
+}
+
+function pharmaFilterScan() {
+  const halalOnly = document.getElementById('pharma-halal-filter').checked;
+  const filtered = halalOnly ? _pharmaScanData.filter(s => s.halalStatus === 'HALAL VERIFIED') : _pharmaScanData;
+  pharmaRenderScan(filtered);
+}
+
+function pharmaRenderScan(symbols) {
+  const tbody = document.getElementById('pharma-scan-tbody');
+  if (!symbols?.length) {
+    tbody.innerHTML = '<tr><td colspan="9" style="padding:24px;text-align:center;color:var(--text3)">No symbols to display</td></tr>';
+    return;
+  }
+  tbody.innerHTML = symbols.map((s, i) => {
+    const chg = s.changePct ?? 0;
+    const imminent = s.catalystImminent;
+    return `<tr style="border-bottom:1px solid var(--border);${imminent ? 'background:rgba(255,152,0,.05)' : ''}">
+      <td style="padding:10px 16px;color:var(--text3);font-size:12px">${i + 1}</td>
+      <td style="padding:10px 16px;font-weight:600;color:var(--accent)">${s.symbol}</td>
+      <td style="padding:10px 16px;text-align:right;color:var(--text1)">${pharmaFmt$(s.close)}</td>
+      <td style="padding:10px 16px;text-align:right;color:${chg >= 0 ? '#26a69a' : '#ef5350'};font-weight:600">${pharmaFmtPct(chg)}</td>
+      <td style="padding:10px 16px;text-align:right;color:var(--text2)">${pharmaFmtVol(s.volume)}</td>
+      <td style="padding:10px 16px;text-align:right;color:${s.relVolume >= 2 ? '#ff9800' : 'var(--text2)'}">${s.relVolume ?? '—'}×</td>
+      <td style="padding:10px 16px;text-align:right;color:var(--text3)">${s.rangePct?.toFixed(1) ?? '—'}%</td>
+      <td style="padding:10px 16px">${pharmaHalalBadge(s.halalStatus)}</td>
+      <td style="padding:10px 16px">${imminent ? `<span style="font-size:10px;font-weight:700;color:#ff9800">⚡ ${s.catalystDate || 'IMMINENT'}</span>` : ''}</td>
+    </tr>`;
+  }).join('');
+}
+
+// ── Pharma: Trade Log ─────────────────────────────────────────────
+async function pharmaLoadTradeLog() {
+  await pharmaBotRefreshStatus();
+}
+
+function pharmaRenderTradeLog(trades) {
+  const tbody = document.getElementById('pharma-log-tbody');
+  const count = document.getElementById('pharma-log-count');
+  if (!trades?.length) {
+    tbody.innerHTML = '<tr><td colspan="9" style="padding:24px;text-align:center;color:var(--text3)">No trades yet</td></tr>';
+    count.textContent = '0 trades';
+    return;
+  }
+  count.textContent = `${trades.length} trade(s)`;
+  tbody.innerHTML = trades.map(t => {
+    const isExit = t.action === 'EXIT';
+    const pnl = t.pnl ?? null;
+    const pnlColor = pnl == null ? 'var(--text3)' : pnl >= 0 ? '#26a69a' : '#ef5350';
+    const timeStr = t.time ? t.time.slice(0,19).replace('T', ' ') : '—';
+    return `<tr style="border-bottom:1px solid var(--border)">
+      <td style="padding:9px 16px;font-size:11px;color:var(--text3);white-space:nowrap">${timeStr}</td>
+      <td style="padding:9px 16px;font-weight:600;color:var(--accent)">${t.symbol}</td>
+      <td style="padding:9px 16px"><span style="font-size:10px;font-weight:700;padding:2px 7px;border-radius:4px;background:${isExit ? 'rgba(239,83,80,.15)' : 'rgba(38,166,154,.15)'};color:${isExit ? '#ef5350' : '#26a69a'}">${t.action}</span></td>
+      <td style="padding:9px 16px;text-align:right;color:var(--text2)">${t.qty ?? '—'}</td>
+      <td style="padding:9px 16px;text-align:right;color:var(--text2)">${pharmaFmt$(t.entryPrice)}</td>
+      <td style="padding:9px 16px;text-align:right;color:var(--text2)">${t.exitPrice ? pharmaFmt$(t.exitPrice) : '—'}</td>
+      <td style="padding:9px 16px;text-align:right;font-weight:600;color:${pnlColor}">${pnl != null ? (pnl >= 0 ? '+' : '') + pharmaFmt$(pnl) : '—'}</td>
+      <td style="padding:9px 16px;font-size:12px;color:var(--text3);max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${t.reason || '—'}</td>
+      <td style="padding:9px 16px">${pharmaHalalBadge(t.halalStatus || 'UNVERIFIED')}</td>
+    </tr>`;
+  }).join('');
+}
+
+// Poll pharma bot status every 30s when on pharma page
+setInterval(() => {
+  const pharmaPage = document.getElementById('page-pharma');
+  if (pharmaPage && !pharmaPage.classList.contains('hidden')) {
+    pharmaBotRefreshStatus();
+  }
+}, 30000);
 </script>
 </body>
 </html>
