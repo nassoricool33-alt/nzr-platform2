@@ -6,6 +6,8 @@ module.exports = async function handler(req, res) {
     return res.status(200).end();
   }
 
+  console.log('[analyze] Request received, method:', req.method);
+
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -15,13 +17,20 @@ module.exports = async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
   const key = process.env.ANTHROPIC_API_KEY;
+  console.log('[analyze] API key present:', !!key);
   if (!key) {
     console.error('[analyze] ANTHROPIC_API_KEY is not set');
     return res.status(500).json({ error: 'AI service not configured' });
   }
 
-  // Validate messages array
-  const messages = req.body && Array.isArray(req.body.messages) ? req.body.messages : null;
+  if (!req.body) {
+    console.error('[analyze] Request body is empty');
+    return res.status(400).json({ error: 'Request body is empty' });
+  }
+
+  console.log('[analyze] Request body:', JSON.stringify(req.body));
+
+  const messages = Array.isArray(req.body.messages) ? req.body.messages : null;
   if (!messages || messages.length === 0) {
     return res.status(400).json({ error: 'messages array is required' });
   }
@@ -58,22 +67,24 @@ module.exports = async function handler(req, res) {
     const data = await response.json();
 
     if (!response.ok) {
-      const errMsg = data?.error?.message || `Anthropic API error (${response.status})`;
-      console.error('[analyze] Anthropic API error:', response.status, errMsg);
-      return res.status(response.status).json({ error: 'AI service unavailable. Please try again.' });
+      console.error('[analyze] Anthropic error:', response.status, JSON.stringify(data));
+      return res.status(response.status).json({
+        error: 'AI analysis failed',
+        status: response.status,
+        detail: data?.error?.message,
+      });
     }
 
     const text = data.content?.[0]?.text ?? '';
     if (!text) {
       console.error('[analyze] Empty content in Anthropic response:', JSON.stringify(data));
-      return res.status(500).json({ error: 'AI service unavailable. Please try again.' });
+      return res.status(500).json({ error: 'AI analysis failed', status: 500, detail: 'Empty response from model' });
     }
 
-    // Return in the shape the frontend expects: { content: [{ type, text }] }
     return res.status(200).json({ content: [{ type: 'text', text }] });
 
   } catch (err) {
     console.error('[analyze] Unexpected error:', err);
-    return res.status(500).json({ error: 'AI service unavailable. Please try again.' });
+    return res.status(500).json({ error: 'AI analysis failed', status: 500, detail: err.message });
   }
-}
+};
