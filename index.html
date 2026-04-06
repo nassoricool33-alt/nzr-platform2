@@ -2842,7 +2842,7 @@ Respond concisely and professionally. Focus on actionable market insights, strat
 // Replace SUPABASE_ANON_KEY with your project's anon/publishable key from
 // https://supabase.com/dashboard/project/chfdvmtnditebmlmyihr/settings/api
 const SUPABASE_URL='https://chfdvmtnditebmlmyihr.supabase.co';
-const SUPABASE_ANON_KEY='YOUR_SUPABASE_ANON_KEY';
+const SUPABASE_ANON_KEY='sb_publishable_javjCOOGKWg5T8zoS3BWWQ_LHf_vHCW';
 
 let supabaseClient=null;
 let _supabase=null; // alias used by notifications
@@ -4195,17 +4195,23 @@ async function renderDirectionCard(ticker, ind, qd){
 }
 
 /* ── INIT ───────────────────────────────────────── */
-buildGuideCards();
-initSupabase();
-initNotifications();
-initStatusPolling();
-initAllData(); // fetches all live quotes then renders every data section
-initWebSocket(); // start WebSocket for real-time price streaming
+(async function(){
+  buildGuideCards();
+  initSupabase(); // must be first — auth state needed before any Supabase queries
+  await new Promise(r=>setTimeout(r,100)); // allow SDK to settle
+  initNotifications();
+  initStatusPolling();
+  initAllData(); // fetches all live quotes then renders every data section
+  initWebSocket(); // start WebSocket for real-time price streaming
+})();
 
 // 30-second price refresh during market hours
 async function refreshPrices(){
   if(!isMarketOpen())return;
-  await Promise.allSettled(ALL_SYMS.map(s=>loadQuote(s)));
+  await Promise.allSettled([
+    ...ALL_SYMS.map(s=>loadQuote(s)),
+    loadVix(),
+  ]);
   renderIndicesLive();
   renderTickerLive();
   buildMarkets();
@@ -4343,7 +4349,7 @@ async function pharmaLoadCalendar() {
   status.textContent = 'Loading...';
   tbody.innerHTML = '<tr><td colspan="8" style="padding:24px;text-align:center;color:var(--text3)">Loading FDA calendar...</td></tr>';
   try {
-    const r = await fetch('/api/pharma?action=calendar');
+    const r = await fetch('/api/pharma?action=fda');
     const d = await r.json();
     if (!d.events?.length) {
       tbody.innerHTML = '<tr><td colspan="8" style="padding:24px;text-align:center;color:var(--text3)">No events found</td></tr>';
