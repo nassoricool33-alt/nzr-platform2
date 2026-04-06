@@ -13,13 +13,20 @@ function checkRate(ip) {
   return true;
 }
 
-function httpsGet(url) {
+function httpsGet(url, timeoutMs = 10000) {
   return new Promise((resolve, reject) => {
-    https.get(url, (r) => {
+    const req = https.get(url, (r) => {
       let d = '';
       r.on('data', c => d += c);
-      r.on('end', () => { try { resolve(JSON.parse(d)); } catch (e) { reject(new Error('Invalid JSON')); } });
-    }).on('error', reject);
+      r.on('end', () => {
+        try { resolve(JSON.parse(d)); }
+        catch { reject(new Error('Invalid JSON')); }
+      });
+    });
+    req.setTimeout(timeoutMs, () => {
+      req.destroy(new Error('Quote request timed out'));
+    });
+    req.on('error', reject);
   });
 }
 
@@ -47,32 +54,39 @@ module.exports = async function handler(req, res) {
   if (!symbol) return res.status(400).json({ error: 'Symbol required' });
 
   try {
-    // Fetch last trade (real-time price) and previous day OHLCV in parallel
-    const [tradeData, prevData] = await Promise.allSettled([
-      httpsGet(`https://api.polygon.io/v2/last/trade/${symbol}?apiKey=${key}`),
-      httpsGet(`https://api.polygon.io/v2/aggs/ticker/${symbol}/prev?adjusted=true&apiKey=${key}`),
-    ]);
+    // Primary: previous day aggregate (reliable OHLCV)
+    let bar = null;
+    try {
+      const prevData = await httpsGet(
+        `https://api.polygon.io/v2/aggs/ticker/${symbol}/prev?adjusted=true&apiKey=${key}`
+      );
+      bar = prevData?.results?.[0] ?? null;
+    } catch (err) {
+      console.error('[quote] prev agg failed for', symbol, err.message);
+    }
 
-    const trade = tradeData.status === 'fulfilled' ? tradeData.value : null;
-    const prev  = prevData.status  === 'fulfilled' ? prevData.value  : null;
+    // Fallback: last trade for real-time price
+    let lastPrice = null;
+    try {
+      const tradeData = await httpsGet(
+        `https://api.polygon.io/v2/last/trade/${symbol}?apiKey=${key}`
+      );
+      lastPrice = tradeData?.results?.p ?? tradeData?.last?.price ?? null;
+    } catch (err) {
+      console.error('[quote] last trade failed for', symbol, err.message);
+    }
 
-    // Real-time price from last trade
-    const price = trade?.results?.p ?? trade?.last?.price ?? null;
+    if (!bar && lastPrice == null) {
+      return res.status(200).json({ symbol, price: null, error: 'Quote unavailable' });
+    }
 
-    // OHLCV from previous day aggregate
-    const bar = prev?.results?.[0] ?? null;
+    const prevClose = bar?.c ?? null;
     const open      = bar?.o ?? null;
     const high      = bar?.h ?? null;
     const low       = bar?.l ?? null;
-    const prevClose = bar?.c ?? null;
     const volume    = bar?.v ?? null;
-
-    if (price == null && prevClose == null) {
-      return res.status(404).json({ error: 'No data for symbol' });
-    }
-
-    const livePrice = price ?? prevClose;
-    const change = prevClose ? ((livePrice - prevClose) / prevClose) * 100 : null;
+    const livePrice = lastPrice ?? prevClose;
+    const change    = prevClose ? ((livePrice - prevClose) / prevClose) * 100 : null;
 
     return res.status(200).json({
       symbol,
@@ -87,6 +101,6 @@ module.exports = async function handler(req, res) {
     });
   } catch (err) {
     console.error('[quote]', symbol, err.message);
-    return res.status(500).json({ error: 'Quote data unavailable.' });
+    return res.status(200).json({ symbol, price: null, error: 'Quote unavailable' });
   }
 };

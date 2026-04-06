@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://unpkg.com; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://api.polygon.io wss://socket.polygon.io https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://paper-api.alpaca.markets https://production.dataviz.cnn.io https://query1.finance.yahoo.com https://finnhub.io https://api.anthropic.com; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; img-src 'self' data: https:; font-src 'self' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com;">
 <title>NZR — AI Trading Intelligence</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"/>
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=Space+Mono:ital,wght@0,400;0,700;1,400&family=Inter:wght@300;400;500&display=swap" rel="stylesheet"/>
@@ -2825,11 +2826,13 @@ const SUPABASE_URL='https://chfdvmtnditebmlmyihr.supabase.co';
 const SUPABASE_ANON_KEY='YOUR_SUPABASE_ANON_KEY';
 
 let supabaseClient=null;
+let _supabase=null; // alias used by notifications
 
 function initSupabase(){
   try{
     if(typeof window.supabase==='undefined'){console.warn('[auth] Supabase SDK not loaded');return;}
     supabaseClient=window.supabase.createClient(SUPABASE_URL,SUPABASE_ANON_KEY);
+    _supabase=supabaseClient; // make available to fetchNotifsFromSupabase
     supabaseClient.auth.onAuthStateChange((event,session)=>{
       if((event==='SIGNED_IN'||event==='INITIAL_SESSION')&&session){
         closeAuthModal();

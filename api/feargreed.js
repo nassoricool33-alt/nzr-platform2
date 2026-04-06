@@ -2,7 +2,7 @@ const https = require('https');
 
 const ALLOWED_ORIGINS = ['https://nzr-platform2.vercel.app', 'http://localhost:3000'];
 
-function httpsGet(url) {
+function httpsGet(url, timeoutMs = 10000) {
   return new Promise((resolve, reject) => {
     const opts = {
       headers: {
@@ -10,14 +10,18 @@ function httpsGet(url) {
         'Accept': 'application/json',
       },
     };
-    https.get(url, opts, (r) => {
+    const req = https.get(url, opts, (r) => {
       let d = '';
       r.on('data', c => d += c);
       r.on('end', () => {
         try { resolve(JSON.parse(d)); }
-        catch (e) { reject(new Error('Invalid JSON')); }
+        catch { reject(new Error('Invalid JSON from Fear & Greed endpoint')); }
       });
-    }).on('error', reject);
+    });
+    req.setTimeout(timeoutMs, () => {
+      req.destroy(new Error('Fear & Greed request timed out'));
+    });
+    req.on('error', reject);
   });
 }
 
@@ -48,10 +52,9 @@ module.exports = async function handler(req, res) {
       'https://production.dataviz.cnn.io/index/fearandgreed/graphdata'
     );
 
-    // CNN response shape: { fear_and_greed: { score, rating, timestamp }, ... }
     const fg = data?.fear_and_greed;
     if (!fg || fg.score == null) {
-      return res.status(502).json({ error: 'No Fear & Greed data' });
+      return res.status(200).json({ value: null, rating: 'Unavailable', error: 'Fear & Greed data unavailable' });
     }
 
     const score = Math.round(Number(fg.score));
@@ -70,6 +73,6 @@ module.exports = async function handler(req, res) {
 
   } catch (err) {
     console.error('[feargreed]', err.message);
-    return res.status(500).json({ error: 'Fear & Greed data unavailable.' });
+    return res.status(200).json({ value: null, rating: 'Unavailable', error: 'Fear & Greed data unavailable' });
   }
 };

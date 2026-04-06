@@ -2,13 +2,20 @@ const https = require('https');
 
 const ALLOWED_ORIGINS = ['https://nzr-platform2.vercel.app', 'http://localhost:3000'];
 
-function httpsGet(url) {
+function httpsGet(url, timeoutMs = 10000) {
   return new Promise((resolve, reject) => {
-    https.get(url, (r) => {
+    const req = https.get(url, (r) => {
       let d = '';
       r.on('data', c => d += c);
-      r.on('end', () => { try { resolve(JSON.parse(d)); } catch (e) { reject(new Error('Invalid JSON')); } });
-    }).on('error', reject);
+      r.on('end', () => {
+        try { resolve(JSON.parse(d)); }
+        catch { reject(new Error('Invalid JSON from VIX endpoint')); }
+      });
+    });
+    req.setTimeout(timeoutMs, () => {
+      req.destroy(new Error('VIX request timed out'));
+    });
+    req.on('error', reject);
   });
 }
 
@@ -27,16 +34,17 @@ module.exports = async function handler(req, res) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
   const key = process.env.POLYGON_API_KEY;
-  if (!key) return res.status(500).json({ error: 'Not configured' });
+  if (!key) return res.status(500).json({ symbol: 'VIX', price: null, error: 'POLYGON_API_KEY not configured' });
 
   try {
-    // I:VIX is the Polygon index ticker for CBOE VIX
     const data = await httpsGet(
       `https://api.polygon.io/v2/aggs/ticker/I:VIX/prev?adjusted=true&apiKey=${key}`
     );
 
     const bar = data?.results?.[0];
-    if (!bar) return res.status(502).json({ error: 'No VIX data' });
+    if (!bar) {
+      return res.status(200).json({ symbol: 'VIX', price: null, error: 'VIX data unavailable' });
+    }
 
     const price     = bar.c;
     const prevClose = bar.o;
@@ -50,6 +58,6 @@ module.exports = async function handler(req, res) {
     });
   } catch (err) {
     console.error('[vix]', err.message);
-    return res.status(500).json({ error: 'VIX data unavailable.' });
+    return res.status(200).json({ symbol: 'VIX', price: null, error: 'VIX data unavailable' });
   }
 };

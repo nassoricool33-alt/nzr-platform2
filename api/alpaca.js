@@ -5,10 +5,8 @@
  * Optional:          ALPACA_BASE_URL (default: paper trading)
  */
 
-const https = require('https');
-
 const ALLOWED_ORIGINS = ['https://nzr-platform2.vercel.app', 'http://localhost:3000'];
-const DEFAULT_BASE    = 'paper-api.alpaca.markets'; // swap to 'api.alpaca.markets' for live
+const DEFAULT_BASE    = 'https://paper-api.alpaca.markets'; // swap to 'https://api.alpaca.markets' for live
 
 const rateLimit = new Map();
 function checkRate(ip) {
@@ -19,36 +17,29 @@ function checkRate(ip) {
   e.count++; return true;
 }
 
-function alpacaRequest({ host, method, path, body, keyId, secretKey }) {
-  return new Promise((resolve, reject) => {
-    const bodyStr = body ? JSON.stringify(body) : '';
-    const opts = {
-      hostname: host,
-      path,
+async function alpacaRequest({ baseUrl, method, path, body, keyId, secretKey }) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10000);
+  try {
+    const response = await fetch(`${baseUrl}${path}`, {
       method,
       headers: {
         'APCA-API-KEY-ID':     keyId,
         'APCA-API-SECRET-KEY': secretKey,
         'Content-Type':        'application/json',
         'Accept':              'application/json',
-        ...(bodyStr ? { 'Content-Length': Buffer.byteLength(bodyStr) } : {}),
       },
-    };
-    const req = https.request(opts, (r) => {
-      let d = '';
-      r.on('data', c => d += c);
-      r.on('end', () => {
-        try {
-          resolve({ status: r.statusCode, body: d ? JSON.parse(d) : null });
-        } catch {
-          resolve({ status: r.statusCode, body: d });
-        }
-      });
+      ...(body ? { body: JSON.stringify(body) } : {}),
+      signal: controller.signal,
     });
-    req.on('error', reject);
-    if (bodyStr) req.write(bodyStr);
-    req.end();
-  });
+    clearTimeout(timeout);
+    let responseBody = null;
+    try { responseBody = await response.json(); } catch { /* empty body */ }
+    return { status: response.status, body: responseBody };
+  } catch (err) {
+    clearTimeout(timeout);
+    throw err;
+  }
 }
 
 module.exports = async function handler(req, res) {
@@ -74,9 +65,9 @@ module.exports = async function handler(req, res) {
   }
 
   const rawBase = process.env.ALPACA_BASE_URL || DEFAULT_BASE;
-  const host    = rawBase.replace(/^https?:\/\//, '');
+  const baseUrl = rawBase.startsWith('http') ? rawBase.replace(/\/$/, '') : `https://${rawBase}`;
   const action  = req.query.action || '';
-  const ctx     = { host, keyId, secretKey };
+  const ctx     = { baseUrl, keyId, secretKey };
 
   try {
     // ── GET positions ───────────────────────────────────────────────────────
@@ -171,6 +162,6 @@ module.exports = async function handler(req, res) {
 
   } catch (err) {
     console.error('[alpaca]', action, err.message);
-    return res.status(500).json({ error: 'Alpaca request failed', connected: false });
+    return res.status(500).json({ error: 'Alpaca connection failed', connected: false });
   }
 };

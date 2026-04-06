@@ -17,7 +17,7 @@ module.exports = async function handler(req, res) {
   const key = process.env.ANTHROPIC_API_KEY;
   if (!key) {
     console.error('[analyze] ANTHROPIC_API_KEY is not set');
-    return res.status(500).json({ error: 'AI service unavailable. Please try again.' });
+    return res.status(500).json({ error: 'AI service not configured' });
   }
 
   // Validate messages array
@@ -31,20 +31,29 @@ module.exports = async function handler(req, res) {
     : 1024;
 
   try {
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': key,
-        'anthropic-version': '2023-06-01',
-      },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-6',
-        max_tokens,
-        system: 'You are NZR, an elite AI trading intelligence assistant. Follow the formatting instructions given in each user message exactly — if JSON is requested return only JSON, if a conversational answer is requested respond in clear prose.',
-        messages,
-      }),
-    });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 25000);
+
+    let response;
+    try {
+      response = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': key,
+          'anthropic-version': '2023-06-01',
+        },
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-6',
+          max_tokens,
+          system: 'You are NZR, an elite AI trading intelligence assistant. Follow the formatting instructions given in each user message exactly — if JSON is requested return only JSON, if a conversational answer is requested respond in clear prose.',
+          messages,
+        }),
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timeout);
+    }
 
     const data = await response.json();
 
