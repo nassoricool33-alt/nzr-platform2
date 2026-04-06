@@ -1429,7 +1429,7 @@ footer{border-top:1px solid var(--border);padding:32px 0;margin-top:80px}
               <tr>
                 <th>Entry Date</th><th>Symbol</th><th>Mode</th><th>Dir</th><th>Entry $</th>
                 <th>Exit Date</th><th>Exit $</th>
-                <th>P&amp;L $</th><th>P&amp;L %</th><th>Result</th><th>Days</th>
+                <th>P&amp;L $</th><th>P&amp;L %</th><th>Result</th><th>Days</th><th>Exit Reason</th>
               </tr>
             </thead>
             <tbody id="bt-tbody"></tbody>
@@ -3022,10 +3022,11 @@ function btRenderTable(trades) {
     const badge    = t.result === 'WIN' ? '<span class="bt-result-win">WIN</span>' : '<span class="bt-result-loss">LOSS</span>';
     const pnlStyle = `color:${t.pnl >= 0 ? 'var(--green)' : 'var(--red)'};font-weight:700`;
     const modeColor = MODECOLORS[t.mode] || 'var(--text3)';
-    const holdStr  = t.mode === 'day' ? (t.holdingMins != null ? `${t.holdingMins}m` : '0d') : `${t.holdingDays ?? 0}d`;
+    const holdStr  = t.holdingBars != null ? `${t.holdingBars}d` : t.mode === 'day' ? (t.holdingMins != null ? `${t.holdingMins}m` : '0d') : `${t.holdingDays ?? 0}d`;
+    const exitReasonColor = t.exitReason === 'Stop Loss' ? 'var(--red)' : t.exitReason === 'Take Profit' ? 'var(--green)' : 'var(--text3)';
     return `<tr class="${cls}">
       <td style="font-family:var(--font-mono);color:var(--text3)">${t.entryDate}</td>
-      <td style="font-family:var(--font-mono);font-weight:700;color:var(--gold)">${t.symbol}</td>
+      <td style="font-family:var(--font-mono);font-weight:700;color:var(--gold)">${t.symbol||''}</td>
       <td style="font-family:var(--font-mono);font-size:9px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:${modeColor}">${t.mode||''}</td>
       <td style="font-family:var(--font-mono);font-weight:700;color:var(--green)">${t.direction||'LONG'}</td>
       <td style="font-family:var(--font-mono)">${btFmt$(t.entryPrice)}</td>
@@ -3035,6 +3036,7 @@ function btRenderTable(trades) {
       <td style="font-family:var(--font-mono);${pnlStyle}">${btFmtPct(t.pnlPct, true)}</td>
       <td>${badge}</td>
       <td style="font-family:var(--font-mono);color:var(--text3)">${holdStr}</td>
+      <td style="font-family:var(--font-mono);font-size:10px;color:${exitReasonColor}">${t.exitReason||''}</td>
     </tr>`;
   }).join('');
 }
@@ -3177,12 +3179,13 @@ function btChartOptions(tickColor, gridColor) {
 
 function btExportCSV() {
   if (!_btTrades.length) return;
-  const header = 'Symbol,Mode,Strategy,Direction,Entry Date,Entry Price,Exit Date,Exit Price,P&L $,P&L %,Result,Hold';
+  const header = 'Symbol,Mode,Strategy,Direction,Entry Date,Entry Price,Exit Date,Exit Price,P&L $,P&L %,Result,Hold,Exit Reason';
   const rows = _btTrades.map(t => [
-    t.symbol, t.mode||'', t.strategy||'', t.direction||'LONG',
+    t.symbol||'', t.mode||'', t.strategy||'', t.direction||'LONG',
     t.entryDate, t.entryPrice, t.exitDate, t.exitPrice,
     t.pnl, t.pnlPct, t.result,
-    t.mode === 'day' ? `${t.holdingMins ?? 0}m` : `${t.holdingDays ?? 0}d`,
+    t.holdingBars != null ? `${t.holdingBars}d` : t.mode === 'day' ? `${t.holdingMins ?? 0}m` : `${t.holdingDays ?? 0}d`,
+    t.exitReason||'',
   ].join(','));
   const csv  = [header, ...rows].join('\n');
   const blob = new Blob([csv], { type: 'text/csv' });

@@ -83,446 +83,294 @@ function applySlippage(price, side) {
 
 // ─── INDICATOR MATH ───────────────────────────────────────────────────────────
 
-/**
- * EMA seeded from first close. All bars have values (no null warmup).
- * Only meaningful from bar >= period, but usable from bar 0.
- */
-function calcEMA(closes, period) {
-  if (!closes.length) return [];
-  const k   = 2 / (period + 1);
-  const ema = new Array(closes.length);
-  ema[0]    = closes[0];
-  for (let i = 1; i < closes.length; i++) {
+function calculateRSI(closes, period = 14) {
+  if (closes.length < period + 1) return [];
+  const rsi = new Array(closes.length).fill(null);
+
+  let gains = 0, losses = 0;
+  for (let i = 1; i <= period; i++) {
+    const diff = closes[i] - closes[i - 1];
+    if (diff >= 0) gains += diff;
+    else losses += Math.abs(diff);
+  }
+
+  let avgGain = gains / period;
+  let avgLoss = losses / period;
+  rsi[period] = 100 - (100 / (1 + (avgLoss === 0 ? Infinity : avgGain / avgLoss)));
+
+  for (let i = period + 1; i < closes.length; i++) {
+    const diff = closes[i] - closes[i - 1];
+    const gain = diff >= 0 ? diff : 0;
+    const loss = diff < 0 ? Math.abs(diff) : 0;
+    avgGain = (avgGain * (period - 1) + gain) / period;
+    avgLoss = (avgLoss * (period - 1) + loss) / period;
+    rsi[i] = 100 - (100 / (1 + (avgLoss === 0 ? Infinity : avgGain / avgLoss)));
+  }
+  return rsi;
+}
+
+function calculateEMA(closes, period) {
+  if (closes.length < period) return [];
+  const ema = new Array(closes.length).fill(null);
+  const k = 2 / (period + 1);
+
+  let sum = 0;
+  for (let i = 0; i < period; i++) sum += closes[i];
+  ema[period - 1] = sum / period;
+
+  for (let i = period; i < closes.length; i++) {
     ema[i] = closes[i] * k + ema[i - 1] * (1 - k);
   }
   return ema;
 }
 
-/** Wilder-smoothed RSI. Returns null for first `period` indices. */
-function calcRSI(closes, period = 14) {
-  const rsi = new Array(closes.length).fill(null);
-  if (closes.length < period + 1) return rsi;
-  const gains = [], losses = [];
-  for (let i = 1; i < closes.length; i++) {
-    const diff = closes[i] - closes[i - 1];
-    gains.push(diff > 0 ? diff : 0);
-    losses.push(diff < 0 ? Math.abs(diff) : 0);
+function calculateMACD(closes, fast = 12, slow = 26, signal = 9) {
+  if (closes.length < slow + signal) return { macd: [], signal: [], histogram: [] };
+
+  const emaFast = calculateEMA(closes, fast);
+  const emaSlow = calculateEMA(closes, slow);
+
+  const macdLine = closes.map((_, i) => {
+    if (emaFast[i] === null || emaSlow[i] === null) return null;
+    return emaFast[i] - emaSlow[i];
+  });
+
+  const signalLine = new Array(closes.length).fill(null);
+  const firstValidIdx = macdLine.findIndex(v => v !== null);
+  if (firstValidIdx === -1) return { macd: macdLine, signal: signalLine, histogram: signalLine };
+
+  const k = 2 / (signal + 1);
+  let sum = 0, count = 0;
+  for (let i = firstValidIdx; i < firstValidIdx + signal; i++) {
+    if (macdLine[i] !== null) { sum += macdLine[i]; count++; }
   }
-  let ag = gains.slice(0, period).reduce((a, b) => a + b, 0) / period;
-  let al = losses.slice(0, period).reduce((a, b) => a + b, 0) / period;
-  rsi[period] = al === 0 ? 100 : 100 - 100 / (1 + ag / al);
-  for (let i = period + 1; i < closes.length; i++) {
-    ag = (ag * (period - 1) + gains[i - 1])  / period;
-    al = (al * (period - 1) + losses[i - 1]) / period;
-    rsi[i] = al === 0 ? 100 : 100 - 100 / (1 + ag / al);
+  signalLine[firstValidIdx + signal - 1] = sum / count;
+
+  for (let i = firstValidIdx + signal; i < closes.length; i++) {
+    if (macdLine[i] !== null && signalLine[i - 1] !== null) {
+      signalLine[i] = macdLine[i] * k + signalLine[i - 1] * (1 - k);
+    }
   }
-  return rsi;
+
+  const histogram = closes.map((_, i) => {
+    if (macdLine[i] === null || signalLine[i] === null) return null;
+    return macdLine[i] - signalLine[i];
+  });
+
+  return { macd: macdLine, signal: signalLine, histogram };
 }
 
-/** MACD = EMA12 − EMA26, Signal = EMA9(MACD), Histogram = MACD − Signal. */
-function calcMACD(closes) {
-  const ema12    = calcEMA(closes, 12);
-  const ema26    = calcEMA(closes, 26);
-  const macdLine = closes.map((_, i) => ema12[i] - ema26[i]);
-  const sigK     = 2 / 10;
-  const signalLine = new Array(closes.length);
-  signalLine[0]    = macdLine[0];
-  for (let i = 1; i < closes.length; i++) {
-    signalLine[i] = macdLine[i] * sigK + signalLine[i - 1] * (1 - sigK);
-  }
-  const histogram = macdLine.map((v, i) => v - signalLine[i]);
-  return { macdLine, signalLine, histogram };
-}
+// ─── STRATEGIES ───────────────────────────────────────────────────────────────
 
-// ─── TRADE FACTORY ────────────────────────────────────────────────────────────
-
-/**
- * Builds a trade object with dollar P&L and compounding support.
- * @param {number} exitTs    - exit bar timestamp (ms)
- * @param {number} entryTs   - entry bar timestamp (ms)
- * @param {number} entryPrice - after slippage
- * @param {number} exitPrice  - after slippage
- * @param {number} capital   - deployed capital for this trade
- * @param {string} mode      - 'day' | 'swing'
- * @param {string} strategy
- * @param {string} symbol
- */
-function makeTrade(exitTs, entryTs, entryPrice, exitPrice, capital, mode, strategy, symbol) {
-  const shares    = Math.max(1, Math.floor(capital / entryPrice));
-  const grossPnl  = shares * (exitPrice - entryPrice);
-  const totalComm = COMMISSION * 2;                   // entry + exit
-  const pnl       = grossPnl - totalComm;
-  const pnlPct    = (pnl / capital) * 100;
-  const holdMs    = exitTs - entryTs;
-  const holdMins  = Math.round(holdMs / 60000);
-  const holdDays  = Math.max(0, Math.round(holdMs / 86400000));
-
-  return {
-    symbol,
-    mode,
-    strategy,
-    entryDate:  getETDateStr(entryTs),
-    exitDate:   getETDateStr(exitTs),
-    entryPrice: parseFloat(entryPrice.toFixed(4)),
-    exitPrice:  parseFloat(exitPrice.toFixed(4)),
-    shares,
-    pnl:        parseFloat(pnl.toFixed(2)),
-    pnlPct:     parseFloat(pnlPct.toFixed(3)),
-    result:     pnl >= 0 ? 'WIN' : 'LOSS',
-    direction:  'LONG',
-    holdingDays: mode === 'day' ? 0 : holdDays,
-    holdingMins: mode === 'day' ? holdMins : undefined,
-  };
-}
-
-// ─── DAY TRADING STRATEGIES (15-min bars) ────────────────────────────────────
-
-const DAY_STOP_PCT     = 0.015;  // 1.5% stop loss
-const DAY_NO_ENTRY_MIN = 900;    // no new entries after 3:00 PM ET
-const DAY_FORCE_MIN    = 930;    // force close at 3:30 PM ET bar (closes at 3:45)
-const MARKET_OPEN_MIN  = 570;    // 9:30 AM ET
-const MARKET_CLOSE_MIN = 960;    // 4:00 PM ET
-
-/**
- * Day MACD Crossover — 15-min bars.
- * Entry: MACD histogram flips from ≤0 to >0.
- * Exit:  histogram flips negative | stop 1.5% | EOD (3:30 PM bar).
- * No new entries after 3:00 PM ET.
- */
-function simulateDayMacdCrossover(bars, capital, symbol) {
-  if (bars.length < 50) return [];
+function runRSIStrategy(bars, capital, slippage = 0.001) {
   const closes = bars.map(b => b.c);
-  const { histogram } = calcMACD(closes);
+  const rsi = calculateRSI(closes, 14);
   const trades = [];
-  let inTrade = false, entry = null;
+  let inTrade = false;
+  let entryBar = null;
+  let entryPrice = null;
 
-  for (let i = 26; i < bars.length; i++) {
-    const min  = getETMinuteOfDay(bars[i].t);
-    const date = getETDateStr(bars[i].t);
-
-    // Outside market hours: skip
-    if (min < MARKET_OPEN_MIN || min >= MARKET_CLOSE_MIN) continue;
-
-    // New day while in trade: close at open of today (missed EOD exit)
-    if (inTrade && date !== entry.date) {
-      const exitPrice = applySlippage(bars[i].o || bars[i].c, 'sell');
-      trades.push(makeTrade(bars[i].t, entry.ts, entry.price, exitPrice, capital, 'day', 'macd_crossover', symbol));
-      inTrade = false; entry = null;
-    }
-
-    if (!inTrade) {
-      if (min >= DAY_NO_ENTRY_MIN) continue;
-      if (histogram[i] > 0 && histogram[i - 1] <= 0) {
-        const ep = applySlippage(bars[i].c, 'buy');
-        inTrade = true;
-        entry   = { date, ts: bars[i].t, price: ep, stopPrice: ep * (1 - DAY_STOP_PCT) };
-      }
-    } else {
-      const stopHit   = bars[i].l <= entry.stopPrice;
-      const crossDown = histogram[i] < 0 && histogram[i - 1] >= 0;
-      const eodClose  = min >= DAY_FORCE_MIN;
-
-      if (stopHit || crossDown || eodClose) {
-        const rawExit   = stopHit ? entry.stopPrice : bars[i].c;
-        const exitPrice = applySlippage(rawExit, 'sell');
-        trades.push(makeTrade(bars[i].t, entry.ts, entry.price, exitPrice, capital, 'day', 'macd_crossover', symbol));
-        inTrade = false; entry = null;
-      }
-    }
-  }
-  // Lingering open trade
-  if (inTrade && entry) {
-    const exitPrice = applySlippage(bars[bars.length - 1].c, 'sell');
-    trades.push(makeTrade(bars[bars.length - 1].t, entry.ts, entry.price, exitPrice, capital, 'day', 'macd_crossover', symbol));
-  }
-  return trades;
-}
-
-/**
- * Day RSI Mean Reversion — 15-min bars.
- * Entry: RSI(14) < 30 AND MACD histogram ≤ 0 turning positive (bounce from oversold).
- * Exit:  RSI > 65 | MACD histogram turns negative | stop 1.5% | EOD.
- * No new entries after 3:00 PM ET.
- */
-function simulateDayRsiMeanReversion(bars, capital, symbol) {
-  if (bars.length < 50) return [];
-  const closes        = bars.map(b => b.c);
-  const rsi           = calcRSI(closes, 14);
-  const { histogram } = calcMACD(closes);
-  const trades        = [];
-  let inTrade = false, entry = null;
-
-  for (let i = 26; i < bars.length; i++) {
+  for (let i = 15; i < bars.length; i++) {
     if (rsi[i] === null) continue;
-    const min  = getETMinuteOfDay(bars[i].t);
-    const date = getETDateStr(bars[i].t);
 
-    if (min < MARKET_OPEN_MIN || min >= MARKET_CLOSE_MIN) continue;
-
-    if (inTrade && date !== entry.date) {
-      const exitPrice = applySlippage(bars[i].o || bars[i].c, 'sell');
-      trades.push(makeTrade(bars[i].t, entry.ts, entry.price, exitPrice, capital, 'day', 'rsi_mean_reversion', symbol));
-      inTrade = false; entry = null;
+    if (!inTrade && rsi[i] < 35 && rsi[i - 1] >= 35) {
+      inTrade = true;
+      entryBar = bars[i];
+      entryPrice = bars[i].c * (1 + slippage);
     }
 
-    if (!inTrade) {
-      if (min >= DAY_NO_ENTRY_MIN) continue;
-      // RSI oversold AND MACD histogram turning up
-      if (rsi[i] < 30 && histogram[i] > 0 && histogram[i - 1] <= 0) {
-        const ep = applySlippage(bars[i].c, 'buy');
-        inTrade  = true;
-        entry    = { date, ts: bars[i].t, price: ep, stopPrice: ep * (1 - DAY_STOP_PCT) };
-      }
-    } else {
-      const stopHit   = bars[i].l <= entry.stopPrice;
-      const rsiExit   = rsi[i] > 65;
-      const macdExit  = histogram[i] < 0 && histogram[i - 1] >= 0;
-      const eodClose  = min >= DAY_FORCE_MIN;
+    if (inTrade) {
+      const stopLoss = entryPrice * 0.97;
+      const takeProfit = entryPrice * 1.06;
+      const currentPrice = bars[i].c;
 
-      if (stopHit || rsiExit || macdExit || eodClose) {
-        const rawExit   = stopHit ? entry.stopPrice : bars[i].c;
-        const exitPrice = applySlippage(rawExit, 'sell');
-        trades.push(makeTrade(bars[i].t, entry.ts, entry.price, exitPrice, capital, 'day', 'rsi_mean_reversion', symbol));
-        inTrade = false; entry = null;
+      const hitStop = currentPrice <= stopLoss;
+      const hitTarget = currentPrice >= takeProfit;
+      const rsiExit = rsi[i] > 65 && rsi[i - 1] <= 65;
+
+      if (hitStop || hitTarget || rsiExit) {
+        const exitPrice = currentPrice * (1 - slippage);
+        const pnl = (exitPrice - entryPrice) * Math.floor((capital * 0.1) / entryPrice);
+        trades.push({
+          entryDate: new Date(entryBar.t).toISOString().split('T')[0],
+          exitDate: new Date(bars[i].t).toISOString().split('T')[0],
+          entryPrice: parseFloat(entryPrice.toFixed(2)),
+          exitPrice: parseFloat(exitPrice.toFixed(2)),
+          pnl: parseFloat(pnl.toFixed(2)),
+          pnlPct: parseFloat(((exitPrice - entryPrice) / entryPrice * 100).toFixed(2)),
+          result: pnl >= 0 ? 'WIN' : 'LOSS',
+          exitReason: hitStop ? 'Stop Loss' : hitTarget ? 'Take Profit' : 'RSI Exit',
+          holdingBars: i - bars.indexOf(entryBar),
+        });
+        inTrade = false;
+        entryBar = null;
+        entryPrice = null;
       }
     }
-  }
-  if (inTrade && entry) {
-    const exitPrice = applySlippage(bars[bars.length - 1].c, 'sell');
-    trades.push(makeTrade(bars[bars.length - 1].t, entry.ts, entry.price, exitPrice, capital, 'day', 'rsi_mean_reversion', symbol));
   }
   return trades;
 }
 
-// ─── SWING TRADING STRATEGIES (daily bars) ───────────────────────────────────
-
-const SWING_STOP_PCT = 0.05; // 5% hard stop
-
-/**
- * Swing EMA 20/50 Cross — daily bars.
- * Entry: EMA20 crosses above EMA50 (golden cross).
- * Exit:  EMA20 crosses below EMA50 | 5% stop | 30-day max hold.
- */
-function simulateSwingEmaCross(bars, capital, symbol) {
-  if (bars.length < 55) return [];
+function runMACDStrategy(bars, capital, slippage = 0.001) {
   const closes = bars.map(b => b.c);
-  const ema20  = calcEMA(closes, 20);
-  const ema50  = calcEMA(closes, 50);
+  const { macd, signal, histogram } = calculateMACD(closes);
   const trades = [];
-  let inTrade = false, entry = null;
-  const startBar = Math.min(50, bars.length - 1);
+  let inTrade = false;
+  let entryBar = null;
+  let entryPrice = null;
 
-  for (let i = startBar; i < bars.length; i++) {
-    if (!inTrade) {
-      const cross = ema20[i] > ema50[i] && ema20[i - 1] <= ema50[i - 1];
-      if (cross) {
-        const ep = applySlippage(bars[i].c, 'buy');
-        inTrade  = true;
-        entry    = { ts: bars[i].t, price: ep, stopPrice: ep * (1 - SWING_STOP_PCT) };
-      }
-    } else {
-      const stopHit   = bars[i].l <= entry.stopPrice;
-      const deathCros = ema20[i] < ema50[i] && ema20[i - 1] >= ema50[i - 1];
-      const maxHold   = (bars[i].t - entry.ts) >= MAX_HOLD_DAYS * 86400000;
+  for (let i = 27; i < bars.length; i++) {
+    if (histogram[i] === null || histogram[i - 1] === null) continue;
 
-      if (stopHit || deathCros || maxHold) {
-        const rawExit   = stopHit ? entry.stopPrice : bars[i].c;
-        const exitPrice = applySlippage(rawExit, 'sell');
-        trades.push(makeTrade(bars[i].t, entry.ts, entry.price, exitPrice, capital, 'swing', 'ema_cross', symbol));
-        inTrade = false; entry = null;
-      }
+    if (!inTrade && histogram[i] > 0 && histogram[i - 1] <= 0) {
+      inTrade = true;
+      entryBar = bars[i];
+      entryPrice = bars[i].c * (1 + slippage);
     }
-  }
-  if (inTrade && entry) {
-    const exitPrice = applySlippage(bars[bars.length - 1].c, 'sell');
-    trades.push(makeTrade(bars[bars.length - 1].t, entry.ts, entry.price, exitPrice, capital, 'swing', 'ema_cross', symbol));
-  }
-  return trades;
-}
 
-/**
- * Swing Combined (EMA60/200 + RSI/MACD) — daily bars.
- * Entry: EMA60 > EMA200 AND (RSI < 35 OR (RSI < 50 AND histogram > 0)).
- * Exit:  EMA60 < EMA200 | RSI > 70 | histogram turns negative | 5% stop | 30-day max hold.
- */
-function simulateSwingCombined(bars, capital, symbol) {
-  if (bars.length < 201) return [];
-  const closes        = bars.map(b => b.c);
-  const ema60         = calcEMA(closes, 60);
-  const ema200        = calcEMA(closes, 200);
-  const rsi           = calcRSI(closes, 14);
-  const { histogram } = calcMACD(closes);
-  const trades        = [];
-  let inTrade = false, entry = null;
-  const startBar = Math.min(200, bars.length - 1);
+    if (inTrade) {
+      const stopLoss = entryPrice * 0.975;
+      const currentPrice = bars[i].c;
 
-  for (let i = startBar; i < bars.length; i++) {
-    if (rsi[i] === null) continue;
-    if (!inTrade) {
-      const inUptrend   = ema60[i] > ema200[i];
-      const entrySignal = rsi[i] < 35 || (rsi[i] < 50 && histogram[i] > 0);
-      if (inUptrend && entrySignal) {
-        const ep = applySlippage(bars[i].c, 'buy');
-        inTrade  = true;
-        entry    = { ts: bars[i].t, price: ep, stopPrice: ep * (1 - SWING_STOP_PCT) };
-      }
-    } else {
-      const stopHit  = bars[i].l <= entry.stopPrice;
-      const bearish  = ema60[i] < ema200[i];
-      const rsiOB    = rsi[i] > 70;
+      const hitStop = currentPrice <= stopLoss;
       const macdExit = histogram[i] < 0 && histogram[i - 1] >= 0;
-      const maxHold  = (bars[i].t - entry.ts) >= MAX_HOLD_DAYS * 86400000;
 
-      if (stopHit || bearish || rsiOB || macdExit || maxHold) {
-        const rawExit   = stopHit ? entry.stopPrice : bars[i].c;
-        const exitPrice = applySlippage(rawExit, 'sell');
-        trades.push(makeTrade(bars[i].t, entry.ts, entry.price, exitPrice, capital, 'swing', 'combined', symbol));
-        inTrade = false; entry = null;
+      if (hitStop || macdExit) {
+        const exitPrice = currentPrice * (1 - slippage);
+        const pnl = (exitPrice - entryPrice) * Math.floor((capital * 0.1) / entryPrice);
+        trades.push({
+          entryDate: new Date(entryBar.t).toISOString().split('T')[0],
+          exitDate: new Date(bars[i].t).toISOString().split('T')[0],
+          entryPrice: parseFloat(entryPrice.toFixed(2)),
+          exitPrice: parseFloat(exitPrice.toFixed(2)),
+          pnl: parseFloat(pnl.toFixed(2)),
+          pnlPct: parseFloat(((exitPrice - entryPrice) / entryPrice * 100).toFixed(2)),
+          result: pnl >= 0 ? 'WIN' : 'LOSS',
+          exitReason: hitStop ? 'Stop Loss' : 'MACD Cross',
+          holdingBars: i - bars.indexOf(entryBar),
+        });
+        inTrade = false;
+        entryBar = null;
+        entryPrice = null;
       }
     }
-  }
-  if (inTrade && entry) {
-    const exitPrice = applySlippage(bars[bars.length - 1].c, 'sell');
-    trades.push(makeTrade(bars[bars.length - 1].t, entry.ts, entry.price, exitPrice, capital, 'swing', 'combined', symbol));
   }
   return trades;
 }
 
-// ─── LEGACY SWING STRATEGIES (backward compat) ───────────────────────────────
-
-function simulateGoldenCross(bars, capital, symbol) {
-  if (bars.length < 201) return [];
+function runEMA2050Strategy(bars, capital, slippage = 0.001) {
   const closes = bars.map(b => b.c);
-  const ema60  = calcEMA(closes, 60);
-  const ema200 = calcEMA(closes, 200);
+  const ema20 = calculateEMA(closes, 20);
+  const ema50 = calculateEMA(closes, 50);
   const trades = [];
-  let inTrade = false, entry = null;
-  const startBar = Math.min(200, bars.length - 1);
+  let inTrade = false;
+  let entryBar = null;
+  let entryPrice = null;
 
-  for (let i = startBar; i < bars.length; i++) {
-    const golden = ema60[i] > ema200[i] && ema60[i - 1] <= ema200[i - 1];
-    const death  = ema60[i] < ema200[i] && ema60[i - 1] >= ema200[i - 1];
-    if (!inTrade) {
-      if (golden) {
-        const ep = applySlippage(bars[i].c, 'buy');
-        inTrade  = true;
-        entry    = { ts: bars[i].t, price: ep, stopPrice: ep * (1 - SWING_STOP_PCT) };
-      }
-    } else {
-      const stopHit = bars[i].l <= entry.stopPrice;
-      if (stopHit || death) {
-        const rawExit   = stopHit ? entry.stopPrice : bars[i].c;
-        const exitPrice = applySlippage(rawExit, 'sell');
-        trades.push(makeTrade(bars[i].t, entry.ts, entry.price, exitPrice, capital, 'swing', 'golden_cross', symbol));
-        inTrade = false; entry = null;
+  for (let i = 51; i < bars.length; i++) {
+    if (ema20[i] === null || ema50[i] === null) continue;
+
+    const goldenCross = ema20[i] > ema50[i] && ema20[i - 1] <= ema50[i - 1];
+    const deathCross = ema20[i] < ema50[i] && ema20[i - 1] >= ema50[i - 1];
+
+    if (!inTrade && goldenCross) {
+      inTrade = true;
+      entryBar = bars[i];
+      entryPrice = bars[i].c * (1 + slippage);
+    }
+
+    if (inTrade) {
+      const stopLoss = entryPrice * 0.97;
+      const currentPrice = bars[i].c;
+
+      if (deathCross || currentPrice <= stopLoss) {
+        const exitPrice = currentPrice * (1 - slippage);
+        const pnl = (exitPrice - entryPrice) * Math.floor((capital * 0.1) / entryPrice);
+        trades.push({
+          entryDate: new Date(entryBar.t).toISOString().split('T')[0],
+          exitDate: new Date(bars[i].t).toISOString().split('T')[0],
+          entryPrice: parseFloat(entryPrice.toFixed(2)),
+          exitPrice: parseFloat(exitPrice.toFixed(2)),
+          pnl: parseFloat(pnl.toFixed(2)),
+          pnlPct: parseFloat(((exitPrice - entryPrice) / entryPrice * 100).toFixed(2)),
+          result: pnl >= 0 ? 'WIN' : 'LOSS',
+          exitReason: currentPrice <= stopLoss ? 'Stop Loss' : 'Death Cross',
+          holdingBars: i - bars.indexOf(entryBar),
+        });
+        inTrade = false;
+        entryBar = null;
+        entryPrice = null;
       }
     }
-  }
-  if (inTrade && entry) {
-    const exitPrice = applySlippage(bars[bars.length - 1].c, 'sell');
-    trades.push(makeTrade(bars[bars.length - 1].t, entry.ts, entry.price, exitPrice, capital, 'swing', 'golden_cross', symbol));
-  }
-  return trades;
-}
-
-function simulateRsiMacd(bars, capital, symbol) {
-  if (bars.length < 36) return [];
-  const closes        = bars.map(b => b.c);
-  const rsi           = calcRSI(closes, 14);
-  const { histogram } = calcMACD(closes);
-  const trades        = [];
-  let inTrade = false, entry = null;
-
-  for (let i = 35; i < bars.length; i++) {
-    if (rsi[i] === null) continue;
-    if (!inTrade) {
-      if (rsi[i] < 35 && histogram[i] > 0 && histogram[i - 1] <= 0) {
-        const ep = applySlippage(bars[i].c, 'buy');
-        inTrade  = true;
-        entry    = { ts: bars[i].t, price: ep, stopPrice: ep * (1 - SWING_STOP_PCT) };
-      }
-    } else {
-      const stopHit  = bars[i].l <= entry.stopPrice;
-      const rsiExit  = rsi[i] > 70;
-      const macdExit = histogram[i] < 0 && histogram[i - 1] >= 0;
-      if (stopHit || rsiExit || macdExit) {
-        const rawExit   = stopHit ? entry.stopPrice : bars[i].c;
-        const exitPrice = applySlippage(rawExit, 'sell');
-        trades.push(makeTrade(bars[i].t, entry.ts, entry.price, exitPrice, capital, 'swing', 'rsi_macd', symbol));
-        inTrade = false; entry = null;
-      }
-    }
-  }
-  if (inTrade && entry) {
-    const exitPrice = applySlippage(bars[bars.length - 1].c, 'sell');
-    trades.push(makeTrade(bars[bars.length - 1].t, entry.ts, entry.price, exitPrice, capital, 'swing', 'rsi_macd', symbol));
   }
   return trades;
 }
 
 // ─── SUMMARY STATS ────────────────────────────────────────────────────────────
 
-function calcSummary(trades, symbol, startCapital) {
-  if (!trades.length) {
-    return {
-      symbol, totalTrades: 0, wins: 0, losses: 0,
-      winRate: 0, totalPnl: 0, totalPnlPct: 0,
-      maxDrawdown: 0, avgWin: 0, avgLoss: 0, profitFactor: 0,
-      startCapital, finalEquity: startCapital, equityCurve: [],
-    };
-  }
+function calculateSummary(trades, startingCapital) {
+  if (trades.length === 0) return {
+    totalTrades: 0, wins: 0, losses: 0, winRate: 0,
+    totalPnl: 0, totalPnlPct: 0, maxDrawdown: 0,
+    avgWin: 0, avgLoss: 0, profitFactor: 0,
+  };
 
-  const wins    = trades.filter(t => t.result === 'WIN');
-  const losses  = trades.filter(t => t.result === 'LOSS');
-  const avgWin  = wins.length   ? wins.reduce((s, t) => s + t.pnlPct, 0)   / wins.length   : 0;
-  const avgLoss = losses.length ? losses.reduce((s, t) => s + t.pnlPct, 0) / losses.length : 0;
-  const totalGain = wins.reduce((s, t) => s + t.pnlPct, 0);
-  const totalLoss = Math.abs(losses.reduce((s, t) => s + t.pnlPct, 0));
-  const pf        = totalLoss === 0 ? (totalGain > 0 ? 999 : 0) : totalGain / totalLoss;
+  const wins = trades.filter(t => t.result === 'WIN');
+  const losses = trades.filter(t => t.result === 'LOSS');
+  const totalPnl = trades.reduce((sum, t) => sum + t.pnl, 0);
+  const grossWin = wins.reduce((sum, t) => sum + t.pnl, 0);
+  const grossLoss = Math.abs(losses.reduce((sum, t) => sum + t.pnl, 0));
 
-  // Equity curve — compounding on full capital
-  let equity = startCapital;
-  const equityCurve = [{ date: trades[0].entryDate, equity: startCapital }];
-  let peak = startCapital, maxDrawdown = 0;
-
+  let peak = startingCapital;
+  let capital = startingCapital;
+  let maxDrawdown = 0;
   for (const t of trades) {
-    equity *= (1 + t.pnlPct / 100);
-    equityCurve.push({ date: t.exitDate, equity: parseFloat(equity.toFixed(2)) });
-    if (equity > peak) peak = equity;
-    const dd = (peak - equity) / peak * 100;
-    if (dd > maxDrawdown) maxDrawdown = dd;
+    capital += t.pnl;
+    if (capital > peak) peak = capital;
+    const drawdown = (peak - capital) / peak * 100;
+    if (drawdown > maxDrawdown) maxDrawdown = drawdown;
   }
-
-  const totalPnlPct = ((equity - startCapital) / startCapital) * 100;
 
   return {
-    symbol,
-    totalTrades:  trades.length,
-    wins:         wins.length,
-    losses:       losses.length,
-    winRate:      parseFloat(((wins.length / trades.length) * 100).toFixed(1)),
-    totalPnl:     parseFloat((equity - startCapital).toFixed(2)),
-    totalPnlPct:  parseFloat(totalPnlPct.toFixed(2)),
-    maxDrawdown:  parseFloat(maxDrawdown.toFixed(2)),
-    avgWin:       parseFloat(avgWin.toFixed(2)),
-    avgLoss:      parseFloat(avgLoss.toFixed(2)),
-    profitFactor: parseFloat(pf.toFixed(2)),
-    startCapital,
-    finalEquity:  parseFloat(equity.toFixed(2)),
-    equityCurve,
+    totalTrades: trades.length,
+    wins: wins.length,
+    losses: losses.length,
+    winRate: parseFloat((wins.length / trades.length * 100).toFixed(1)),
+    totalPnl: parseFloat(totalPnl.toFixed(2)),
+    totalPnlPct: parseFloat((totalPnl / startingCapital * 100).toFixed(2)),
+    maxDrawdown: parseFloat(maxDrawdown.toFixed(2)),
+    avgWin: wins.length ? parseFloat((grossWin / wins.length).toFixed(2)) : 0,
+    avgLoss: losses.length ? parseFloat((grossLoss / losses.length).toFixed(2)) : 0,
+    profitFactor: grossLoss > 0 ? parseFloat((grossWin / grossLoss).toFixed(2)) : grossWin > 0 ? 999 : 0,
   };
 }
 
 // ─── ZERO-TRADE MESSAGES ──────────────────────────────────────────────────────
 
 const ZERO_MESSAGES = {
-  macd_crossover:      s => `No MACD histogram crossovers found for ${s} in this period on 15-min bars. Try a longer date range or a more volatile symbol.`,
-  rsi_mean_reversion:  s => `No RSI<30 + MACD bounce found for ${s} in this period. This stock may not have had intraday oversold conditions — try a wider date range.`,
-  ema_cross:           s => `No EMA20/50 golden cross found for ${s} in this period. Try a longer date range (at least 6 months recommended).`,
-  combined:            s => `No combined EMA60/200 + RSI signals found for ${s} in this period. Try a wider date range or use the EMA Cross strategy instead.`,
-  golden_cross:        s => `No EMA60/200 crossover found for ${s} in this period. Try at least 2 years of data for this strategy.`,
-  rsi_macd:            s => `No RSI<35 + MACD flip found for ${s} in this period. Try a different symbol or wider date range.`,
+  rsi:              s => `No RSI oversold crossings found for ${s} in this period. Try a longer date range or a more volatile symbol.`,
+  rsi_mean_reversion: s => `No RSI oversold crossings found for ${s} in this period. Try a longer date range or a more volatile symbol.`,
+  macd:             s => `No MACD histogram crossovers found for ${s} in this period. Try a longer date range or a more volatile symbol.`,
+  macd_crossover:   s => `No MACD histogram crossovers found for ${s} in this period. Try a longer date range or a more volatile symbol.`,
+  ema2050:          s => `No EMA20/50 golden cross found for ${s} in this period. Try a longer date range (at least 6 months recommended).`,
+  ema_cross:        s => `No EMA20/50 golden cross found for ${s} in this period. Try a longer date range (at least 6 months recommended).`,
+  combined:         s => `No EMA20/50 golden cross found for ${s} in this period. Try a longer date range (at least 6 months recommended).`,
+  golden_cross:     s => `No EMA20/50 golden cross found for ${s} in this period. Try a longer date range (at least 6 months recommended).`,
+  rsi_macd:         s => `No RSI oversold crossings found for ${s} in this period. Try a longer date range or a more volatile symbol.`,
 };
+
+function resolveStrategy(name) {
+  const n = (name || '').toLowerCase();
+  if (n === 'macd' || n === 'macd_crossover') return 'macd';
+  if (n === 'rsi' || n === 'rsi_mean_reversion' || n === 'rsi_macd') return 'rsi';
+  return 'ema2050'; // ema_cross, ema2050, combined, golden_cross
+}
+
+function runStrategy(name, bars, capital) {
+  if (name === 'macd') return runMACDStrategy(bars, capital);
+  if (name === 'rsi')  return runRSIStrategy(bars, capital);
+  return runEMA2050Strategy(bars, capital);
+}
 
 // ─── HANDLER ──────────────────────────────────────────────────────────────────
 
@@ -559,23 +407,9 @@ module.exports = async function handler(req, res) {
     return res.status(400).json({ error: "mode must be 'day', 'swing', or 'both'" });
   }
 
-  // strategy validation per mode
-  const DAY_STRATEGIES   = ['macd_crossover', 'rsi_mean_reversion'];
-  const SWING_STRATEGIES = ['ema_cross', 'combined', 'golden_cross', 'rsi_macd'];
-
-  let dayStrategy   = String(src.dayStrategy   || src.strategy || 'macd_crossover').toLowerCase();
-  let swingStrategy = String(src.swingStrategy || src.strategy || 'combined').toLowerCase();
-
-  if (mode === 'day'   && !DAY_STRATEGIES.includes(dayStrategy)) {
-    return res.status(400).json({ error: `Day strategy must be one of: ${DAY_STRATEGIES.join(', ')}` });
-  }
-  if (mode === 'swing' && !SWING_STRATEGIES.includes(swingStrategy)) {
-    return res.status(400).json({ error: `Swing strategy must be one of: ${SWING_STRATEGIES.join(', ')}` });
-  }
-  if (mode === 'both') {
-    if (!DAY_STRATEGIES.includes(dayStrategy))     dayStrategy   = 'macd_crossover';
-    if (!SWING_STRATEGIES.includes(swingStrategy)) swingStrategy = 'combined';
-  }
+  // strategy resolution
+  const dayStrategy   = resolveStrategy(src.dayStrategy   || src.strategy || 'macd');
+  const swingStrategy = resolveStrategy(src.swingStrategy || src.strategy || 'ema2050');
 
   const totalCapital = Math.max(100, parseFloat(src.capital || '10000') || 10000);
   const dayCapital   = parseFloat((totalCapital * 0.40).toFixed(2));
@@ -584,70 +418,38 @@ module.exports = async function handler(req, res) {
   console.log(`[backtest] ${rawSym} ${startDate}→${endDate} mode=${mode} cap=$${totalCapital}`);
 
   try {
-    // ── SWING / BOTH — fetch daily bars ──────────────────────────────────────
-    let dailyBars = [];
-    if (mode === 'swing' || mode === 'both') {
-      dailyBars = await fetchBars(rawSym, 1, 'day', startDate, endDate, key);
-      if (!dailyBars.length) {
-        return res.status(422).json({
-          error: `No daily data returned for ${rawSym} from ${startDate} to ${endDate}. Check the ticker and date range.`,
-        });
-      }
+    // ── Fetch daily bars (all modes use daily bars) ───────────────────────────
+    const dailyBars = await fetchBars(rawSym, 1, 'day', startDate, endDate, key);
+    if (!dailyBars.length) {
+      return res.status(422).json({
+        error: `No daily data returned for ${rawSym} from ${startDate} to ${endDate}. Check the ticker and date range.`,
+      });
     }
-
-    // ── DAY / BOTH — fetch 15-min bars ────────────────────────────────────────
-    let minBars = [];
-    if (mode === 'day' || mode === 'both') {
-      minBars = await fetchBars(rawSym, 15, 'minute', startDate, endDate, key);
-      if (!minBars.length) {
-        return res.status(422).json({
-          error: `No 15-min data returned for ${rawSym} in this range. ` +
-                 `Note: free Polygon plans may have limited intraday history.`,
-        });
-      }
+    if (dailyBars.length < 30) {
+      return res.status(422).json({ error: `Only ${dailyBars.length} daily bars found — need at least 30. Widen the date range.` });
     }
 
     // ── SINGLE MODE: day ─────────────────────────────────────────────────────
     if (mode === 'day') {
-      if (minBars.length < 50) {
-        return res.status(422).json({ error: `Only ${minBars.length} 15-min bars found — need at least 50. Widen the date range.` });
-      }
-
-      const capUsed = dayCapital; // use full day allocation
-      let trades;
-      if (dayStrategy === 'macd_crossover')     trades = simulateDayMacdCrossover(minBars, capUsed, rawSym);
-      else                                       trades = simulateDayRsiMeanReversion(minBars, capUsed, rawSym);
-
-      const summary = calcSummary(trades, rawSym, capUsed);
+      const capUsed = dayCapital;
+      const trades  = runStrategy(dayStrategy, dailyBars, capUsed);
+      const summary = calculateSummary(trades, capUsed);
       const message = trades.length === 0 ? (ZERO_MESSAGES[dayStrategy]?.(rawSym) ?? null) : null;
 
       return res.status(200).json({
         symbol: rawSym, mode, strategy: dayStrategy,
         startDate, endDate,
         capital: totalCapital, deployedCapital: capUsed,
-        barsUsed: minBars.length,
+        barsUsed: dailyBars.length,
         message, summary, trades,
       });
     }
 
     // ── SINGLE MODE: swing ────────────────────────────────────────────────────
     if (mode === 'swing') {
-      const minRequired = { ema_cross: 55, combined: 201, golden_cross: 201, rsi_macd: 36 };
-      const need = minRequired[swingStrategy] || 55;
-      if (dailyBars.length < need) {
-        return res.status(422).json({
-          error: `Not enough data — ${dailyBars.length} bars found but "${swingStrategy}" needs at least ${need}. Select a longer date range.`,
-        });
-      }
-
       const capUsed = swingCapital;
-      let trades;
-      if      (swingStrategy === 'ema_cross')    trades = simulateSwingEmaCross(dailyBars, capUsed, rawSym);
-      else if (swingStrategy === 'combined')      trades = simulateSwingCombined(dailyBars, capUsed, rawSym);
-      else if (swingStrategy === 'golden_cross')  trades = simulateGoldenCross(dailyBars, capUsed, rawSym);
-      else                                        trades = simulateRsiMacd(dailyBars, capUsed, rawSym);
-
-      const summary = calcSummary(trades, rawSym, capUsed);
+      const trades  = runStrategy(swingStrategy, dailyBars, capUsed);
+      const summary = calculateSummary(trades, capUsed);
       const message = trades.length === 0 ? (ZERO_MESSAGES[swingStrategy]?.(rawSym) ?? null) : null;
 
       return res.status(200).json({
@@ -660,48 +462,17 @@ module.exports = async function handler(req, res) {
     }
 
     // ── BOTH MODE ─────────────────────────────────────────────────────────────
-    // Day side
-    let dayTrades = [];
-    if (minBars.length >= 50) {
-      if (dayStrategy === 'macd_crossover') dayTrades = simulateDayMacdCrossover(minBars, dayCapital, rawSym);
-      else                                   dayTrades = simulateDayRsiMeanReversion(minBars, dayCapital, rawSym);
-    }
-    const dayMsg     = dayTrades.length === 0 ? (ZERO_MESSAGES[dayStrategy]?.(rawSym) ?? null) : null;
-    const daySummary = calcSummary(dayTrades, rawSym, dayCapital);
-
-    // Swing side
-    const swingNeed = { ema_cross: 55, combined: 201, golden_cross: 201, rsi_macd: 36 };
-    let swingTrades = [];
-    if (dailyBars.length >= (swingNeed[swingStrategy] || 55)) {
-      if      (swingStrategy === 'ema_cross')    swingTrades = simulateSwingEmaCross(dailyBars, swingCapital, rawSym);
-      else if (swingStrategy === 'combined')      swingTrades = simulateSwingCombined(dailyBars, swingCapital, rawSym);
-      else if (swingStrategy === 'golden_cross')  swingTrades = simulateGoldenCross(dailyBars, swingCapital, rawSym);
-      else                                        swingTrades = simulateRsiMacd(dailyBars, swingCapital, rawSym);
-    }
+    const dayTrades    = runStrategy(dayStrategy, dailyBars, dayCapital);
+    const swingTrades  = runStrategy(swingStrategy, dailyBars, swingCapital);
+    const dayMsg       = dayTrades.length   === 0 ? (ZERO_MESSAGES[dayStrategy]?.(rawSym)   ?? null) : null;
     const swingMsg     = swingTrades.length === 0 ? (ZERO_MESSAGES[swingStrategy]?.(rawSym) ?? null) : null;
-    const swingSummary = calcSummary(swingTrades, rawSym, swingCapital);
+    const daySummary   = calculateSummary(dayTrades, dayCapital);
+    const swingSummary = calculateSummary(swingTrades, swingCapital);
 
     // Combined portfolio performance
-    const combinedFinalEquity = daySummary.finalEquity + swingSummary.finalEquity;
-    const combinedPnl         = combinedFinalEquity - totalCapital;
-    const combinedPnlPct      = (combinedPnl / totalCapital) * 100;
-    // Merge equity curves by date
-    const allDates = new Set([
-      ...daySummary.equityCurve.map(p => p.date),
-      ...swingSummary.equityCurve.map(p => p.date),
-    ]);
-    // Build combined curve: sum of day + swing equity at each date
-    const datesSorted = [...allDates].sort();
-    let lastDay   = dayCapital;
-    let lastSwing = swingCapital;
-    const combinedCurve = [];
-    const dayMap   = Object.fromEntries(daySummary.equityCurve.map(p => [p.date, p.equity]));
-    const swingMap = Object.fromEntries(swingSummary.equityCurve.map(p => [p.date, p.equity]));
-    for (const date of datesSorted) {
-      if (dayMap[date]   != null) lastDay   = dayMap[date];
-      if (swingMap[date] != null) lastSwing = swingMap[date];
-      combinedCurve.push({ date, equity: parseFloat((lastDay + lastSwing).toFixed(2)) });
-    }
+    const combinedPnl    = daySummary.totalPnl + swingSummary.totalPnl;
+    const combinedPnlPct = (combinedPnl / totalCapital) * 100;
+    const combinedCurve  = [];
 
     return res.status(200).json({
       symbol: rawSym,
@@ -729,7 +500,7 @@ module.exports = async function handler(req, res) {
         totalTrades:   dayTrades.length + swingTrades.length,
         totalPnl:      parseFloat(combinedPnl.toFixed(2)),
         totalPnlPct:   parseFloat(combinedPnlPct.toFixed(2)),
-        finalEquity:   parseFloat(combinedFinalEquity.toFixed(2)),
+        finalEquity:   parseFloat((totalCapital + combinedPnl).toFixed(2)),
         maxDrawdown:   parseFloat(Math.max(daySummary.maxDrawdown, swingSummary.maxDrawdown).toFixed(2)),
         equityCurve:   combinedCurve,
       },
