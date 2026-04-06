@@ -1823,7 +1823,7 @@ let lastUpdatedSec=0;
 
 async function loadVix(){
   try{
-    const r=await fetch('/api/vix');
+    const r=await fetch('/api/market?type=vix');
     if(!r.ok)return;
     const d=await r.json();
     if(d.price==null)return;
@@ -1898,7 +1898,7 @@ function fgColor(score){
 async function renderFearGreedLive(){
   const el=document.getElementById('fear-greed-content');
   try{
-    const r=await fetch('/api/feargreed');
+    const r=await fetch('/api/market?type=feargreed');
     if(!r.ok)throw new Error();
     const data=await r.json();
     if(data.value==null)throw new Error();
@@ -3574,7 +3574,7 @@ async function wsConnect(){
   if(_wsConn&&(_wsConn.readyState===WebSocket.OPEN||_wsConn.readyState===WebSocket.CONNECTING))return;
   try{
     if(!_wsToken){
-      const r=await fetch('/api/wstoken');
+      const r=await fetch('/api/market?type=wstoken');
       if(!r.ok)return;
       const d=await r.json();
       _wsToken=d.token;
@@ -4211,7 +4211,7 @@ function pharmaHalalBadge(status) {
 // ── Pharma Bot: status polling ────────────────────────────────────
 async function pharmaBotRefreshStatus() {
   try {
-    const r = await fetch('/api/pharmabot?action=status');
+    const r = await fetch('/api/pharma?action=botstatus');
     if (!r.ok) return;
     const d = await r.json();
     const dot  = document.getElementById('pharma-bot-status-dot');
@@ -4250,7 +4250,7 @@ async function pharmaBotStart() {
   const msg = document.getElementById('pharma-bot-msg');
   msg.textContent = 'Starting...';
   try {
-    const r = await fetch('/api/pharmabot?action=start', {
+    const r = await fetch('/api/pharma?action=botstart', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ mode, halalOnly }),
@@ -4273,7 +4273,7 @@ async function pharmaBotStart() {
 async function pharmaBotStop() {
   const msg = document.getElementById('pharma-bot-msg');
   try {
-    const r = await fetch('/api/pharmabot?action=stop', { method: 'POST' });
+    const r = await fetch('/api/pharma?action=botstop', { method: 'POST' });
     const d = await r.json();
     msg.style.color = 'var(--text3)';
     msg.textContent = d.message || 'Bot stopped';
@@ -4289,7 +4289,7 @@ async function pharmaBotCheck() {
   msg.style.color = 'var(--text3)';
   msg.textContent = 'Checking positions...';
   try {
-    const r = await fetch('/api/pharmabot?action=check', { method: 'POST' });
+    const r = await fetch('/api/pharma?action=botcheck', { method: 'POST' });
     const d = await r.json();
     if (d.closed?.length) {
       msg.style.color = '#26a69a';
