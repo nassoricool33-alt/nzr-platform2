@@ -24,7 +24,7 @@ function httpsGet(url, timeoutMs = 10000) {
       });
     });
     req.setTimeout(timeoutMs, () => {
-      req.destroy(new Error('Quote request timed out'));
+      req.destroy(new Error('Request timed out'));
     });
     req.on('error', reject);
   });
@@ -55,56 +55,66 @@ module.exports = async function handler(req, res) {
 
   console.log('[quote] fetching:', symbol);
 
-  try {
-    // Primary: previous day aggregate (reliable OHLCV)
-    let bar = null;
-    try {
-      const prevData = await httpsGet(
-        `https://api.polygon.io/v2/aggs/ticker/${symbol}/prev?adjusted=true&apiKey=${key}`
-      );
-      bar = prevData?.results?.[0] ?? null;
-    } catch (err) {
-      console.error('[quote] prev agg failed for', symbol, err.message);
+  const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+
+  // Fetch all three endpoints in parallel with 10s timeout each
+  const [tradeRes, todayRes, prevRes] = await Promise.allSettled([
+    httpsGet(`https://api.polygon.io/v2/last/trade/${symbol}?apiKey=${key}`, 10000),
+    httpsGet(`https://api.polygon.io/v2/aggs/ticker/${symbol}/range/1/day/${today}/${today}?adjusted=true&apiKey=${key}`, 10000),
+    httpsGet(`https://api.polygon.io/v2/aggs/ticker/${symbol}/prev?adjusted=true&apiKey=${key}`, 10000),
+  ]);
+
+  // Extract latest trade price (real-time)
+  let livePrice = null;
+  let tradeTimestamp = null;
+  if (tradeRes.status === 'fulfilled') {
+    const t = tradeRes.value?.results;
+    if (t?.p != null) {
+      livePrice = t.p;
+      tradeTimestamp = t.t ?? null; // nanosecond timestamp from Polygon
     }
+  }
 
-    // Fallback: last trade for real-time price
-    let lastPrice = null;
-    try {
-      const tradeData = await httpsGet(
-        `https://api.polygon.io/v2/last/trade/${symbol}?apiKey=${key}`
-      );
-      lastPrice = tradeData?.results?.p ?? tradeData?.last?.price ?? null;
-    } catch (err) {
-      console.error('[quote] last trade failed for', symbol, err.message);
+  // Extract today's OHLV bar
+  let open = null, high = null, low = null, volume = null;
+  if (todayRes.status === 'fulfilled') {
+    const bar = todayRes.value?.results?.[0];
+    if (bar) {
+      open   = bar.o ?? null;
+      high   = bar.h ?? null;
+      low    = bar.l ?? null;
+      volume = bar.v ?? null;
+      // Fall back: if no live trade, use today's agg close
+      if (livePrice == null && bar.c != null) livePrice = bar.c;
     }
+  }
 
-    if (!bar && lastPrice == null) {
-      return res.status(200).json({ symbol, price: null, error: 'Quote unavailable' });
-    }
+  // Extract previous close
+  let prevClose = null;
+  if (prevRes.status === 'fulfilled') {
+    prevClose = prevRes.value?.results?.[0]?.c ?? null;
+  }
 
-    const prevClose = bar?.c ?? null;
-    const open      = bar?.o ?? null;
-    const high      = bar?.h ?? null;
-    const low       = bar?.l ?? null;
-    const volume    = bar?.v ?? null;
-    const livePrice = lastPrice ?? prevClose;
-    const change    = prevClose ? ((livePrice - prevClose) / prevClose) * 100 : null;
+  console.log('[quote] livePrice:', livePrice, 'prevClose:', prevClose, 'open:', open);
 
-    console.log('[quote] result:', symbol, 'price:', livePrice);
-    return res.status(200).json({
-      symbol,
-      price: livePrice,
-      open,
-      high,
-      low,
-      prevClose,
-      volume,
-      change,
-      changePercent: change,
-      timestamp: Date.now(),
-    });
-  } catch (err) {
-    console.error('[quote]', symbol, err.message);
+  if (livePrice == null) {
+    console.warn('[quote] no price data for', symbol);
     return res.status(200).json({ symbol, price: null, error: 'Quote unavailable' });
   }
+
+  const change        = prevClose != null ? livePrice - prevClose : null;
+  const changePercent = prevClose != null ? (change / prevClose) * 100 : null;
+
+  return res.status(200).json({
+    symbol,
+    price:         livePrice,
+    open,
+    high,
+    low,
+    prevClose,
+    change,
+    changePercent,
+    volume,
+    timestamp:     tradeTimestamp ?? Date.now(),
+  });
 };
