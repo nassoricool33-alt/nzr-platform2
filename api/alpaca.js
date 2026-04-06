@@ -1,7 +1,7 @@
 /**
  * NZR — Alpaca Broker Proxy
  * All Alpaca API calls go through here so credentials never touch the browser.
- * Requires env vars: ALPACA_KEY_ID, ALPACA_SECRET_KEY
+ * Requires env vars: ALPACA_API_KEY, ALPACA_SECRET_KEY
  * Optional:          ALPACA_BASE_URL (default: paper trading)
  */
 
@@ -65,10 +65,12 @@ module.exports = async function handler(req, res) {
   const ip = req.headers['x-forwarded-for'] || req.socket?.remoteAddress || 'unknown';
   if (!checkRate(ip)) return res.status(429).json({ error: 'Rate limit reached' });
 
-  const keyId     = process.env.ALPACA_KEY_ID;
+  const keyId     = process.env.ALPACA_API_KEY;
   const secretKey = process.env.ALPACA_SECRET_KEY;
+  console.log('[alpaca] API key present:', !!keyId);
+  console.log('[alpaca] Secret key present:', !!secretKey);
   if (!keyId || !secretKey) {
-    return res.status(503).json({ error: 'Alpaca not configured', connected: false });
+    return res.status(503).json({ error: 'Alpaca keys not configured', connected: false });
   }
 
   const rawBase = process.env.ALPACA_BASE_URL || DEFAULT_BASE;
@@ -154,7 +156,13 @@ module.exports = async function handler(req, res) {
     if (action === 'account' || (req.method === 'GET' && !action)) {
       const r = await alpacaRequest({ ...ctx, method: 'GET', path: '/v2/account' });
       if (r.status === 200 && r.body?.status) {
-        return res.status(200).json({ connected: true, status: r.body.status, equity: r.body.equity, buying_power: r.body.buying_power });
+        return res.status(200).json({
+          connected: true,
+          balance: r.body.portfolio_value,
+          buyingPower: r.body.buying_power,
+          cash: r.body.cash,
+          status: r.body.status,
+        });
       }
       return res.status(r.status).json({ connected: false, error: 'Alpaca auth failed' });
     }

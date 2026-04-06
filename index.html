@@ -3883,11 +3883,12 @@ async function pollStatus(){
   try {
     const r = await fetch('/api/alpaca?action=account');
     const d = await r.json();
-    if (d && d.connected && d.equity != null) {
+    console.log('[alpaca status] response:', d);
+    if (d && d.connected === true) {
       alpacaOk = true;
-      const eq  = parseFloat(d.equity);
-      const bal = isNaN(eq) ? '' : ' · $' + eq.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-      setAlpacaStatusRow(true, 'CONNECTED' + bal);
+      const bal = parseFloat(d.balance);
+      const balStr = isNaN(bal) ? '' : ' · $' + bal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      setAlpacaStatusRow(true, 'CONNECTED' + balStr);
     } else {
       alpacaOk = false;
       const reason = d?.error || 'Auth failed';
@@ -3895,7 +3896,7 @@ async function pollStatus(){
     }
   } catch(e) {
     alpacaOk = false;
-    setAlpacaStatusRow(false, 'DISCONNECTED · Network error');
+    setAlpacaStatusRow(false, 'DISCONNECTED · Cannot reach Alpaca API');
   }
 
   let botOk = null, botLabel = '—';
