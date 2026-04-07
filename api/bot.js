@@ -55,6 +55,11 @@ const recentOrders = new Map();
 const trendCache = {};
 const TREND_CACHE_TTL = 60 * 60 * 1000; // 60 minutes
 
+// ─── VOLUME AVERAGE CACHE ────────────────────────────────────────────────────
+// Keyed as "vol:day:SYMBOL" or "vol:swing:SYMBOL" → { ts, avgVolume }
+const volumeCache = {};
+const VOLUME_CACHE_TTL = 15 * 60 * 1000; // 15 minutes
+
 // Rate limiting
 const rateLimit = new Map();
 function checkRate(ip) {
@@ -303,6 +308,79 @@ async function checkWeeklyTrend(symbol) {
     return result;
   } catch (err) {
     console.warn(`[bot] MTF weekly fetch error for ${symbol}:`, err.message);
+    return null;
+  }
+}
+
+// ─── VOLUME CONFIRMATION ─────────────────────────────────────────────────────
+
+/**
+ * Fetches the last 20 bars for the symbol at the mode-appropriate timeframe
+ * (15-min for day trades, 4-hour for swing trades), computes the 20-bar average
+ * volume, and compares it against currentVolume.
+ *
+ * @param {string}  symbol          - Ticker symbol
+ * @param {number}  currentVolume   - Volume of the current (signal) bar
+ * @param {string}  mode            - "day" or "swing"
+ * @param {boolean} isMacdCrossover - When true, threshold is raised to 1.5×
+ * @returns {{ confirmed: boolean, ratio: number, avgVolume: number } | null}
+ *   Returns null on API failure (caller should fail-open in that case).
+ */
+async function checkVolumeConfirmation(symbol, currentVolume, mode, isMacdCrossover = false) {
+  if (currentVolume == null || !isFinite(currentVolume) || currentVolume < 0) return null;
+
+  const cacheKey = `vol:${mode}:${symbol}`;
+  const cached = volumeCache[cacheKey];
+  if (cached && (Date.now() - cached.ts) < VOLUME_CACHE_TTL) {
+    console.log(`[bot] VOL cache hit for ${symbol} (${mode}), avgVol=${cached.avgVolume}`);
+    const threshold = isMacdCrossover ? 1.5 : 1.2;
+    const ratio = parseFloat((currentVolume / cached.avgVolume).toFixed(4));
+    return { confirmed: ratio >= threshold, ratio, avgVolume: cached.avgVolume };
+  }
+
+  const apiKey = process.env.POLYGON_API_KEY;
+  if (!apiKey) return null;
+
+  // Day trades: 15-min bars; fetch 5 calendar days back to guarantee 20 trading bars.
+  // Swing trades: 4-hour bars; fetch 30 calendar days back.
+  const [multiplier, timespan, lookbackDays] = mode === 'day'
+    ? [15, 'minute', 5]
+    : [4,  'hour',   30];
+
+  const toDate   = toETDate();
+  const fromDate = toETDate(new Date(Date.now() - lookbackDays * 24 * 3600 * 1000));
+  const url = `https://api.polygon.io/v2/aggs/ticker/${symbol}/range/${multiplier}/${timespan}/${fromDate}/${toDate}?adjusted=true&sort=desc&limit=20&apiKey=${apiKey}`;
+
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 10000);
+    const resp = await fetch(url, { signal: controller.signal });
+    clearTimeout(timer);
+
+    if (!resp.ok) {
+      console.warn(`[bot] VOL fetch HTTP ${resp.status} for ${symbol} (${mode})`);
+      return null;
+    }
+
+    const data = await resp.json();
+    const bars = data?.results;
+    if (!Array.isArray(bars) || bars.length === 0) {
+      console.warn(`[bot] VOL no bars returned for ${symbol} (${mode})`);
+      return null;
+    }
+
+    const avgVolume = parseFloat(
+      (bars.reduce((sum, b) => sum + (b.v ?? 0), 0) / bars.length).toFixed(0)
+    );
+
+    volumeCache[cacheKey] = { ts: Date.now(), avgVolume };
+
+    const threshold = isMacdCrossover ? 1.5 : 1.2;
+    const ratio = parseFloat((currentVolume / avgVolume).toFixed(4));
+    console.log(`[bot] VOL ${symbol} (${mode}): currentVol=${currentVolume}, avgVol=${avgVolume}, ratio=${ratio}, threshold=${threshold}×`);
+    return { confirmed: ratio >= threshold, ratio, avgVolume };
+  } catch (err) {
+    console.warn(`[bot] VOL fetch error for ${symbol} (${mode}):`, err.message);
     return null;
   }
 }
@@ -631,7 +709,28 @@ module.exports = async function handler(req, res) {
     console.warn(`[bot] MTF check error for ${symbol}:`, mtfErr.message, '— proceeding without filter');
   }
 
-  // 9. LIMIT PRICE  (was §8 — shifted by MTF check above)
+  // 9. VOLUME CONFIRMATION GATE
+  const currentVolume   = safeNum(body.currentVolume ?? body.indicators?.volume);
+  const isMacdCrossover = body.isMacdCrossover === true || body.signalType === 'macd';
+  if (currentVolume != null) {
+    try {
+      const vol = await checkVolumeConfirmation(symbol, currentVolume, mode, isMacdCrossover);
+      if (vol) {
+        const ratioStr = vol.ratio.toFixed(2);
+        if (!vol.confirmed) {
+          const threshold = isMacdCrossover ? '1.5' : '1.2';
+          console.log(`[bot] VOLUME_GATE: rejected ${symbol}, ratio=${ratioStr} (need ${threshold}×, avgVol=${vol.avgVolume})`);
+          return reject(`VOLUME_GATE: insufficient volume for ${symbol} — ratio ${ratioStr}× vs required ${threshold}× (avgVol ${vol.avgVolume})`);
+        }
+        console.log(`[bot] VOLUME_GATE: passed ${symbol}, ratio=${ratioStr}`);
+      }
+      // null return = API failure → fail-open (do not block the trade)
+    } catch (volErr) {
+      console.warn(`[bot] Volume gate error for ${symbol}:`, volErr.message, '— proceeding without filter');
+    }
+  }
+
+  // 10. LIMIT PRICE
   const lastPrice  = safeNum(body.lastPrice ?? body.price ?? indicators?.price);
   let   limitPrice = safeNum(body.limitPrice);
   let   autoSet    = false;
@@ -649,7 +748,7 @@ module.exports = async function handler(req, res) {
     return reject('Could not calculate a valid limit price');
   }
 
-  // 10. POSITION SIZE
+  // 11. POSITION SIZE
   const quantity      = safeNum(body.quantity) ?? 1;
   const positionValue = limitPrice * quantity;
   if (positionValue > bucket.maxPositionSize) {
