@@ -101,6 +101,12 @@ const ENTRY_CONFIDENCE_THRESHOLD = 70;
 const sentimentBotCache = {};
 const SENTIMENT_BOT_CACHE_TTL = 15 * 60 * 1000; // 15 minutes
 
+// ─── ADAPTIVE SIZING CACHE ───────────────────────────────────────────────────
+// Stores the last computed Kelly stats so Supabase isn't queried every request.
+// { ts, winRate, avgWin, avgLoss, kellyFraction, tradeCount }
+let adaptiveSizingStats = null;
+const ADAPTIVE_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
 // ─── RELATIVE STRENGTH CACHE ─────────────────────────────────────────────────
 // Keyed as "rs:day:SYMBOL" or "rs:swing:SYMBOL" → { ts, rs, symbolChange, spyChange }
 const rsCache = {};
@@ -819,6 +825,103 @@ async function getRelativeStrength(symbol, mode) {
   }
 }
 
+// ─── ADAPTIVE POSITION SIZING ────────────────────────────────────────────────
+
+/**
+ * Queries the last 20 closed trades from the Supabase journal (pnl_pct column),
+ * computes a half-Kelly fraction from win rate / avg win / avg loss, then
+ * applies a confidence-tier multiplier.
+ *
+ * Caches the Supabase stats for 5 minutes (module-level) so the DB is not
+ * hit on every single order validation request.
+ *
+ * @param {number} baseSize   - Starting max position size (already correlation-adjusted)
+ * @param {number} confidence - NZR signal confidence score (0-100)
+ * @param {string} symbol     - Symbol (used only for logging)
+ * @returns {number} Adjusted position size, never greater than baseSize
+ */
+async function getAdaptivePositionSize(baseSize, confidence, symbol) {
+  const fallback = parseFloat((baseSize * 0.75).toFixed(2));
+
+  const supabaseUrl = process.env.SUPABASE_URL;
+  const supabaseKey = process.env.SUPABASE_ANON_KEY;
+  if (!supabaseUrl || !supabaseKey) {
+    console.log(`[bot] ADAPTIVE_SIZE: Supabase not configured, using 0.75× fallback for ${symbol}`);
+    return fallback;
+  }
+
+  // ── Fetch / use cached Kelly stats ─────────────────────────────────────────
+  let stats = adaptiveSizingStats;
+  if (!stats || (Date.now() - stats.ts) >= ADAPTIVE_CACHE_TTL) {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 8000);
+      let resp;
+      try {
+        resp = await fetch(
+          `${supabaseUrl}/rest/v1/journal?select=pnl_pct&pnl_pct=not.is.null&order=id.desc&limit=20`,
+          {
+            headers: {
+              'apikey':         supabaseKey,
+              'Authorization':  `Bearer ${supabaseKey}`,
+              'Content-Type':   'application/json',
+            },
+            signal: controller.signal,
+          }
+        );
+      } finally {
+        clearTimeout(timer);
+      }
+
+      if (!resp.ok) throw new Error(`Supabase HTTP ${resp.status}`);
+
+      const trades = await resp.json();
+      if (!Array.isArray(trades)) throw new Error('Unexpected Supabase response shape');
+
+      if (trades.length < 10) {
+        console.log(`[bot] ADAPTIVE_SIZE: insufficient history (${trades.length} trades) for ${symbol} — using conservative 0.5×`);
+        return parseFloat((baseSize * 0.5).toFixed(2));
+      }
+
+      const pnlValues = trades.map(t => parseFloat(t.pnl_pct)).filter(v => isFinite(v));
+      const wins      = pnlValues.filter(v => v > 0);
+      const losses    = pnlValues.filter(v => v <= 0);
+
+      const winRate = wins.length / pnlValues.length;
+      const avgWin  = wins.length  > 0 ? wins.reduce((a, b)  => a + b, 0) / wins.length  : 0;
+      const avgLoss = losses.length > 0 ? Math.abs(losses.reduce((a, b) => a + b, 0) / losses.length) : 0;
+
+      let kellyFraction;
+      if (avgWin === 0) {
+        kellyFraction = 0.1;
+      } else {
+        kellyFraction = (winRate * avgWin - (1 - winRate) * avgLoss) / avgWin;
+      }
+      kellyFraction = Math.max(0.1, Math.min(1.0, kellyFraction));
+
+      stats = { ts: Date.now(), winRate, avgWin, avgLoss, kellyFraction, tradeCount: pnlValues.length };
+      adaptiveSizingStats = stats;
+      console.log(`[bot] ADAPTIVE_SIZE: refreshed Kelly stats — winRate=${(winRate*100).toFixed(1)}% avgWin=${avgWin.toFixed(3)}% avgLoss=${avgLoss.toFixed(3)}% kelly=${kellyFraction.toFixed(3)}`);
+
+    } catch (err) {
+      console.log(`[bot] ADAPTIVE_SIZE: supabase error, using fallback — ${err.message}`);
+      return fallback;
+    }
+  }
+
+  // ── Apply Kelly fraction ────────────────────────────────────────────────────
+  let adjustedSize = baseSize * stats.kellyFraction;
+
+  // ── Apply confidence-tier multiplier ───────────────────────────────────────
+  const scoreMult = confidence >= 80 ? 1.0
+                  : confidence >= 60 ? 0.75
+                  : 0.5;
+  adjustedSize = parseFloat((adjustedSize * scoreMult).toFixed(2));
+
+  console.log(`[bot] ADAPTIVE_SIZE: ${symbol} kelly=${stats.kellyFraction.toFixed(3)} scoreMult=${scoreMult} base=$${baseSize} → $${adjustedSize}`);
+  return adjustedSize;
+}
+
 // ─── ATR-BASED DYNAMIC STOP ──────────────────────────────────────────────────
 
 /**
@@ -1426,9 +1529,23 @@ module.exports = async function handler(req, res) {
   // 12. POSITION SIZE
   const quantity      = safeNum(body.quantity) ?? 1;
   const positionValue = limitPrice * quantity;
-  if (positionValue > effectiveMaxPositionSize) {
-    const corrNote = corrGuard.sectorCount === 1 ? ' (40% correlation reduction applied)' : '';
-    return reject(`Position size $${positionValue.toFixed(2)} exceeds max $${effectiveMaxPositionSize.toFixed(2)} for ${mode} mode${corrNote}`);
+
+  // Adaptive sizing: Kelly-based + confidence tier, computed BEFORE the hard cap
+  const adaptiveRaw = await getAdaptivePositionSize(
+    effectiveMaxPositionSize, rec.confidence ?? 0, symbol
+  ).catch(err => {
+    console.warn(`[bot] ADAPTIVE_SIZE: unexpected error for ${symbol}:`, err.message, '— using 0.75× fallback');
+    return parseFloat((effectiveMaxPositionSize * 0.75).toFixed(2));
+  });
+  // Hard cap: adaptive result can never exceed the correlation-adjusted bucket max
+  const adaptiveMax = Math.min(adaptiveRaw, effectiveMaxPositionSize);
+
+  if (positionValue > adaptiveMax) {
+    const notes = [
+      corrGuard.sectorCount === 1 ? '40% correlation reduction' : '',
+      adaptiveRaw < effectiveMaxPositionSize ? `Kelly/score adaptive sizing` : '',
+    ].filter(Boolean).join(', ');
+    return reject(`Position size $${positionValue.toFixed(2)} exceeds adaptive max $${adaptiveMax.toFixed(2)} for ${mode} mode${notes ? ` (${notes})` : ''}`);
   }
 
   // ── APPROVED ──────────────────────────────────────────────────────────────────
@@ -1517,6 +1634,8 @@ module.exports = async function handler(req, res) {
       sectorCount:   corrGuard.sectorCount,
       sizeReduced:   corrGuard.sectorCount === 1,
       effectiveMax:  effectiveMaxPositionSize,
+      adaptiveMax,
+      kellyFraction: adaptiveSizingStats?.kellyFraction ?? null,
     },
   });
 };
