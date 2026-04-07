@@ -50,6 +50,11 @@ const swingState = {
 // Per-symbol cooldown tracking: symbol → { timestamp, mode }
 const recentOrders = new Map();
 
+// ─── MULTI-TIMEFRAME TREND CACHE ─────────────────────────────────────────────
+// Keyed as "daily:SYMBOL" or "weekly:SYMBOL" → { ts, bullish, bearish, ... }
+const trendCache = {};
+const TREND_CACHE_TTL = 60 * 60 * 1000; // 60 minutes
+
 // Rate limiting
 const rateLimit = new Map();
 function checkRate(ip) {
@@ -161,6 +166,145 @@ function checkCooldown(symbol, mode, cooldownMs) {
   const elapsed = Date.now() - e.timestamp;
   if (elapsed < cooldownMs) return { ok: false, remaining: Math.ceil((cooldownMs - elapsed) / 1000) };
   return { ok: true };
+}
+
+// ─── EMA CALCULATION ─────────────────────────────────────────────────────────
+
+/**
+ * Standard exponential moving average from an ascending array of close prices.
+ * Uses SMA of the first `period` values as the seed (same as Polygon's EMA endpoint).
+ * Returns null when there are fewer data points than the period.
+ */
+function calcEMA(closes, period) {
+  if (!closes || closes.length < period) return null;
+  const k = 2 / (period + 1);
+  let ema = closes.slice(0, period).reduce((a, b) => a + b, 0) / period;
+  for (let i = period; i < closes.length; i++) {
+    ema = closes[i] * k + ema * (1 - k);
+  }
+  return ema;
+}
+
+// ─── MULTI-TIMEFRAME TREND FUNCTIONS ─────────────────────────────────────────
+
+/**
+ * Fetches ~210 daily bars and computes EMA60 / EMA200 on closes.
+ * Results are cached per-symbol for 60 minutes.
+ * Returns { bullish, bearish, ema60, ema200 } or null on failure.
+ */
+async function checkDailyTrend(symbol) {
+  const cacheKey = `daily:${symbol}`;
+  const cached = trendCache[cacheKey];
+  if (cached && (Date.now() - cached.ts) < TREND_CACHE_TTL) {
+    console.log(`[bot] MTF daily cache hit for ${symbol}`);
+    return cached;
+  }
+
+  const apiKey = process.env.POLYGON_API_KEY;
+  if (!apiKey) return null;
+
+  const toDate   = toETDate();
+  const fromDate = toETDate(new Date(Date.now() - 300 * 24 * 3600 * 1000));
+  const url = `https://api.polygon.io/v2/aggs/ticker/${symbol}/range/1/day/${fromDate}/${toDate}?adjusted=true&sort=asc&limit=210&apiKey=${apiKey}`;
+
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 10000);
+    const resp = await fetch(url, { signal: controller.signal });
+    clearTimeout(timer);
+
+    if (!resp.ok) {
+      console.warn(`[bot] MTF daily fetch HTTP ${resp.status} for ${symbol}`);
+      return null;
+    }
+
+    const data = await resp.json();
+    const bars = data?.results;
+    if (!Array.isArray(bars) || bars.length < 200) {
+      console.warn(`[bot] MTF daily insufficient bars (${bars?.length ?? 0}) for ${symbol}`);
+      return null;
+    }
+
+    const closes = bars.map(b => b.c);
+    const ema60  = calcEMA(closes, 60);
+    const ema200 = calcEMA(closes, 200);
+
+    if (ema60 == null || ema200 == null) return null;
+
+    const result = {
+      ts:      Date.now(),
+      bullish: ema60 > ema200,
+      bearish: ema60 < ema200,
+      ema60:   parseFloat(ema60.toFixed(4)),
+      ema200:  parseFloat(ema200.toFixed(4)),
+    };
+    trendCache[cacheKey] = result;
+    console.log(`[bot] MTF daily ${symbol}: EMA60 ${result.ema60} vs EMA200 ${result.ema200} → ${result.bullish ? 'BULLISH' : result.bearish ? 'BEARISH' : 'FLAT'}`);
+    return result;
+  } catch (err) {
+    console.warn(`[bot] MTF daily fetch error for ${symbol}:`, err.message);
+    return null;
+  }
+}
+
+/**
+ * Fetches ~60 weekly bars and computes EMA20 / EMA50 on closes (swing mode only).
+ * Results are cached per-symbol for 60 minutes.
+ * Returns { bullish, bearish, ema20, ema50 } or null on failure.
+ */
+async function checkWeeklyTrend(symbol) {
+  const cacheKey = `weekly:${symbol}`;
+  const cached = trendCache[cacheKey];
+  if (cached && (Date.now() - cached.ts) < TREND_CACHE_TTL) {
+    console.log(`[bot] MTF weekly cache hit for ${symbol}`);
+    return cached;
+  }
+
+  const apiKey = process.env.POLYGON_API_KEY;
+  if (!apiKey) return null;
+
+  const toDate   = toETDate();
+  const fromDate = toETDate(new Date(Date.now() - 300 * 24 * 3600 * 1000));
+  const url = `https://api.polygon.io/v2/aggs/ticker/${symbol}/range/1/week/${fromDate}/${toDate}?adjusted=true&sort=asc&limit=60&apiKey=${apiKey}`;
+
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 10000);
+    const resp = await fetch(url, { signal: controller.signal });
+    clearTimeout(timer);
+
+    if (!resp.ok) {
+      console.warn(`[bot] MTF weekly fetch HTTP ${resp.status} for ${symbol}`);
+      return null;
+    }
+
+    const data = await resp.json();
+    const bars = data?.results;
+    if (!Array.isArray(bars) || bars.length < 50) {
+      console.warn(`[bot] MTF weekly insufficient bars (${bars?.length ?? 0}) for ${symbol}`);
+      return null;
+    }
+
+    const closes = bars.map(b => b.c);
+    const ema20  = calcEMA(closes, 20);
+    const ema50  = calcEMA(closes, 50);
+
+    if (ema20 == null || ema50 == null) return null;
+
+    const result = {
+      ts:      Date.now(),
+      bullish: ema20 > ema50,
+      bearish: ema20 < ema50,
+      ema20:   parseFloat(ema20.toFixed(4)),
+      ema50:   parseFloat(ema50.toFixed(4)),
+    };
+    trendCache[cacheKey] = result;
+    console.log(`[bot] MTF weekly ${symbol}: EMA20 ${result.ema20} vs EMA50 ${result.ema50} → ${result.bullish ? 'BULLISH' : result.bearish ? 'BEARISH' : 'FLAT'}`);
+    return result;
+  } catch (err) {
+    console.warn(`[bot] MTF weekly fetch error for ${symbol}:`, err.message);
+    return null;
+  }
 }
 
 // ─── DIRECTION RECOMMENDATION ─────────────────────────────────────────────────
@@ -457,7 +601,37 @@ module.exports = async function handler(req, res) {
     return reject('Neutral signal — no clear trade direction');
   }
 
-  // 8. LIMIT PRICE
+  // 8. MULTI-TIMEFRAME CONFLUENCE
+  try {
+    const dailyTrend = await checkDailyTrend(symbol);
+    if (dailyTrend) {
+      if (direction === 'LONG' && !dailyTrend.bullish) {
+        console.log(`[bot] MTF_CONFLICT: skipping ${symbol} — LONG signal but daily EMA60 (${dailyTrend.ema60}) < EMA200 (${dailyTrend.ema200})`);
+        return reject(`MTF_CONFLICT: LONG signal conflicts with daily downtrend (EMA60 $${dailyTrend.ema60} < EMA200 $${dailyTrend.ema200})`);
+      }
+      if (direction === 'SHORT' && !dailyTrend.bearish) {
+        console.log(`[bot] MTF_CONFLICT: skipping ${symbol} — SHORT signal but daily EMA60 (${dailyTrend.ema60}) > EMA200 (${dailyTrend.ema200})`);
+        return reject(`MTF_CONFLICT: SHORT signal conflicts with daily uptrend (EMA60 $${dailyTrend.ema60} > EMA200 $${dailyTrend.ema200})`);
+      }
+    }
+    if (mode === 'swing') {
+      const weeklyTrend = await checkWeeklyTrend(symbol);
+      if (weeklyTrend) {
+        if (direction === 'LONG' && !weeklyTrend.bullish) {
+          console.log(`[bot] MTF_CONFLICT: skipping ${symbol} — LONG signal but weekly EMA20 (${weeklyTrend.ema20}) < EMA50 (${weeklyTrend.ema50})`);
+          return reject(`MTF_CONFLICT: LONG signal conflicts with weekly downtrend (EMA20 $${weeklyTrend.ema20} < EMA50 $${weeklyTrend.ema50})`);
+        }
+        if (direction === 'SHORT' && !weeklyTrend.bearish) {
+          console.log(`[bot] MTF_CONFLICT: skipping ${symbol} — SHORT signal but weekly EMA20 (${weeklyTrend.ema20}) > EMA50 (${weeklyTrend.ema50})`);
+          return reject(`MTF_CONFLICT: SHORT signal conflicts with weekly uptrend (EMA20 $${weeklyTrend.ema20} > EMA50 $${weeklyTrend.ema50})`);
+        }
+      }
+    }
+  } catch (mtfErr) {
+    console.warn(`[bot] MTF check error for ${symbol}:`, mtfErr.message, '— proceeding without filter');
+  }
+
+  // 9. LIMIT PRICE  (was §8 — shifted by MTF check above)
   const lastPrice  = safeNum(body.lastPrice ?? body.price ?? indicators?.price);
   let   limitPrice = safeNum(body.limitPrice);
   let   autoSet    = false;
@@ -475,7 +649,7 @@ module.exports = async function handler(req, res) {
     return reject('Could not calculate a valid limit price');
   }
 
-  // 9. POSITION SIZE
+  // 10. POSITION SIZE
   const quantity      = safeNum(body.quantity) ?? 1;
   const positionValue = limitPrice * quantity;
   if (positionValue > bucket.maxPositionSize) {
