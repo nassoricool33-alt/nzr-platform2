@@ -27,6 +27,78 @@ function httpsGet(url, timeoutMs = 10000) {
   });
 }
 
+// ── Options flow score cache ──────────────────────────────────────────────────
+const flowScoreCache = {};
+const FLOW_SCORE_CACHE_TTL = 10 * 60 * 1000; // 10 minutes
+
+/**
+ * Fetches top-50 options contracts for `symbol`, aggregates call/put volume and
+ * open interest, and returns a directional score from -20 (bearish) to +20 (bullish).
+ *
+ * volumeScore = (callVol / totalVol - 0.5) × 20   (range -10 .. +10)
+ * oiScore     = (callOI  / totalOI  - 0.5) × 20   (range -10 .. +10)
+ * score       = clamp(volumeScore + oiScore, -20, +20)
+ * signal      = score ≥ 8 → 'bullish' | score ≤ -8 → 'bearish' | else 'neutral'
+ * smartMoney  = volumeRatio > 0.80 (heavy call-side skew)
+ */
+async function getOptionsFlowScore(symbol, key) {
+  const cacheKey = `flow:${symbol}`;
+  const cached = flowScoreCache[cacheKey];
+  if (cached && (Date.now() - cached.ts) < FLOW_SCORE_CACHE_TTL) {
+    console.log(`[polygon/flowscore] cache hit for ${symbol}`);
+    return cached.result;
+  }
+
+  const data = await httpsGet(
+    `https://api.polygon.io/v3/snapshot/options/${symbol}?limit=50&apiKey=${key}`
+  );
+
+  const results = data?.results;
+  if (!Array.isArray(results) || results.length === 0) {
+    return { score: 0, signal: 'neutral', volumeRatio: null, oiRatio: null, smartMoney: false, contracts: 0 };
+  }
+
+  let callVol = 0, putVol = 0, callOI = 0, putOI = 0;
+  for (const r of results) {
+    const ct  = (r.details?.contract_type || '').toLowerCase();
+    const vol = r.day?.volume ?? 0;
+    const oi  = r.open_interest ?? 0;
+    if (ct === 'call') { callVol += vol; callOI += oi; }
+    else if (ct === 'put') { putVol += vol; putOI += oi; }
+  }
+
+  const totalVol = callVol + putVol;
+  const totalOI  = callOI  + putOI;
+
+  const volumeRatio = totalVol > 0 ? callVol / totalVol : 0.5;
+  const oiRatio     = totalOI  > 0 ? callOI  / totalOI  : 0.5;
+
+  const volumeScore = (volumeRatio - 0.5) * 20;
+  const oiScore     = (oiRatio     - 0.5) * 20;
+  const rawScore    = volumeScore + oiScore;
+  const score       = Math.round(Math.max(-20, Math.min(20, rawScore)));
+
+  const signal    = score >= 8 ? 'bullish' : score <= -8 ? 'bearish' : 'neutral';
+  const smartMoney = volumeRatio > 0.80;
+
+  const result = {
+    score,
+    signal,
+    volumeRatio: parseFloat(volumeRatio.toFixed(3)),
+    oiRatio:     parseFloat(oiRatio.toFixed(3)),
+    smartMoney,
+    contracts:   results.length,
+    callVolume:  callVol,
+    putVolume:   putVol,
+    callOI,
+    putOI,
+  };
+
+  flowScoreCache[cacheKey] = { ts: Date.now(), result };
+  console.log(`[polygon/flowscore] ${symbol}: score=${score} signal=${signal} volRatio=${volumeRatio.toFixed(3)}`);
+  return result;
+}
+
 // Timeframe param → Polygon multiplier/timespan
 const TF_MAP = {
   '1m':  { mult: 1,  span: 'minute' },
@@ -177,8 +249,19 @@ module.exports = async function handler(req, res) {
 
       return res.status(200).json({ symbol: rawSym, timeframe: tf, bars });
 
+    // ── OPTIONS FLOW SCORE ──────────────────────────────────────────
+    } else if (type === 'flowscore') {
+      const rawSym = (req.query.symbol || '')
+        .toUpperCase()
+        .replace(/[^A-Z0-9.\-]/g, '')
+        .slice(0, 10);
+      if (!rawSym) return res.status(400).json({ error: 'symbol is required' });
+
+      const flowResult = await getOptionsFlowScore(rawSym, key);
+      return res.status(200).json({ symbol: rawSym, ...flowResult });
+
     } else {
-      return res.status(400).json({ error: 'Invalid type. Use: movers, options, earnings, or historical.' });
+      return res.status(400).json({ error: 'Invalid type. Use: movers, options, earnings, historical, or flowscore.' });
     }
 
   } catch (err) {

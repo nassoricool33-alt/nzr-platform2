@@ -106,6 +106,11 @@ const SENTIMENT_BOT_CACHE_TTL = 15 * 60 * 1000; // 15 minutes
 const srBotCache = {};
 const SR_BOT_CACHE_TTL = 4 * 60 * 60 * 1000; // 4 hours
 
+// ─── OPTIONS FLOW CACHE ───────────────────────────────────────────────────────
+// Keyed as "flow:SYMBOL" → { ts, score, signal, volumeRatio, oiRatio, smartMoney }
+const optionsFlowBotCache = {};
+const OPTIONS_FLOW_BOT_CACHE_TTL = 10 * 60 * 1000; // 10 minutes
+
 // ─── MARKET REGIME CACHE ─────────────────────────────────────────────────────
 // { ts, result: { adx, plusDI, minusDI, vix, regime } }
 let regimeBotCache = null;
@@ -509,6 +514,72 @@ async function getSymbolSR(symbol) {
     return result;
   } catch (err) {
     console.warn(`[bot] S/R fetch error for ${symbol}:`, err.message);
+    return null;
+  }
+}
+
+// ─── OPTIONS FLOW SCORING ─────────────────────────────────────────────────────
+
+/**
+ * Fetches top-50 options contracts for `symbol` from Polygon, aggregates
+ * call/put volume and open interest, returns a directional score -20..+20.
+ * signal: 'bullish' | 'bearish' | 'neutral'
+ * smartMoney: true when call volumeRatio > 0.80 (heavy call skew)
+ * Cached per symbol for 10 minutes.
+ */
+async function getSymbolOptionsFlow(symbol) {
+  const cacheKey = `flow:${symbol}`;
+  const cached = optionsFlowBotCache[cacheKey];
+  if (cached && (Date.now() - cached.ts) < OPTIONS_FLOW_BOT_CACHE_TTL) {
+    console.log(`[bot] options flow cache hit for ${symbol}: score=${cached.score}`);
+    return cached;
+  }
+
+  const apiKey = process.env.POLYGON_API_KEY;
+  if (!apiKey) return null;
+
+  const url = `https://api.polygon.io/v3/snapshot/options/${symbol}?limit=50&apiKey=${apiKey}`;
+
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 10000);
+    let resp;
+    try { resp = await fetch(url, { signal: ctrl.signal }); }
+    finally { clearTimeout(timer); }
+
+    if (!resp.ok) {
+      console.warn(`[bot] options flow fetch HTTP ${resp.status} for ${symbol}`);
+      return null;
+    }
+
+    const data = await resp.json();
+    const results = data?.results;
+    if (!Array.isArray(results) || results.length === 0) return null;
+
+    let callVol = 0, putVol = 0, callOI = 0, putOI = 0;
+    for (const r of results) {
+      const ct  = (r.details?.contract_type || '').toLowerCase();
+      const vol = r.day?.volume ?? 0;
+      const oi  = r.open_interest ?? 0;
+      if (ct === 'call')      { callVol += vol; callOI += oi; }
+      else if (ct === 'put')  { putVol  += vol; putOI  += oi; }
+    }
+
+    const totalVol = callVol + putVol;
+    const totalOI  = callOI  + putOI;
+    const volumeRatio = totalVol > 0 ? callVol / totalVol : 0.5;
+    const oiRatio     = totalOI  > 0 ? callOI  / totalOI  : 0.5;
+
+    const score     = Math.round(Math.max(-20, Math.min(20, (volumeRatio - 0.5) * 20 + (oiRatio - 0.5) * 20)));
+    const signal    = score >= 8 ? 'bullish' : score <= -8 ? 'bearish' : 'neutral';
+    const smartMoney = volumeRatio > 0.80;
+
+    const entry = { ts: Date.now(), score, signal, volumeRatio, oiRatio, smartMoney };
+    optionsFlowBotCache[cacheKey] = entry;
+    console.log(`[bot] OPTIONS_FLOW: ${symbol} score=${score} signal=${signal} volRatio=${volumeRatio.toFixed(3)} smartMoney=${smartMoney}`);
+    return entry;
+  } catch (err) {
+    console.warn(`[bot] options flow error for ${symbol}:`, err.message);
     return null;
   }
 }
@@ -1680,6 +1751,49 @@ module.exports = async function handler(req, res) {
     }
   } catch (rsErr) {
     console.warn(`[bot] RS filter error for ${symbol}:`, rsErr.message, '— proceeding without filter');
+  }
+
+  // 7e. OPTIONS FLOW GATE
+  // score ≥ +15 → strong bullish flow (+20 confidence)
+  // score ≥  +8 → mild bullish flow  (+10 confidence)
+  // score ≤ -15 → strong bearish flow (block LONG; +20 SHORT)
+  // score ≤  -8 → mild bearish flow  (-10 LONG; +10 SHORT)
+  // smartMoney tag appended to rec.note when call volumeRatio > 0.80
+  try {
+    const flow = await getSymbolOptionsFlow(symbol);
+    if (flow) {
+      const { score: flowScore, signal: flowSignal, volumeRatio, smartMoney } = flow;
+      const prev = rec.confidence ?? 0;
+      let flowAdj = 0;
+
+      if (direction === 'LONG') {
+        if      (flowScore <= -15) {
+          console.log(`[bot] OPTIONS_FLOW_BLOCK: ${symbol} strong bearish flow (score=${flowScore}) → blocking LONG`);
+          return reject(`OPTIONS_FLOW: Strong bearish options flow (score=${flowScore}) conflicts with LONG direction`);
+        } else if (flowScore <= -8) { flowAdj = -10; }
+        else if  (flowScore >=  15) { flowAdj = +20; }
+        else if  (flowScore >=   8) { flowAdj = +10; }
+      } else { // SHORT
+        if      (flowScore >= 15) { flowAdj = -10; }
+        else if (flowScore >= 8)  { flowAdj = -5; }
+        else if (flowScore <= -15){ flowAdj = +20; }
+        else if (flowScore <= -8) { flowAdj = +10; }
+      }
+
+      if (flowAdj !== 0) {
+        rec.confidence = Math.min(100, Math.max(0, prev + flowAdj));
+        console.log(`[bot] OPTIONS_FLOW: ${symbol} score=${flowScore} signal=${flowSignal} → adj=${flowAdj > 0 ? '+' : ''}${flowAdj} confidence ${prev}→${rec.confidence}`);
+      } else {
+        console.log(`[bot] OPTIONS_FLOW: ${symbol} score=${flowScore} signal=${flowSignal} → no adjustment`);
+      }
+
+      if (smartMoney) {
+        rec.note = (rec.note ? rec.note + ' | ' : '') + `Smart money: heavy call flow (${(volumeRatio * 100).toFixed(0)}% calls)`;
+        console.log(`[bot] OPTIONS_FLOW: ${symbol} smart money detected — call volumeRatio=${(volumeRatio * 100).toFixed(1)}%`);
+      }
+    }
+  } catch (flowErr) {
+    console.warn(`[bot] options flow gate error for ${symbol}:`, flowErr.message, '— proceeding without filter');
   }
 
   // 8. MULTI-TIMEFRAME CONFLUENCE
