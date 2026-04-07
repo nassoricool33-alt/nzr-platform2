@@ -10,6 +10,33 @@
 
 const ALLOWED_ORIGINS = ['https://nzr-platform2.vercel.app', 'http://localhost:3000'];
 
+// ─── SECTOR MAP ───────────────────────────────────────────────────────────────
+// Maps individual symbols to their SPDR sector ETF. Used by the correlation
+// guard to prevent over-concentration in correlated positions.
+const sectorMap = {
+  // XLK — Technology
+  AAPL:'XLK', MSFT:'XLK', NVDA:'XLK', AMD:'XLK', TSLA:'XLK',
+  META:'XLK', GOOGL:'XLK', AMZN:'XLK', CRM:'XLK', ORCL:'XLK',
+  INTC:'XLK', QCOM:'XLK', AVGO:'XLK', MU:'XLK', SMCI:'XLK',
+  // XLF — Financials
+  JPM:'XLF', BAC:'XLF', GS:'XLF', MS:'XLF', WFC:'XLF',
+  C:'XLF', BLK:'XLF', AXP:'XLF', V:'XLF', MA:'XLF',
+  // XLV — Health Care
+  JNJ:'XLV', UNH:'XLV', PFE:'XLV', ABBV:'XLV', MRK:'XLV',
+  LLY:'XLV', BMY:'XLV', AMGN:'XLV', GILD:'XLV',
+  // XLE — Energy
+  XOM:'XLE', CVX:'XLE', COP:'XLE', SLB:'XLE', OXY:'XLE', MPC:'XLE', PSX:'XLE',
+  // XLI — Industrials
+  BA:'XLI', CAT:'XLI', GE:'XLI', HON:'XLI', UPS:'XLI', FDX:'XLI', RTX:'XLI', LMT:'XLI',
+  // XLB — Materials
+  // XLU — Utilities
+  // XLRE — Real Estate
+  // XLP — Consumer Staples
+  // XLY — Consumer Discretionary
+  NKE:'XLY', SBUX:'XLY', MCD:'XLY', TGT:'XLY', HD:'XLY', LOW:'XLY', F:'XLY', GM:'XLY',
+  // XLC — Communication Services
+};
+
 // ─── MODULE-LEVEL STATE ──────────────────────────────────────────────────────
 
 let killSwitch    = false;
@@ -174,6 +201,30 @@ function getSessionQuality() {
   if (min < 15 * 60 + 30) return 'prime';   // 13:30–15:30
   if (min < 16 * 60)      return 'close';   // 15:30–16:00
   return 'closed';
+}
+
+/**
+ * Checks whether adding a new position in `symbol` would create too much
+ * sector concentration among `openPositions`.
+ *
+ * Rules:
+ *  - Symbol not in sectorMap → allowed: true, reason: "unmapped"
+ *  - 0 existing sector positions → allowed: true, sectorCount: 0
+ *  - 1 existing sector position  → allowed: true, sectorCount: 1 (caller reduces size 40%)
+ *  - 2+ existing sector positions → allowed: false (trade blocked)
+ *
+ * Each element of openPositions should have a `symbol` or `ticker` field.
+ */
+function checkCorrelationGuard(symbol, openPositions) {
+  const sector = sectorMap[symbol];
+  if (!sector) return { allowed: true, sectorCount: 0, sector: 'unmapped', reason: 'unmapped' };
+
+  const sectorCount = openPositions.filter(p => {
+    const s = sanitizeSymbol(p?.symbol ?? p?.ticker ?? '');
+    return s !== symbol && sectorMap[s] === sector;
+  }).length;
+
+  return { allowed: sectorCount < 2, sectorCount, sector };
 }
 
 /** Recalculate all allocation-derived limits whenever capital changes */
@@ -1175,6 +1226,18 @@ module.exports = async function handler(req, res) {
   });
   if (hasPos) return reject(`Position already open for ${symbol} in ${mode} mode`);
 
+  // 5b. SECTOR CORRELATION GUARD
+  let effectiveMaxPositionSize = bucket.maxPositionSize;
+  const corrGuard = checkCorrelationGuard(symbol, openPositions);
+  if (!corrGuard.allowed) {
+    console.log(`[bot] CORRELATION_GUARD: blocked ${symbol}, already ${corrGuard.sectorCount} positions in ${corrGuard.sector}`);
+    return reject(`CORRELATION_GUARD: already ${corrGuard.sectorCount} positions open in ${corrGuard.sector} sector — max 2 per sector`);
+  }
+  if (corrGuard.sectorCount === 1) {
+    effectiveMaxPositionSize = parseFloat((bucket.maxPositionSize * 0.6).toFixed(2));
+    console.log(`[bot] CORRELATION_GUARD: ${symbol} (${corrGuard.sector}) — 1 correlated position open, reducing max size $${bucket.maxPositionSize.toFixed(2)} → $${effectiveMaxPositionSize}`);
+  }
+
   // 6. EXPOSURE CHECK
   const currentExposure = safeNum(body.totalExposure) ?? 0;
   if (currentExposure >= bucket.maxExposure) {
@@ -1363,8 +1426,9 @@ module.exports = async function handler(req, res) {
   // 12. POSITION SIZE
   const quantity      = safeNum(body.quantity) ?? 1;
   const positionValue = limitPrice * quantity;
-  if (positionValue > bucket.maxPositionSize) {
-    return reject(`Position size $${positionValue.toFixed(2)} exceeds max $${bucket.maxPositionSize.toFixed(2)} for ${mode} mode`);
+  if (positionValue > effectiveMaxPositionSize) {
+    const corrNote = corrGuard.sectorCount === 1 ? ' (40% correlation reduction applied)' : '';
+    return reject(`Position size $${positionValue.toFixed(2)} exceeds max $${effectiveMaxPositionSize.toFixed(2)} for ${mode} mode${corrNote}`);
   }
 
   // ── APPROVED ──────────────────────────────────────────────────────────────────
@@ -1444,6 +1508,15 @@ module.exports = async function handler(req, res) {
       positionLimit: 'passed',
       exposure:      'passed',
       positionSize:  'passed',
+      correlation:   corrGuard.sector === 'unmapped'
+        ? 'unmapped — no sector limit applied'
+        : `passed — ${corrGuard.sectorCount} existing position(s) in ${corrGuard.sector}${corrGuard.sectorCount === 1 ? ' (size reduced 40%)' : ''}`,
+    },
+    sectorInfo: {
+      sector:        corrGuard.sector,
+      sectorCount:   corrGuard.sectorCount,
+      sizeReduced:   corrGuard.sectorCount === 1,
+      effectiveMax:  effectiveMaxPositionSize,
     },
   });
 };
