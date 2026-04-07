@@ -1425,6 +1425,133 @@ async function getMarketRegime() {
   }
 }
 
+// ─── WEIGHTED SIGNAL SCORER ──────────────────────────────────────────────────
+
+/**
+ * Combines all available trade signals into a single transparent NZR composite
+ * score.  Hard requirements (volume, daily trend alignment for day trades, regime)
+ * short-circuit immediately and return blocked=true.  Everything else is additive.
+ *
+ * Max theoretical score (all signals positive):
+ *   30+20+20+20+15+15+10+10+10+20+20 = 190
+ * Entry threshold: score >= 70
+ *
+ * @param {string} symbol
+ * @param {'LONG'|'SHORT'} direction
+ * @param {object} inputs   — all fields optional/nullable
+ * @param {'day'|'swing'}  mode
+ * @returns {{ score:number, blocked:boolean, blockReason:string|null, breakdown:object }}
+ */
+function resolveSignalScore(symbol, direction, inputs, mode) {
+  const bd  = {};   // breakdown (key → points contributed, null = signal unavailable)
+  let score = 0;
+
+  // ── Hard requirements ────────────────────────────────────────────────────────
+  // Check these BEFORE adding any positive points so the reason is always clear.
+
+  if (inputs.regimeOk === false) {
+    console.log(`[bot] SIGNAL_SCORE: ${symbol} BLOCKED — regime not ok`);
+    return { score: 0, blocked: true, blockReason: 'REGIME_BLOCK: market regime does not allow new entries', breakdown: bd };
+  }
+
+  if (inputs.volumeConfirmed === false) {
+    console.log(`[bot] SIGNAL_SCORE: ${symbol} BLOCKED — volume not confirmed (hard requirement)`);
+    return { score: 0, blocked: true, blockReason: 'VOLUME_GATE: insufficient volume — hard requirement not met', breakdown: bd };
+  }
+
+  if (mode === 'day' && inputs.dailyTrendAligned === false) {
+    console.log(`[bot] SIGNAL_SCORE: ${symbol} BLOCKED — daily trend not aligned for day trade (hard requirement)`);
+    return { score: 0, blocked: true, blockReason: 'MTF_CONFLICT: daily trend alignment is a hard requirement for day trades', breakdown: bd };
+  }
+
+  // ── Weighted contributions ───────────────────────────────────────────────────
+
+  // MACD crossover confirmed: +30 (LONG needs positive histogram, SHORT needs negative)
+  if      (inputs.macdCross === true)  { bd.macdCross = +30; score += 30; }
+  else if (inputs.macdCross === false) { bd.macdCross =   0; }
+  else                                 { bd.macdCross = null; }
+
+  // RSI not extreme (30–70): +20; extreme: −20
+  if      (inputs.rsiNotExtreme === true)  { bd.rsiNotExtreme = +20; score += 20; }
+  else if (inputs.rsiNotExtreme === false) { bd.rsiNotExtreme = -20; score -= 20; }
+  else                                     { bd.rsiNotExtreme = null; }
+
+  // EMA alignment (EMA60 vs EMA200 in direction): +20
+  if      (inputs.emaAlignment === true)  { bd.emaAlignment = +20; score += 20; }
+  else if (inputs.emaAlignment === false) { bd.emaAlignment =   0; }
+  else                                    { bd.emaAlignment = null; }
+
+  // Volume confirmed: +20 (hard requirement already cleared above)
+  if      (inputs.volumeConfirmed === true) { bd.volumeConfirmed = +20; score += 20; }
+  else                                      { bd.volumeConfirmed = inputs.volumeConfirmed === null ? null : 0; }
+
+  // VWAP alignment (day trades only): +15 if price is on the right side
+  if (mode === 'day') {
+    if      (inputs.aboveVwap === true)  { bd.aboveVwap = +15; score += 15; }
+    else if (inputs.aboveVwap === false) { bd.aboveVwap =   0; }  // miss — no bonus, not a hard block
+    else                                 { bd.aboveVwap = null; }
+  } else {
+    bd.aboveVwap = null; // N/A for swing
+  }
+
+  // Daily trend aligned: +15 (hard block only for day — swing is soft)
+  if      (inputs.dailyTrendAligned === true)  { bd.dailyTrendAligned = +15; score += 15; }
+  else if (inputs.dailyTrendAligned === false) { bd.dailyTrendAligned =   0; }  // swing: soft miss
+  else                                         { bd.dailyTrendAligned = null; }
+
+  // Session quality (day trades): prime → +10, lunch → −10
+  if      (inputs.sessionPrime === true)  { bd.sessionPrime = +10; score += 10; }
+  else if (inputs.sessionPrime === false) { bd.sessionPrime = -10; score -= 10; }
+  else                                    { bd.sessionPrime = null; }
+
+  // News sentiment: direct pass-through of −10..+10 score
+  if (inputs.sentimentScore != null) {
+    const pts = Math.max(-10, Math.min(10, Math.round(inputs.sentimentScore)));
+    bd.sentimentScore = pts; score += pts;
+  } else {
+    bd.sentimentScore = null;
+  }
+
+  // Relative strength vs SPY: RS > 1.5 = +10, RS < 0.8 = −10 (LONG perspective)
+  if (inputs.relativeStrength != null) {
+    let rsPoints = 0;
+    if (direction === 'LONG') {
+      if      (inputs.relativeStrength > 1.5) rsPoints = +10;
+      else if (inputs.relativeStrength < 0.8) rsPoints = -10;
+    } else {
+      if      (inputs.relativeStrength < 0.5) rsPoints = +10;
+      else if (inputs.relativeStrength > 1.2) rsPoints = -10;
+    }
+    bd.relativeStrength = rsPoints; score += rsPoints;
+  } else {
+    bd.relativeStrength = null;
+  }
+
+  // Options flow: direct pass-through of −20..+20 score
+  if (inputs.optionsFlowScore != null) {
+    const pts = Math.max(-20, Math.min(20, Math.round(inputs.optionsFlowScore)));
+    bd.optionsFlowScore = pts; score += pts;
+  } else {
+    bd.optionsFlowScore = null;
+  }
+
+  // Gap boost: pre-computed net point adjustment from getPreMarketGap (+20/+15/−10…)
+  if (inputs.gapBoost != null) {
+    bd.gapBoost = inputs.gapBoost; score += inputs.gapBoost;
+  } else {
+    bd.gapBoost = null;
+  }
+
+  const available = Object.values(bd).filter(v => v !== null).length;
+  const bkStr = Object.entries(bd)
+    .filter(([, v]) => v !== null)
+    .map(([k, v]) => `${k}:${v > 0 ? '+' : ''}${v}`)
+    .join(' ');
+  console.log(`[bot] SIGNAL_SCORE: ${symbol} ${direction} mode=${mode} score=${score} (${available} signals) — ${bkStr}`);
+
+  return { score, blocked: false, blockReason: null, breakdown: bd };
+}
+
 // ─── DIRECTION RECOMMENDATION ─────────────────────────────────────────────────
 
 function recommendDirection(ind) {
@@ -1820,30 +1947,23 @@ module.exports = async function handler(req, res) {
   }
 
   // 7b. SESSION QUALITY FILTER (day trades only)
+  // Hard blocks for "avoid" (9:30–10:00 AM) and "close" (3:30–4:00 PM) are strict
+  // risk rules — kept outside the scorer.  sessionPrime feeds the scorer as +10/−10.
+  let session     = null;
+  let sessionPrime = null;
   if (mode === 'day') {
-    const session = getSessionQuality();
-
+    session = getSessionQuality();
     if (session === 'avoid') {
       console.log(`[bot] SESSION_FILTER: avoid zone, skipping ${symbol}`);
       return reject('SESSION_FILTER: opening shakeout zone (9:30–10:00 AM ET) — no new day trade entries');
     }
-
     if (session === 'close') {
       console.log(`[bot] SESSION_FILTER: close zone, skipping ${symbol}`);
       return reject('SESSION_FILTER: closing volatility zone (3:30–4:00 PM ET) — no new day trade entries');
     }
-
-    const sessionAdj = session === 'prime' ? 10 : session === 'lunch' ? -10 : 0;
-    if (sessionAdj !== 0) {
-      const rawConfidence    = rec.confidence ?? 0;
-      const adjConfidence    = rawConfidence + sessionAdj;
-      if (session === 'lunch' && adjConfidence < ENTRY_CONFIDENCE_THRESHOLD) {
-        console.log(`[bot] SESSION_FILTER: lunch zone dropped confidence ${rawConfidence} → ${adjConfidence} below threshold (${ENTRY_CONFIDENCE_THRESHOLD}), skipping ${symbol}`);
-        return reject(`SESSION_FILTER: lunch zone penalty — adjusted confidence ${adjConfidence} below entry threshold ${ENTRY_CONFIDENCE_THRESHOLD}`);
-      }
-      rec.confidence = Math.min(100, Math.max(0, adjConfidence));
-      console.log(`[bot] SESSION_FILTER: ${session} zone ${sessionAdj > 0 ? '+' : ''}${sessionAdj} confidence → ${rec.confidence} for ${symbol}`);
-    }
+    // prime → +10, lunch → −10 in the weighted scorer
+    sessionPrime = session === 'prime' ? true : session === 'lunch' ? false : null;
+    console.log(`[bot] SESSION: ${symbol} zone=${session} sessionPrime=${sessionPrime}`);
   }
 
   // 7b.5 REGIME LEVERAGE CAP (choppy only — applied after direction is resolved)
@@ -1852,220 +1972,176 @@ module.exports = async function handler(req, res) {
     rec.leverage = 1;
   }
 
-  // 7c. NEWS SENTIMENT GATE (day and swing trades)
-  try {
-    const sentiment = await getSymbolSentiment(symbol);
-    if (sentiment) {
-      if (sentiment.score <= -5) {
-        console.log(`[bot] SENTIMENT_BLOCK: ${symbol} score=${sentiment.score}`);
-        return reject(`SENTIMENT_BLOCK: strongly negative news sentiment (score ${sentiment.score}/10) — "${sentiment.summary}"`);
-      }
+  // 8. CONCURRENT SIGNAL FETCH
+  // All async sources run in parallel. Errors resolve to null (fail-open).
+  // Results are normalised into signal inputs for resolveSignalScore below.
+  const currentVolume   = safeNum(body.currentVolume ?? indicators?.volume);
+  const isMacdCrossover = body.isMacdCrossover === true || body.signalType === 'macd';
 
-      let sentimentAdj = 0;
-      if      (sentiment.score >= 7)  sentimentAdj += 15;
-      else if (sentiment.score >= 4)  sentimentAdj += 8;
-      else if (sentiment.score <= -2) sentimentAdj -= 8;
-      if (sentiment.catalyst)         sentimentAdj += 10;
+  const [sentFetch, rsFetch, flowFetch, gapFetch, dailyFetch, weeklyFetch, volFetch, vwapFetch] =
+    await Promise.allSettled([
+      getSymbolSentiment(symbol),
+      getRelativeStrength(symbol, mode),
+      getSymbolOptionsFlow(symbol),
+      mode === 'day' ? getPreMarketGap(symbol)      : Promise.resolve(null),
+      checkDailyTrend(symbol),
+      mode === 'swing' ? checkWeeklyTrend(symbol)   : Promise.resolve(null),
+      currentVolume != null
+        ? checkVolumeConfirmation(symbol, currentVolume, mode, isMacdCrossover)
+        : Promise.resolve(null),
+      mode === 'day' ? calculateVWAP(symbol)        : Promise.resolve(null),
+    ]);
 
-      if (sentimentAdj !== 0) {
-        const prev = rec.confidence ?? 0;
-        rec.confidence = Math.min(100, Math.max(0, prev + sentimentAdj));
-        console.log(`[bot] SENTIMENT: ${symbol} score=${sentiment.score} catalyst=${sentiment.catalyst} adj=${sentimentAdj > 0 ? '+' : ''}${sentimentAdj} confidence ${prev}→${rec.confidence}`);
-      }
+  const getVal = r => r.status === 'fulfilled' ? r.value : null;
+  const sentimentData = getVal(sentFetch);
+  const rsData        = getVal(rsFetch);
+  const flowData      = getVal(flowFetch);
+  const gapData       = getVal(gapFetch);
+  const dailyTrend    = getVal(dailyFetch);
+  const weeklyTrend   = getVal(weeklyFetch);
+  const volData       = getVal(volFetch);
+  const vwapData      = getVal(vwapFetch);
+
+  if (sentFetch.status   === 'rejected') console.warn(`[bot] signal fetch: sentiment:`,    sentFetch.reason?.message);
+  if (rsFetch.status     === 'rejected') console.warn(`[bot] signal fetch: RS:`,           rsFetch.reason?.message);
+  if (flowFetch.status   === 'rejected') console.warn(`[bot] signal fetch: options flow:`, flowFetch.reason?.message);
+  if (gapFetch.status    === 'rejected') console.warn(`[bot] signal fetch: gap:`,          gapFetch.reason?.message);
+  if (dailyFetch.status  === 'rejected') console.warn(`[bot] signal fetch: daily trend:`,  dailyFetch.reason?.message);
+  if (weeklyFetch.status === 'rejected') console.warn(`[bot] signal fetch: weekly trend:`, weeklyFetch.reason?.message);
+  if (volFetch.status    === 'rejected') console.warn(`[bot] signal fetch: volume:`,       volFetch.reason?.message);
+  if (vwapFetch.status   === 'rejected') console.warn(`[bot] signal fetch: VWAP:`,         vwapFetch.reason?.message);
+
+  // ── Derive signal inputs ────────────────────────────────────────────────────
+
+  // Indicator-derived signals (sync — from body.indicators)
+  const rsiVal   = safeNum(indicators?.rsi);
+  const macdHist = safeNum(indicators?.macdHistogram ?? indicators?.macd_histogram ?? indicators?.histogram);
+  const ema60v   = safeNum(indicators?.ema60);
+  const ema200v  = safeNum(indicators?.ema200);
+
+  // MACD cross: true if histogram confirms the trade direction
+  const macdCross = macdHist != null
+    ? (direction === 'LONG' ? macdHist > 0 : macdHist < 0)
+    : null;
+
+  // RSI not extreme: true if 30–70
+  const rsiNotExtreme = rsiVal != null ? (rsiVal >= 30 && rsiVal <= 70) : null;
+
+  // EMA alignment: true if EMA60/EMA200 supports direction
+  const emaAlignment = (ema60v != null && ema200v != null)
+    ? (direction === 'LONG' ? ema60v > ema200v : ema60v < ema200v)
+    : null;
+
+  // Volume confirmed (null = not provided → fail-open; false = hard block)
+  let volumeConfirmed = null;
+  if (volData) {
+    volumeConfirmed = volData.confirmed === true;
+    if (!volData.confirmed) {
+      const thr = isMacdCrossover ? '1.5' : '1.2';
+      console.log(`[bot] VOLUME_GATE: ${symbol} ratio=${volData.ratio?.toFixed(2)} (need ${thr}×, avg=${volData.avgVolume})`);
+    } else {
+      console.log(`[bot] VOLUME_GATE: ${symbol} passed ratio=${volData.ratio?.toFixed(2)}`);
     }
-  } catch (sentErr) {
-    console.warn(`[bot] Sentiment gate error for ${symbol}:`, sentErr.message, '— proceeding without filter');
   }
 
-  // 7d. RELATIVE STRENGTH FILTER (day and swing trades)
-  try {
-    const rsResult = await getRelativeStrength(symbol, mode);
-    if (rsResult) {
-      const { rs, symbolChange, spyChange } = rsResult;
-      let rsAdj = 0;
-
-      if (direction === 'LONG') {
-        if      (rs > 2.0) rsAdj = +15;
-        else if (rs > 1.5) rsAdj = +10;
-        else if (rs < 0.8) rsAdj = -10;
-      } else { // SHORT
-        if      (rs < 0.5) rsAdj = +15;
-        else if (rs > 1.2) rsAdj = -10;
-      }
-
-      if (rsAdj !== 0) {
-        const prev = rec.confidence ?? 0;
-        rec.confidence = Math.min(100, Math.max(0, prev + rsAdj));
-        console.log(`[bot] RS_FILTER: ${symbol} rs=${rs}, symbolChange=${symbolChange}%, spyChange=${spyChange}% → adj=${rsAdj > 0 ? '+' : ''}${rsAdj} confidence ${prev}→${rec.confidence}`);
-      } else {
-        console.log(`[bot] RS_FILTER: ${symbol} rs=${rs}, symbolChange=${symbolChange}%, spyChange=${spyChange}% → no adjustment`);
-      }
-    }
-  } catch (rsErr) {
-    console.warn(`[bot] RS filter error for ${symbol}:`, rsErr.message, '— proceeding without filter');
+  // VWAP alignment (day): true = price is on the correct side for direction
+  let aboveVwap = null;
+  if (mode === 'day' && vwapData) {
+    aboveVwap = direction === 'LONG' ? vwapData.aboveVwap === true : vwapData.aboveVwap === false;
+    if (!aboveVwap)
+      console.log(`[bot] VWAP: ${symbol} not aligned for ${direction} — price=${vwapData.currentPrice} vwap=${vwapData.vwap}`);
   }
 
-  // 7e. OPTIONS FLOW GATE
-  // score ≥ +15 → strong bullish flow (+20 confidence)
-  // score ≥  +8 → mild bullish flow  (+10 confidence)
-  // score ≤ -15 → strong bearish flow (block LONG; +20 SHORT)
-  // score ≤  -8 → mild bearish flow  (-10 LONG; +10 SHORT)
-  // smartMoney tag appended to rec.note when call volumeRatio > 0.80
-  try {
-    const flow = await getSymbolOptionsFlow(symbol);
-    if (flow) {
-      const { score: flowScore, signal: flowSignal, volumeRatio, smartMoney } = flow;
-      const prev = rec.confidence ?? 0;
-      let flowAdj = 0;
-
-      if (direction === 'LONG') {
-        if      (flowScore <= -15) {
-          console.log(`[bot] OPTIONS_FLOW_BLOCK: ${symbol} strong bearish flow (score=${flowScore}) → blocking LONG`);
-          return reject(`OPTIONS_FLOW: Strong bearish options flow (score=${flowScore}) conflicts with LONG direction`);
-        } else if (flowScore <= -8) { flowAdj = -10; }
-        else if  (flowScore >=  15) { flowAdj = +20; }
-        else if  (flowScore >=   8) { flowAdj = +10; }
-      } else { // SHORT
-        if      (flowScore >= 15) { flowAdj = -10; }
-        else if (flowScore >= 8)  { flowAdj = -5; }
-        else if (flowScore <= -15){ flowAdj = +20; }
-        else if (flowScore <= -8) { flowAdj = +10; }
-      }
-
-      if (flowAdj !== 0) {
-        rec.confidence = Math.min(100, Math.max(0, prev + flowAdj));
-        console.log(`[bot] OPTIONS_FLOW: ${symbol} score=${flowScore} signal=${flowSignal} → adj=${flowAdj > 0 ? '+' : ''}${flowAdj} confidence ${prev}→${rec.confidence}`);
-      } else {
-        console.log(`[bot] OPTIONS_FLOW: ${symbol} score=${flowScore} signal=${flowSignal} → no adjustment`);
-      }
-
-      if (smartMoney) {
-        rec.note = (rec.note ? rec.note + ' | ' : '') + `Smart money: heavy call flow (${(volumeRatio * 100).toFixed(0)}% calls)`;
-        console.log(`[bot] OPTIONS_FLOW: ${symbol} smart money detected — call volumeRatio=${(volumeRatio * 100).toFixed(1)}%`);
-      }
-    }
-  } catch (flowErr) {
-    console.warn(`[bot] options flow gate error for ${symbol}:`, flowErr.message, '— proceeding without filter');
+  // Daily trend alignment (false + day = hard block in scorer; swing = soft miss)
+  let dailyTrendAligned = null;
+  if (dailyTrend) {
+    dailyTrendAligned = direction === 'LONG' ? dailyTrend.bullish === true : dailyTrend.bearish === true;
+    if (!dailyTrendAligned)
+      console.log(`[bot] MTF: ${symbol} daily trend not aligned for ${direction} (EMA60=${dailyTrend.ema60} EMA200=${dailyTrend.ema200})`);
+  }
+  // Swing: also log weekly alignment (soft only — contributes to score via dailyTrendAligned null, not separate field)
+  if (mode === 'swing' && weeklyTrend) {
+    const weeklyAligned = direction === 'LONG' ? weeklyTrend.bullish : weeklyTrend.bearish;
+    if (!weeklyAligned)
+      console.log(`[bot] MTF: ${symbol} weekly trend not aligned for ${direction} (EMA20=${weeklyTrend.ema20} EMA50=${weeklyTrend.ema50})`);
   }
 
-  // 7f. PRE-MARKET GAP SCORING (day trades, 9:30–11:30 AM ET only)
-  // gap_up  > 4%  + LONG  → +20 confidence, tag "STRONG_GAP_UP"
-  // gap_up  > 2%  + LONG  → +15 confidence, tag "GAP_UP_PLAY"
-  // gap_down > 2% + SHORT → +15 confidence, tag "GAP_DOWN_SHORT"
-  // After 10:00 AM ET: gap_up stock trading below open → −10 (gap fade)
-  if (mode === 'day') {
+  // Sentiment: raw −10..+10 score passed through directly
+  const sentimentScore = sentimentData ? sentimentData.score : null;
+
+  // Relative strength: RS ratio (symbol vs SPY)
+  const relativeStrength = rsData ? rsData.rs : null;
+
+  // Options flow score: raw −20..+20 passed through; capture smart money tag
+  const optionsFlowScore = flowData ? flowData.score : null;
+  const flowSmartMoney   = flowData?.smartMoney === true;
+
+  // Gap boost: net point adjustment from getPreMarketGap (day trades, 9:30–11:30 AM ET)
+  let gapBoost = null;
+  let gapTag   = null;
+  if (mode === 'day' && gapData) {
+    const { gapPct, gapType, dayOpen, currentPrice: gapCurrent } = gapData;
+    const absGap   = Math.abs(gapPct);
     const etMinNow = getETMinuteOfDay();
     const inGapWindow = etMinNow >= 9 * 60 + 30 && etMinNow < 11 * 60 + 30;
     if (inGapWindow) {
-      try {
-        const gap = await getPreMarketGap(symbol);
-        if (gap) {
-          const { gapPct, gapType, dayOpen, currentPrice } = gap;
-          const absGap = Math.abs(gapPct);
-          let gapAdj = 0;
-          let gapTag = null;
-
-          if (gapType === 'gap_up' && direction === 'LONG') {
-            if      (absGap >= 4) { gapAdj = +20; gapTag = 'STRONG_GAP_UP'; }
-            else if (absGap >= 2) { gapAdj = +15; gapTag = 'GAP_UP_PLAY'; }
-          } else if (gapType === 'gap_down' && direction === 'SHORT') {
-            if (absGap >= 2) { gapAdj = +15; gapTag = 'GAP_DOWN_SHORT'; }
-          }
-
-          // Gap fade filter: after 10:00 AM ET, if a gap_up stock is now
-          // trading BELOW its opening price, the gap is failing → penalise
-          const afterTen = etMinNow >= 10 * 60;
-          if (afterTen && gapType === 'gap_up' && dayOpen != null && currentPrice != null && currentPrice < dayOpen) {
-            gapAdj -= 10;
-            gapTag  = gapTag ? `${gapTag}+FADE` : 'GAP_FADE';
-            console.log(`[bot] GAP_FADE: ${symbol} gap_up fading — current $${currentPrice} < open $${dayOpen} → −10`);
-          }
-
-          if (gapAdj !== 0) {
-            const prev = rec.confidence ?? 0;
-            rec.confidence = Math.min(100, Math.max(0, prev + gapAdj));
-            if (gapTag) rec.note = (rec.note ? rec.note + ' | ' : '') + gapTag;
-            console.log(`[bot] GAP_SCORE: ${symbol} gap=${gapPct.toFixed ? gapPct.toFixed(2) : gapPct}% type=${gapType} tag=${gapTag} → adj=${gapAdj > 0 ? '+' : ''}${gapAdj} confidence ${prev}→${rec.confidence}`);
-          } else {
-            console.log(`[bot] GAP_SCORE: ${symbol} gap=${gapPct}% type=${gapType} → no adjustment`);
-          }
-        }
-      } catch (gapErr) {
-        console.warn(`[bot] gap scoring error for ${symbol}:`, gapErr.message, '— proceeding without filter');
+      let adj = 0;
+      if      (gapType === 'gap_up'   && direction === 'LONG'  && absGap >= 4) { adj = +20; gapTag = 'STRONG_GAP_UP'; }
+      else if (gapType === 'gap_up'   && direction === 'LONG'  && absGap >= 2) { adj = +15; gapTag = 'GAP_UP_PLAY'; }
+      else if (gapType === 'gap_down' && direction === 'SHORT' && absGap >= 2) { adj = +15; gapTag = 'GAP_DOWN_SHORT'; }
+      // Gap fade: after 10:00 AM ET, gap_up stock trading below the open
+      const afterTen = etMinNow >= 10 * 60;
+      if (afterTen && gapType === 'gap_up' && dayOpen != null && gapCurrent != null && gapCurrent < dayOpen) {
+        adj -= 10;
+        gapTag = gapTag ? `${gapTag}+FADE` : 'GAP_FADE';
+        console.log(`[bot] GAP_FADE: ${symbol} gap_up fading — current $${gapCurrent} < open $${dayOpen}`);
+      }
+      if (adj !== 0) {
+        gapBoost = adj;
+        console.log(`[bot] GAP_SCAN: ${symbol} gap=${gapPct.toFixed(2)}% type=${gapType} tag=${gapTag}`);
       }
     }
   }
 
-  // 8. MULTI-TIMEFRAME CONFLUENCE
-  try {
-    const dailyTrend = await checkDailyTrend(symbol);
-    if (dailyTrend) {
-      if (direction === 'LONG' && !dailyTrend.bullish) {
-        console.log(`[bot] MTF_CONFLICT: skipping ${symbol} — LONG signal but daily EMA60 (${dailyTrend.ema60}) < EMA200 (${dailyTrend.ema200})`);
-        return reject(`MTF_CONFLICT: LONG signal conflicts with daily downtrend (EMA60 $${dailyTrend.ema60} < EMA200 $${dailyTrend.ema200})`);
-      }
-      if (direction === 'SHORT' && !dailyTrend.bearish) {
-        console.log(`[bot] MTF_CONFLICT: skipping ${symbol} — SHORT signal but daily EMA60 (${dailyTrend.ema60}) > EMA200 (${dailyTrend.ema200})`);
-        return reject(`MTF_CONFLICT: SHORT signal conflicts with daily uptrend (EMA60 $${dailyTrend.ema60} > EMA200 $${dailyTrend.ema200})`);
-      }
-    }
-    if (mode === 'swing') {
-      const weeklyTrend = await checkWeeklyTrend(symbol);
-      if (weeklyTrend) {
-        if (direction === 'LONG' && !weeklyTrend.bullish) {
-          console.log(`[bot] MTF_CONFLICT: skipping ${symbol} — LONG signal but weekly EMA20 (${weeklyTrend.ema20}) < EMA50 (${weeklyTrend.ema50})`);
-          return reject(`MTF_CONFLICT: LONG signal conflicts with weekly downtrend (EMA20 $${weeklyTrend.ema20} < EMA50 $${weeklyTrend.ema50})`);
-        }
-        if (direction === 'SHORT' && !weeklyTrend.bearish) {
-          console.log(`[bot] MTF_CONFLICT: skipping ${symbol} — SHORT signal but weekly EMA20 (${weeklyTrend.ema20}) > EMA50 (${weeklyTrend.ema50})`);
-          return reject(`MTF_CONFLICT: SHORT signal conflicts with weekly uptrend (EMA20 $${weeklyTrend.ema20} > EMA50 $${weeklyTrend.ema50})`);
-        }
-      }
-    }
-  } catch (mtfErr) {
-    console.warn(`[bot] MTF check error for ${symbol}:`, mtfErr.message, '— proceeding without filter');
+  // Regime ok (crisis already hard-blocked at step 1b; this is belt-and-suspenders)
+  const regimeOk = regime.regime !== 'crisis';
+
+  // 9. COMPOSITE SIGNAL SCORE
+  // resolveSignalScore enforces hard requirements (volume, daily trend day mode, regime)
+  // and accumulates weighted points for everything else.
+  // Entry threshold: composite.score >= 70
+  const composite = resolveSignalScore(symbol, direction, {
+    macdCross,
+    rsiNotExtreme,
+    emaAlignment,
+    volumeConfirmed,
+    aboveVwap,
+    dailyTrendAligned,
+    sessionPrime,
+    sentimentScore,
+    relativeStrength,
+    optionsFlowScore,
+    gapBoost,
+    regimeOk,
+  }, mode);
+
+  if (composite.blocked) {
+    return reject(composite.blockReason);
   }
 
-  // 9. VOLUME CONFIRMATION GATE
-  const currentVolume   = safeNum(body.currentVolume ?? body.indicators?.volume);
-  const isMacdCrossover = body.isMacdCrossover === true || body.signalType === 'macd';
-  if (currentVolume != null) {
-    try {
-      const vol = await checkVolumeConfirmation(symbol, currentVolume, mode, isMacdCrossover);
-      if (vol) {
-        const ratioStr = vol.ratio.toFixed(2);
-        if (!vol.confirmed) {
-          const threshold = isMacdCrossover ? '1.5' : '1.2';
-          console.log(`[bot] VOLUME_GATE: rejected ${symbol}, ratio=${ratioStr} (need ${threshold}×, avgVol=${vol.avgVolume})`);
-          return reject(`VOLUME_GATE: insufficient volume for ${symbol} — ratio ${ratioStr}× vs required ${threshold}× (avgVol ${vol.avgVolume})`);
-        }
-        console.log(`[bot] VOLUME_GATE: passed ${symbol}, ratio=${ratioStr}`);
-      }
-      // null return = API failure → fail-open (do not block the trade)
-    } catch (volErr) {
-      console.warn(`[bot] Volume gate error for ${symbol}:`, volErr.message, '— proceeding without filter');
-    }
+  if (composite.score < 70) {
+    const parts = Object.entries(composite.breakdown)
+      .filter(([, v]) => v !== null)
+      .map(([k, v]) => `${k}:${v > 0 ? '+' : ''}${v}`)
+      .join(' ');
+    return reject(`NZR score ${composite.score} below entry threshold (70). Breakdown: [${parts}]`);
   }
 
-  // 10. VWAP DIRECTIONAL FILTER (day trades only)
-  if (mode === 'day') {
-    try {
-      const vwapResult = await calculateVWAP(symbol);
-      if (vwapResult) {
-        // null = pre-open or < 5 bars → skip filter
-        if (direction === 'LONG' && !vwapResult.aboveVwap) {
-          console.log(`[bot] VWAP_FILTER: rejected LONG ${symbol}, price=${vwapResult.currentPrice}, vwap=${vwapResult.vwap}`);
-          return reject(`VWAP_FILTER: LONG rejected — price $${vwapResult.currentPrice} is below VWAP $${vwapResult.vwap}`);
-        }
-        if (direction === 'SHORT' && vwapResult.aboveVwap) {
-          console.log(`[bot] VWAP_FILTER: rejected SHORT ${symbol}, price=${vwapResult.currentPrice}, vwap=${vwapResult.vwap}`);
-          return reject(`VWAP_FILTER: SHORT rejected — price $${vwapResult.currentPrice} is above VWAP $${vwapResult.vwap}`);
-        }
-      }
-    } catch (vwapErr) {
-      console.warn(`[bot] VWAP filter error for ${symbol}:`, vwapErr.message, '— proceeding without filter');
-    }
-  }
+  // Collect human-readable trade tags for the approved response
+  const tradeTags = [];
+  if (flowSmartMoney && flowData?.volumeRatio)
+    tradeTags.push(`Smart money: ${(flowData.volumeRatio * 100).toFixed(0)}% calls`);
+  if (gapTag) tradeTags.push(gapTag);
 
   // 11. LIMIT PRICE
   const lastPrice  = safeNum(body.lastPrice ?? body.price ?? indicators?.price);
@@ -2134,7 +2210,7 @@ module.exports = async function handler(req, res) {
 
   // Adaptive sizing: Kelly-based + confidence tier, computed BEFORE the hard cap
   const adaptiveRaw = await getAdaptivePositionSize(
-    effectiveMaxPositionSize, rec.confidence ?? 0, symbol
+    effectiveMaxPositionSize, composite.score, symbol
   ).catch(err => {
     console.warn(`[bot] ADAPTIVE_SIZE: unexpected error for ${symbol}:`, err.message, '— using 0.75× fallback');
     return parseFloat((effectiveMaxPositionSize * 0.75).toFixed(2));
@@ -2215,11 +2291,14 @@ module.exports = async function handler(req, res) {
     positionValue:  parseFloat(positionValue.toFixed(2)),
     autoLimitSet:   autoSet,
     srAnchor:       srLevelUsed ?? undefined,
-    leverage:       rec.leverage ?? 1,
-    confidence:     rec.confidence ?? 0,
-    reasoning:      rec.reasoning ?? '',
+    leverage:        rec.leverage ?? 1,
+    nzrScore:        composite.score,
+    confidence:      composite.score,  // alias — backwards compatible
+    reasoning:       rec.reasoning ?? '',
+    signalBreakdown: composite.breakdown,
+    tradeTags:       tradeTags.length ? tradeTags : undefined,
     clientOrderId,
-    timestamp:      ts,
+    timestamp:       ts,
     riskChecks: {
       killSwitch:    'inactive',
       lossLimit:     'passed',
@@ -2228,6 +2307,7 @@ module.exports = async function handler(req, res) {
       positionLimit: 'passed',
       exposure:      'passed',
       positionSize:  'passed',
+      signalScore:   `passed (${composite.score}/70 threshold)`,
       correlation:   corrGuard.sector === 'unmapped'
         ? 'unmapped — no sector limit applied'
         : `passed — ${corrGuard.sectorCount} existing position(s) in ${corrGuard.sector}${corrGuard.sectorCount === 1 ? ' (size reduced 40%)' : ''}`,
