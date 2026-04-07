@@ -101,6 +101,11 @@ const ENTRY_CONFIDENCE_THRESHOLD = 70;
 const sentimentBotCache = {};
 const SENTIMENT_BOT_CACHE_TTL = 15 * 60 * 1000; // 15 minutes
 
+// ─── SUPPORT & RESISTANCE CACHE ──────────────────────────────────────────────
+// Keyed as "sr:SYMBOL" → { ts, result: { resistance, support } }
+const srBotCache = {};
+const SR_BOT_CACHE_TTL = 4 * 60 * 60 * 1000; // 4 hours
+
 // ─── MARKET REGIME CACHE ─────────────────────────────────────────────────────
 // { ts, result: { adx, plusDI, minusDI, vix, regime } }
 let regimeBotCache = null;
@@ -421,6 +426,91 @@ function calcADX14(bars, period = 14) {
     plusDI:  sTR === 0 ? 0 : parseFloat((100 * sPDM / sTR).toFixed(2)),
     minusDI: sTR === 0 ? 0 : parseFloat((100 * sMDM / sTR).toFixed(2)),
   };
+}
+
+// ─── SUPPORT & RESISTANCE ────────────────────────────────────────────────────
+
+function clusterPivotsBOT(prices, thresholdPct = 0.005) {
+  if (!prices.length) return [];
+  prices.sort((a, b) => a - b);
+  const clusters = [];
+  for (const p of prices) {
+    const hit = clusters.find(c => Math.abs(c.avg - p) / c.avg <= thresholdPct);
+    if (hit) { hit.sum += p; hit.n++; hit.avg = hit.sum / hit.n; }
+    else      clusters.push({ avg: p, sum: p, n: 1 });
+  }
+  return clusters.map(c => parseFloat(c.avg.toFixed(4)));
+}
+
+function touchCountBOT(level, bars, thresholdPct = 0.003) {
+  return bars.filter(b =>
+    Math.abs(b.h - level) / level <= thresholdPct ||
+    Math.abs(b.l - level) / level <= thresholdPct ||
+    Math.abs(b.c - level) / level <= thresholdPct
+  ).length;
+}
+
+/**
+ * Fetches 60 daily bars for `symbol`, detects pivot highs/lows (±2 bars),
+ * clusters within 0.5%, counts touches within 0.3%.
+ * Returns { resistance: [{price, strength, touchCount}], support: [...] } or null.
+ * Cached per symbol for 4 hours.
+ */
+async function getSymbolSR(symbol) {
+  const cacheKey = `sr:${symbol}`;
+  const cached = srBotCache[cacheKey];
+  if (cached && (Date.now() - cached.ts) < SR_BOT_CACHE_TTL) {
+    console.log(`[bot] S/R cache hit for ${symbol}`);
+    return cached.result;
+  }
+
+  const apiKey = process.env.POLYGON_API_KEY;
+  if (!apiKey) return null;
+
+  const today    = toETDate();
+  const fromDate = toETDate(new Date(Date.now() - 90 * 24 * 3600 * 1000));
+  const url = `https://api.polygon.io/v2/aggs/ticker/${symbol}/range/1/day/${fromDate}/${today}?adjusted=true&sort=asc&limit=60&apiKey=${apiKey}`;
+
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 10000);
+    let resp;
+    try { resp = await fetch(url, { signal: ctrl.signal }); }
+    finally { clearTimeout(timer); }
+
+    if (!resp.ok) { console.warn(`[bot] S/R fetch HTTP ${resp.status} for ${symbol}`); return null; }
+
+    const data = await resp.json();
+    const bars = data?.results;
+    if (!Array.isArray(bars) || bars.length < 10) return null;
+
+    const pivotHighs = [], pivotLows = [];
+    for (let i = 2; i < bars.length - 2; i++) {
+      const b = bars[i];
+      if (b.h > bars[i-1].h && b.h > bars[i-2].h && b.h > bars[i+1].h && b.h > bars[i+2].h)
+        pivotHighs.push(b.h);
+      if (b.l < bars[i-1].l && b.l < bars[i-2].l && b.l < bars[i+1].l && b.l < bars[i+2].l)
+        pivotLows.push(b.l);
+    }
+
+    const resistance = clusterPivotsBOT(pivotHighs).map(price => {
+      const tc = touchCountBOT(price, bars);
+      return { price: parseFloat(price.toFixed(2)), strength: tc, touchCount: tc };
+    }).sort((a, b) => b.strength - a.strength).slice(0, 3);
+
+    const support = clusterPivotsBOT(pivotLows).map(price => {
+      const tc = touchCountBOT(price, bars);
+      return { price: parseFloat(price.toFixed(2)), strength: tc, touchCount: tc };
+    }).sort((a, b) => a.strength - b.strength).slice(0, 3);
+
+    const result = { resistance, support };
+    srBotCache[cacheKey] = { ts: Date.now(), result };
+    console.log(`[bot] S/R ${symbol}: ${resistance.length} resistance, ${support.length} support levels`);
+    return result;
+  } catch (err) {
+    console.warn(`[bot] S/R fetch error for ${symbol}:`, err.message);
+    return null;
+  }
 }
 
 // ─── MULTI-TIMEFRAME TREND FUNCTIONS ─────────────────────────────────────────
@@ -1667,12 +1757,55 @@ module.exports = async function handler(req, res) {
   const lastPrice  = safeNum(body.lastPrice ?? body.price ?? indicators?.price);
   let   limitPrice = safeNum(body.limitPrice);
   let   autoSet    = false;
+  let   srLevelUsed = null; // set when S/R anchors the limit price
 
   if (limitPrice != null) {
+    // Caller-provided explicit limit — honour it, no S/R override
     limitPrice = roundLimitPrice(limitPrice);
   } else if (lastPrice != null) {
-    limitPrice = calcLimitPrice(lastPrice, direction);
-    autoSet = true;
+    // Try S/R-anchored limit first (only when auto-calculating)
+    try {
+      const sr = await getSymbolSR(symbol);
+      if (sr) {
+        if (direction === 'LONG' && sr.support.length) {
+          // Find nearest support within 2% below current price
+          const nearest = sr.support
+            .filter(s => s.price < lastPrice && (lastPrice - s.price) / lastPrice <= 0.02)
+            .sort((a, b) => b.price - a.price)[0]; // highest (closest) support first
+          if (nearest) {
+            const srPrice = roundLimitPrice(nearest.price * 1.001); // +0.1% above support
+            if (srPrice > 0 && isFinite(srPrice)) {
+              limitPrice  = srPrice;
+              srLevelUsed = nearest.price;
+              autoSet     = true;
+              console.log(`[bot] SR_ORDER: ${symbol} limit set at ${limitPrice} based on support level at ${srLevelUsed}`);
+            }
+          }
+        } else if (direction === 'SHORT' && sr.resistance.length) {
+          // Find nearest resistance within 2% above current price
+          const nearest = sr.resistance
+            .filter(r => r.price > lastPrice && (r.price - lastPrice) / lastPrice <= 0.02)
+            .sort((a, b) => a.price - b.price)[0]; // lowest (closest) resistance first
+          if (nearest) {
+            const srPrice = roundLimitPrice(nearest.price * 0.999); // -0.1% below resistance
+            if (srPrice > 0 && isFinite(srPrice)) {
+              limitPrice  = srPrice;
+              srLevelUsed = nearest.price;
+              autoSet     = true;
+              console.log(`[bot] SR_ORDER: ${symbol} limit set at ${limitPrice} based on resistance level at ${srLevelUsed}`);
+            }
+          }
+        }
+      }
+    } catch (srErr) {
+      console.warn(`[bot] S/R limit lookup error for ${symbol}:`, srErr.message);
+    }
+
+    // Fallback: standard slippage-based limit
+    if (limitPrice == null) {
+      limitPrice = calcLimitPrice(lastPrice, direction);
+      autoSet    = true;
+    }
   } else {
     return reject('limitPrice or lastPrice required — market orders not permitted');
   }
@@ -1767,6 +1900,7 @@ module.exports = async function handler(req, res) {
     quantity,
     positionValue:  parseFloat(positionValue.toFixed(2)),
     autoLimitSet:   autoSet,
+    srAnchor:       srLevelUsed ?? undefined,
     leverage:       rec.leverage ?? 1,
     confidence:     rec.confidence ?? 0,
     reasoning:      rec.reasoning ?? '',
