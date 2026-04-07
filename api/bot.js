@@ -69,6 +69,11 @@ const VWAP_CACHE_TTL = 3 * 60 * 1000; // 3 minutes
 // Lunch penalty (-10) will drop a borderline signal (70) below this floor.
 const ENTRY_CONFIDENCE_THRESHOLD = 70;
 
+// ─── SENTIMENT CACHE (bot) ───────────────────────────────────────────────────
+// Keyed as "sent:SYMBOL" → { ts, result: { score, catalyst, summary } }
+const sentimentBotCache = {};
+const SENTIMENT_BOT_CACHE_TTL = 15 * 60 * 1000; // 15 minutes
+
 // ─── ATR CACHE ───────────────────────────────────────────────────────────────
 // Keyed as "atr:day:SYMBOL" or "atr:swing:SYMBOL" → { ts, atr }
 const atrCache = {};
@@ -578,6 +583,105 @@ async function calculateVWAP(symbol) {
   }
 }
 
+// ─── NEWS SENTIMENT SCORING ──────────────────────────────────────────────────
+
+/**
+ * Fetches the last 5 Polygon headlines for a symbol, then scores their trading
+ * sentiment via claude-sonnet-4-6 using the same prompt as news.js.
+ *
+ * Returns { score: -10..10, catalyst: boolean, summary: string } or null on
+ * any failure (caller proceeds without the sentiment filter in that case).
+ * Results are cached per symbol for 15 minutes.
+ */
+async function getSymbolSentiment(symbol) {
+  const cacheKey = `sent:${symbol}`;
+  const cached = sentimentBotCache[cacheKey];
+  if (cached && (Date.now() - cached.ts) < SENTIMENT_BOT_CACHE_TTL) {
+    console.log(`[bot] SENTIMENT cache hit for ${symbol}: score=${cached.result.score}`);
+    return cached.result;
+  }
+
+  const polygonKey   = process.env.POLYGON_API_KEY;
+  const anthropicKey = process.env.ANTHROPIC_API_KEY;
+  if (!polygonKey || !anthropicKey) return null;
+
+  try {
+    // Step 1: fetch up to 5 recent headlines from Polygon
+    const newsCtrl = new AbortController();
+    const newsTimer = setTimeout(() => newsCtrl.abort(), 8000);
+    let newsResp;
+    try {
+      newsResp = await fetch(
+        `https://api.polygon.io/v2/reference/news?ticker=${symbol}&limit=5&order=desc&sort=published_utc&apiKey=${polygonKey}`,
+        { signal: newsCtrl.signal }
+      );
+    } finally {
+      clearTimeout(newsTimer);
+    }
+
+    if (!newsResp.ok) {
+      console.warn(`[bot] SENTIMENT news fetch HTTP ${newsResp.status} for ${symbol}`);
+      return null;
+    }
+
+    const newsData  = await newsResp.json();
+    const headlines = (newsData.results || []).slice(0, 5).map(n => n.title).filter(Boolean);
+    if (headlines.length === 0) return null;
+
+    // Step 2: score via Anthropic
+    const headlineStr = headlines.join(' | ');
+    const prompt = `You are a trading signal assistant. Rate the overall trading sentiment of these headlines for the stock. Return ONLY valid JSON, no explanation: { "score": <integer from -10 to 10>, "catalyst": <true or false>, "summary": <5 words max> }. Headlines: ${headlineStr}`;
+
+    const aiCtrl  = new AbortController();
+    const aiTimer = setTimeout(() => aiCtrl.abort(), 15000);
+    let aiResp;
+    try {
+      aiResp = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': anthropicKey,
+          'anthropic-version': '2023-06-01',
+        },
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-6',
+          max_tokens: 100,
+          messages: [{ role: 'user', content: prompt }],
+        }),
+        signal: aiCtrl.signal,
+      });
+    } finally {
+      clearTimeout(aiTimer);
+    }
+
+    if (!aiResp.ok) {
+      console.warn(`[bot] SENTIMENT Anthropic HTTP ${aiResp.status} for ${symbol}`);
+      return null;
+    }
+
+    const aiData = await aiResp.json();
+    const text   = aiData.content?.[0]?.text ?? '';
+
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) return null;
+
+    const parsed   = JSON.parse(jsonMatch[0]);
+    const scoreRaw = parseInt(parsed.score ?? 0, 10);
+    const result   = {
+      score:    isNaN(scoreRaw) ? 0 : Math.max(-10, Math.min(10, scoreRaw)),
+      catalyst: parsed.catalyst === true,
+      summary:  String(parsed.summary ?? 'neutral').slice(0, 60),
+    };
+
+    sentimentBotCache[cacheKey] = { ts: Date.now(), result };
+    console.log(`[bot] SENTIMENT ${symbol}: score=${result.score} catalyst=${result.catalyst} summary="${result.summary}"`);
+    return result;
+  } catch (err) {
+    console.warn(`[bot] SENTIMENT error for ${symbol}:`, err.message);
+    return null;
+  }
+}
+
 // ─── ATR-BASED DYNAMIC STOP ──────────────────────────────────────────────────
 
 /**
@@ -1026,6 +1130,31 @@ module.exports = async function handler(req, res) {
       rec.confidence = Math.min(100, Math.max(0, adjConfidence));
       console.log(`[bot] SESSION_FILTER: ${session} zone ${sessionAdj > 0 ? '+' : ''}${sessionAdj} confidence → ${rec.confidence} for ${symbol}`);
     }
+  }
+
+  // 7c. NEWS SENTIMENT GATE (day and swing trades)
+  try {
+    const sentiment = await getSymbolSentiment(symbol);
+    if (sentiment) {
+      if (sentiment.score <= -5) {
+        console.log(`[bot] SENTIMENT_BLOCK: ${symbol} score=${sentiment.score}`);
+        return reject(`SENTIMENT_BLOCK: strongly negative news sentiment (score ${sentiment.score}/10) — "${sentiment.summary}"`);
+      }
+
+      let sentimentAdj = 0;
+      if      (sentiment.score >= 7)  sentimentAdj += 15;
+      else if (sentiment.score >= 4)  sentimentAdj += 8;
+      else if (sentiment.score <= -2) sentimentAdj -= 8;
+      if (sentiment.catalyst)         sentimentAdj += 10;
+
+      if (sentimentAdj !== 0) {
+        const prev = rec.confidence ?? 0;
+        rec.confidence = Math.min(100, Math.max(0, prev + sentimentAdj));
+        console.log(`[bot] SENTIMENT: ${symbol} score=${sentiment.score} catalyst=${sentiment.catalyst} adj=${sentimentAdj > 0 ? '+' : ''}${sentimentAdj} confidence ${prev}→${rec.confidence}`);
+      }
+    }
+  } catch (sentErr) {
+    console.warn(`[bot] Sentiment gate error for ${symbol}:`, sentErr.message, '— proceeding without filter');
   }
 
   // 8. MULTI-TIMEFRAME CONFLUENCE
