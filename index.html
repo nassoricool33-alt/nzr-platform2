@@ -742,6 +742,7 @@ footer{border-top:1px solid var(--border);padding:32px 0;margin-top:80px}
         <button class="nav-tab" data-page="portfolio">Portfolio</button>
         <button class="nav-tab" data-page="journal">Journal</button>
         <button class="nav-tab" data-page="leaderboard">Leaderboard</button>
+        <button class="nav-tab" data-page="bot">Bot</button>
       </div>
       <!-- Intelligence group -->
       <div class="nav-group">
@@ -1150,6 +1151,125 @@ footer{border-top:1px solid var(--border);padding:32px 0;margin-top:80px}
     <div class="auth-prompt-desc">Save and track your favorite tickers across devices. Sign in to sync your watchlist, set price alerts, and get personalized AI signals.</div>
     <button class="auth-prompt-btn" onclick="openAuthModal()">Sign in to continue</button>
   </div>
+</div>
+</div>
+
+<!-- ══════════════════════════════════ BOT ══ -->
+<div id="page-bot" class="page">
+<div class="wrapper" style="padding-top:40px;padding-bottom:80px">
+
+  <div class="section-header sec-fade">
+    <div class="section-eyebrow">NZR Bot</div>
+    <div class="section-title">Performance <span>Attribution</span></div>
+  </div>
+
+  <!-- Controls row -->
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:24px" class="sec-fade" style="animation-delay:80ms">
+    <div style="font-family:var(--font-mono);font-size:11px;color:var(--text3)">
+      P&amp;L breakdown by strategy and signal from the last 30 days of NZR-tagged Alpaca orders.
+    </div>
+    <button class="bt-export-btn" onclick="loadAttribution()" style="white-space:nowrap">↻ Refresh</button>
+  </div>
+
+  <!-- Loading / error state -->
+  <div id="attr-placeholder" style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:200px;color:var(--text3);font-family:var(--font-mono);font-size:12px;gap:10px">
+    <div style="font-size:36px;opacity:.3">⚙</div>
+    <div>Open this tab to load attribution data</div>
+  </div>
+
+  <!-- Attribution panels (hidden until data loads) -->
+  <div id="attr-results" style="display:none">
+
+    <!-- Summary bar -->
+    <div id="attr-summary" style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:28px"></div>
+
+    <!-- Two-column grid: strategy + signal -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:20px">
+      <!-- By Strategy -->
+      <div class="stat-card" style="padding:0;overflow:hidden">
+        <div style="padding:16px 20px 12px;border-bottom:1px solid var(--border)">
+          <div style="font-family:var(--font-mono);font-size:10px;color:var(--text3);letter-spacing:1px;text-transform:uppercase">By Strategy</div>
+        </div>
+        <div style="overflow-x:auto">
+          <table style="width:100%;border-collapse:collapse;font-family:var(--font-mono);font-size:11px">
+            <thead>
+              <tr style="border-bottom:1px solid var(--border)">
+                <th style="text-align:left;padding:8px 16px;color:var(--text3);font-weight:500;font-size:10px">Strategy</th>
+                <th style="text-align:right;padding:8px 10px;color:var(--text3);font-weight:500;font-size:10px">Trades</th>
+                <th style="text-align:right;padding:8px 10px;color:var(--text3);font-weight:500;font-size:10px">Win%</th>
+                <th style="text-align:right;padding:8px 16px;color:var(--text3);font-weight:500;font-size:10px">Avg P&amp;L</th>
+                <th style="text-align:right;padding:8px 16px;color:var(--text3);font-weight:500;font-size:10px">Total P&amp;L</th>
+              </tr>
+            </thead>
+            <tbody id="attr-strategy-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+      <!-- By Signal -->
+      <div class="stat-card" style="padding:0;overflow:hidden">
+        <div style="padding:16px 20px 12px;border-bottom:1px solid var(--border)">
+          <div style="font-family:var(--font-mono);font-size:10px;color:var(--text3);letter-spacing:1px;text-transform:uppercase">By Signal Type</div>
+        </div>
+        <div style="overflow-x:auto">
+          <table style="width:100%;border-collapse:collapse;font-family:var(--font-mono);font-size:11px">
+            <thead>
+              <tr style="border-bottom:1px solid var(--border)">
+                <th style="text-align:left;padding:8px 16px;color:var(--text3);font-weight:500;font-size:10px">Signal</th>
+                <th style="text-align:right;padding:8px 10px;color:var(--text3);font-weight:500;font-size:10px">Trades</th>
+                <th style="text-align:right;padding:8px 10px;color:var(--text3);font-weight:500;font-size:10px">Win%</th>
+                <th style="text-align:right;padding:8px 16px;color:var(--text3);font-weight:500;font-size:10px">Avg P&amp;L</th>
+                <th style="text-align:right;padding:8px 16px;color:var(--text3);font-weight:500;font-size:10px">Total P&amp;L</th>
+              </tr>
+            </thead>
+            <tbody id="attr-signal-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- Two-column grid: time of day + day of week -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px">
+      <!-- By Time of Day -->
+      <div class="stat-card" style="padding:0;overflow:hidden">
+        <div style="padding:16px 20px 12px;border-bottom:1px solid var(--border)">
+          <div style="font-family:var(--font-mono);font-size:10px;color:var(--text3);letter-spacing:1px;text-transform:uppercase">By Time of Day (ET)</div>
+        </div>
+        <div style="overflow-x:auto">
+          <table style="width:100%;border-collapse:collapse;font-family:var(--font-mono);font-size:11px">
+            <thead>
+              <tr style="border-bottom:1px solid var(--border)">
+                <th style="text-align:left;padding:8px 16px;color:var(--text3);font-weight:500;font-size:10px">Session</th>
+                <th style="text-align:right;padding:8px 10px;color:var(--text3);font-weight:500;font-size:10px">Trades</th>
+                <th style="text-align:right;padding:8px 10px;color:var(--text3);font-weight:500;font-size:10px">Win%</th>
+                <th style="text-align:right;padding:8px 16px;color:var(--text3);font-weight:500;font-size:10px">Total P&amp;L</th>
+              </tr>
+            </thead>
+            <tbody id="attr-tod-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+      <!-- By Day of Week -->
+      <div class="stat-card" style="padding:0;overflow:hidden">
+        <div style="padding:16px 20px 12px;border-bottom:1px solid var(--border)">
+          <div style="font-family:var(--font-mono);font-size:10px;color:var(--text3);letter-spacing:1px;text-transform:uppercase">By Day of Week</div>
+        </div>
+        <div style="overflow-x:auto">
+          <table style="width:100%;border-collapse:collapse;font-family:var(--font-mono);font-size:11px">
+            <thead>
+              <tr style="border-bottom:1px solid var(--border)">
+                <th style="text-align:left;padding:8px 16px;color:var(--text3);font-weight:500;font-size:10px">Day</th>
+                <th style="text-align:right;padding:8px 10px;color:var(--text3);font-weight:500;font-size:10px">Trades</th>
+                <th style="text-align:right;padding:8px 10px;color:var(--text3);font-weight:500;font-size:10px">Win%</th>
+                <th style="text-align:right;padding:8px 16px;color:var(--text3);font-weight:500;font-size:10px">Total P&amp;L</th>
+              </tr>
+            </thead>
+            <tbody id="attr-dow-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /attr-results -->
 </div>
 </div>
 
@@ -1753,6 +1873,7 @@ function showPage(id){
     pharmaLoadScan();
     pharmaLoadShorts();
   }
+  if(id==='bot'&&!_attrLoaded){ loadAttribution(); }
 }
 document.querySelectorAll('.nav-tab').forEach(t=>{
   t.addEventListener('click',()=>showPage(t.dataset.page));
@@ -3696,6 +3817,133 @@ function btPreset(symbol, startDate, endDate, mode, dayStrat, swingStrat) {
   if (swgEl  && swingStrat) swgEl.value = swingStrat;
   btSetMode(mode || 'swing');
   runBacktest();
+}
+
+/* ── BOT PERFORMANCE ATTRIBUTION ────────────────── */
+
+let _attrLoaded = false;
+
+async function loadAttribution() {
+  const placeholder = document.getElementById('attr-placeholder');
+  const results     = document.getElementById('attr-results');
+  if (!placeholder || !results) return;
+
+  placeholder.style.display = 'flex';
+  placeholder.innerHTML = `<div class="loading-ring"></div>
+    <div style="font-family:var(--font-mono);font-size:12px;margin-top:10px">Loading attribution data…</div>`;
+  results.style.display = 'none';
+
+  try {
+    const r    = await fetch('/api/alpaca?action=attribution');
+    const data = await r.json();
+
+    if (!r.ok || data.error) {
+      placeholder.innerHTML = `<div style="font-size:28px;opacity:.35">⚠</div>
+        <div style="color:var(--red);font-family:var(--font-mono);font-size:12px;max-width:360px;text-align:center;line-height:1.6">
+          ${data.error || 'Failed to load attribution'}<br>
+          <span style="color:var(--text3);font-size:10px">Ensure Alpaca keys are configured and bot has been trading.</span>
+        </div>`;
+      return;
+    }
+
+    placeholder.style.display = 'none';
+    results.style.display     = 'block';
+    _attrLoaded               = true;
+
+    attrRenderSummary(data);
+    attrRenderTable('attr-strategy-tbody', data.byStrategy,  true);
+    attrRenderTable('attr-signal-tbody',   data.bySignal,    true);
+    attrRenderSimpleTable('attr-tod-tbody', data.byTimeOfDay);
+    attrRenderSimpleTable('attr-dow-tbody', data.byDayOfWeek);
+
+  } catch (err) {
+    placeholder.innerHTML = `<div style="color:var(--red);font-family:var(--font-mono);font-size:12px">⚠ ${err.message}</div>`;
+  }
+}
+
+function attrFmt$(v) {
+  if (v == null || isNaN(v)) return '—';
+  return (v >= 0 ? '+$' : '-$') + Math.abs(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function attrRenderSummary(data) {
+  const el = document.getElementById('attr-summary');
+  if (!el) return;
+  const wrColor = (data.overallWinRate ?? 0) >= 55 ? 'var(--green)' : (data.overallWinRate ?? 0) >= 45 ? 'var(--gold)' : 'var(--red)';
+  el.innerHTML = `
+    <div class="bt-stat" style="flex:1;min-width:140px">
+      <div class="bt-stat-lbl">Total Trades</div>
+      <div class="bt-stat-val">${data.totalTrades ?? 0}</div>
+      <div class="bt-stat-sub">Last 30 days · NZR-tagged</div>
+    </div>
+    <div class="bt-stat" style="flex:1;min-width:140px">
+      <div class="bt-stat-lbl">Overall Win Rate</div>
+      <div class="bt-stat-val" style="color:${wrColor}">${data.overallWinRate ?? 0}%</div>
+      <div class="bt-stat-sub">Across all strategies</div>
+    </div>
+    <div class="bt-stat" style="flex:1;min-width:140px">
+      <div class="bt-stat-lbl">Strategies Tracked</div>
+      <div class="bt-stat-val">${(data.byStrategy || []).length}</div>
+      <div class="bt-stat-sub">${(data.bySignal || []).length} signal types</div>
+    </div>`;
+}
+
+/** Renders strategy/signal tables with best (green) / worst (red) row highlights. */
+function attrRenderTable(tbodyId, rows, highlight) {
+  const tbody = document.getElementById(tbodyId);
+  if (!tbody) return;
+  if (!rows || !rows.length) {
+    tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;padding:20px;color:var(--text3);font-family:var(--font-mono);font-size:11px">No data — bot must have placed NZR-tagged orders in the last 30 days</td></tr>`;
+    return;
+  }
+
+  // Identify best / worst by totalPnl (already sorted desc)
+  const bestIdx  = 0;
+  const worstIdx = rows.length - 1;
+
+  tbody.innerHTML = rows.map((row, i) => {
+    const isBest  = highlight && i === bestIdx  && rows.length > 1 && row.totalPnl > 0;
+    const isWorst = highlight && i === worstIdx && rows.length > 1 && row.totalPnl < 0;
+    const rowBg   = isBest  ? 'rgba(0,200,100,.07)'
+                  : isWorst ? 'rgba(220,60,60,.07)'
+                  : '';
+    const labelStyle = isBest  ? 'color:var(--green);font-weight:700'
+                     : isWorst ? 'color:var(--red);font-weight:700'
+                     : 'color:var(--text)';
+    const wrColor  = row.winRate >= 55 ? 'var(--green)' : row.winRate >= 45 ? 'var(--gold)' : 'var(--red)';
+    const pnlColor = row.avgPnl >= 0 ? 'var(--green)' : 'var(--red)';
+    const totColor = row.totalPnl >= 0 ? 'var(--green)' : 'var(--red)';
+    const badge    = isBest ? ' <span style="font-size:9px;color:var(--green);letter-spacing:.5px">BEST</span>'
+                   : isWorst ? ' <span style="font-size:9px;color:var(--red);letter-spacing:.5px">WORST</span>'
+                   : '';
+    return `<tr style="border-bottom:1px solid var(--border);background:${rowBg}">
+      <td style="padding:9px 16px;${labelStyle}">${row.label}${badge}</td>
+      <td style="text-align:right;padding:9px 10px;color:var(--text2)">${row.trades}<span style="color:var(--text3);font-size:9px"> (${row.wins}W/${row.losses}L)</span></td>
+      <td style="text-align:right;padding:9px 10px;color:${wrColor};font-weight:600">${row.winRate}%</td>
+      <td style="text-align:right;padding:9px 16px;color:${pnlColor}">${attrFmt$(row.avgPnl)}</td>
+      <td style="text-align:right;padding:9px 16px;color:${totColor};font-weight:700">${attrFmt$(row.totalPnl)}</td>
+    </tr>`;
+  }).join('');
+}
+
+/** Renders time-of-day / day-of-week tables (no avg P&L column). */
+function attrRenderSimpleTable(tbodyId, rows) {
+  const tbody = document.getElementById(tbodyId);
+  if (!tbody) return;
+  if (!rows || !rows.length) {
+    tbody.innerHTML = `<tr><td colspan="4" style="text-align:center;padding:20px;color:var(--text3);font-family:var(--font-mono);font-size:11px">No data</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = rows.map(row => {
+    const wrColor  = row.winRate >= 55 ? 'var(--green)' : row.winRate >= 45 ? 'var(--gold)' : 'var(--red)';
+    const totColor = row.totalPnl >= 0 ? 'var(--green)' : 'var(--red)';
+    return `<tr style="border-bottom:1px solid var(--border)">
+      <td style="padding:9px 16px;color:var(--text)">${row.label}</td>
+      <td style="text-align:right;padding:9px 10px;color:var(--text2)">${row.trades}</td>
+      <td style="text-align:right;padding:9px 10px;color:${wrColor};font-weight:600">${row.winRate}%</td>
+      <td style="text-align:right;padding:9px 16px;color:${totColor};font-weight:700">${attrFmt$(row.totalPnl)}</td>
+    </tr>`;
+  }).join('');
 }
 
 /* ── WEBSOCKET REAL-TIME PRICE STREAMING ─────────── */

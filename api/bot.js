@@ -1699,7 +1699,7 @@ module.exports = async function handler(req, res) {
       // Return all positions tagged as day trades for closing
       const toClose = positions.filter(p => {
         const cid = p.client_order_id || '';
-        return cid.startsWith('NZR-day-') || p.mode === 'day';
+        return cid.startsWith('NZR-DAY-') || cid.startsWith('NZR-day-') || p.mode === 'day';
       });
       console.log(`[bot] Day auto-close: ${toClose.length} position(s) at 3:45 PM ET`);
       return res.status(200).json({ closePositions: toClose, reason: 'EOD_AUTO_CLOSE', message: `Closing ${toClose.length} day trade position(s) at 3:45 PM ET` });
@@ -2270,7 +2270,37 @@ module.exports = async function handler(req, res) {
     console.log(`[bot] ATR unavailable for ${symbol} — using fixed ${(bucket.stopLossPct * 100).toFixed(1)}% stop`);
   }
 
-  const clientOrderId = `NZR-${mode}-${symbol}-${ts}`;
+  // ── Enriched order tag: NZR-{MODE}-{STRATEGY}-{SIGNAL}-{SYMBOL}-{TIMESTAMP} ──
+  // STRATEGY: which indicator had the highest single positive contribution
+  const bd = composite.breakdown;
+  const strategyTag = (bd.macdCross > 0)     ? 'MACD'
+                    : (bd.emaAlignment > 0)   ? 'EMA60200'
+                    : (bd.rsiNotExtreme > 0)  ? 'RSI'
+                    : 'COMBINED';
+
+  // SIGNAL: highest-priority contextual signal (gap > options > RS > VWAP > trend)
+  const signalTag = (() => {
+    if (gapTag) {
+      // Normalise gap tag to a short clean token (no + suffix)
+      const base = gapTag.split('+')[0];
+      if (base === 'STRONG_GAP_UP') return 'GAP_UP';
+      if (base === 'GAP_UP_PLAY')   return 'GAP_UP';
+      if (base === 'GAP_DOWN_SHORT') return 'GAP_DN';
+      if (base === 'GAP_FADE')      return 'GAP_FADE';
+      return base.slice(0, 8);
+    }
+    if (flowSmartMoney || (bd.optionsFlowScore != null && bd.optionsFlowScore >= 8))
+      return direction === 'LONG' ? 'OPT_BULL' : 'OPT_BEAR';
+    if (bd.relativeStrength != null && bd.relativeStrength >= 10) return 'RS_STR';
+    if (bd.aboveVwap != null && bd.aboveVwap > 0)
+      return direction === 'LONG' ? 'VWAP_L' : 'VWAP_S';
+    if (bd.dailyTrendAligned != null && bd.dailyTrendAligned > 0) return 'TREND';
+    return 'BASE';
+  })();
+
+  // Timestamp in seconds (10 digits) to keep total length within Alpaca's 48-char limit
+  const tsSeconds = Math.floor(ts / 1000);
+  const clientOrderId = `NZR-${mode.toUpperCase()}-${strategyTag}-${signalTag}-${symbol}-${tsSeconds}`.slice(0, 48);
 
   console.log(`[bot] ${mode.toUpperCase()} order approved: ${direction} ${quantity}x ${symbol} @ $${limitPrice} | stop $${stopLoss} | T1 $${target}${target2 ? ` | T2 $${target2}` : ''}`);
 

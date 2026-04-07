@@ -158,6 +158,130 @@ module.exports = async function handler(req, res) {
       return res.status(r.status).json({ connected: false, error: 'Alpaca auth failed' });
     }
 
+    // ── GET P&L attribution ─────────────────────────────────────────────────
+    if (action === 'attribution' && req.method === 'GET') {
+      // Fetch all closed orders from the last 30 days
+      const after30 = new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString();
+      const r = await alpacaRequest({
+        ...ctx, method: 'GET',
+        path: `/v2/orders?status=closed&limit=500&after=${encodeURIComponent(after30)}`,
+      });
+      if (r.status !== 200) {
+        return res.status(r.status).json({ error: 'Failed to fetch orders from Alpaca', detail: r.body });
+      }
+
+      const orders = Array.isArray(r.body) ? r.body : [];
+      // Keep only filled NZR-tagged orders
+      const nzr = orders.filter(o =>
+        o.client_order_id?.startsWith('NZR-') && parseFloat(o.filled_qty || 0) > 0
+      );
+
+      // Parse tag: NZR-{MODE}-{STRATEGY}-{SIGNAL}-{SYMBOL}-{TS}  (new, 6 parts)
+      //            NZR-{mode}-{symbol}-{ts}                       (old, 4 parts)
+      function parseTag(cid) {
+        const p = cid.split('-');
+        if (p.length >= 6) {
+          return { mode: p[1], strategy: p[2], signal: p[3] };
+        }
+        // Old format: derive mode from part[1], strategy/signal unknown
+        return { mode: (p[1] || 'UNKNOWN').toUpperCase(), strategy: 'UNKNOWN', signal: 'UNKNOWN' };
+      }
+
+      // ET minute-of-day helper (DST-aware)
+      function etMinOfDay(isoStr) {
+        if (!isoStr) return -1;
+        const d = new Date(isoStr);
+        const yr = d.getUTCFullYear();
+        const mar1 = new Date(Date.UTC(yr, 2, 1));
+        const dstStart = new Date(Date.UTC(yr, 2, 8 + (7 - mar1.getUTCDay()) % 7, 7));
+        const nov1 = new Date(Date.UTC(yr, 10, 1));
+        const dstEnd   = new Date(Date.UTC(yr, 10, 1 + (7 - nov1.getUTCDay())  % 7, 6));
+        const offsetH  = (d >= dstStart && d < dstEnd) ? 4 : 5;
+        return ((d.getUTCHours() - offsetH + 24) % 24) * 60 + d.getUTCMinutes();
+      }
+
+      function sessionLabel(isoStr) {
+        const m = etMinOfDay(isoStr);
+        if (m >= 570 && m < 690) return 'Morning 9:30–11:30';   // 9:30–11:30
+        if (m >= 690 && m < 810) return 'Midday 11:30–1:30';    // 11:30–13:30
+        if (m >= 810 && m < 930) return 'Afternoon 1:30–3:30';  // 13:30–15:30
+        return 'Other';
+      }
+
+      const DOW = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+
+      // Match sell orders to prior buy orders by symbol to estimate P&L
+      const tagged = nzr.map(o => ({
+        ...parseTag(o.client_order_id),
+        orderId:     o.id,
+        symbol:      o.symbol,
+        side:        o.side,
+        qty:         parseFloat(o.filled_qty        || 0),
+        fillPrice:   parseFloat(o.filled_avg_price  || 0),
+        submittedAt: o.submitted_at || o.created_at || '',
+        filledAt:    o.filled_at    || o.submitted_at || '',
+      }));
+
+      const buys  = tagged.filter(o => o.side === 'buy'  && o.fillPrice > 0);
+      const sells = tagged.filter(o => o.side === 'sell' && o.fillPrice > 0);
+
+      const trades = [];
+      for (const sell of sells) {
+        // Find the most recent prior buy for the same symbol
+        const buy = buys
+          .filter(b => b.symbol === sell.symbol && b.submittedAt <= sell.submittedAt)
+          .sort((a, b) => b.submittedAt.localeCompare(a.submittedAt))[0];
+        if (!buy) continue;
+
+        const pnlPct    = ((sell.fillPrice - buy.fillPrice) / buy.fillPrice) * 100;
+        const pnl       = (sell.fillPrice - buy.fillPrice) * Math.min(sell.qty, buy.qty);
+        const filledAt  = sell.filledAt;
+        const mode      = sell.mode     !== 'UNKNOWN' ? sell.mode     : buy.mode;
+        const strategy  = sell.strategy !== 'UNKNOWN' ? sell.strategy : buy.strategy;
+        const signal    = sell.signal   !== 'UNKNOWN' ? sell.signal   : buy.signal;
+
+        trades.push({
+          symbol, pnl: parseFloat(pnl.toFixed(2)), pnlPct: parseFloat(pnlPct.toFixed(2)),
+          win: pnl > 0, mode, strategy, signal,
+          session: sessionLabel(filledAt),
+          dow:     DOW[new Date(filledAt).getUTCDay()],
+        });
+      }
+
+      // Group-by helper: aggregates trades by a string key field
+      function groupBy(field) {
+        const map = {};
+        for (const t of trades) {
+          const k = t[field] || 'UNKNOWN';
+          if (!map[k]) map[k] = [];
+          map[k].push(t);
+        }
+        return Object.entries(map).map(([label, ts]) => {
+          const wins     = ts.filter(t => t.win).length;
+          const totalPnl = ts.reduce((s, t) => s + t.pnl, 0);
+          return {
+            label,
+            trades:   ts.length,
+            wins,
+            losses:   ts.length - wins,
+            winRate:  parseFloat((wins / ts.length * 100).toFixed(1)),
+            totalPnl: parseFloat(totalPnl.toFixed(2)),
+            avgPnl:   parseFloat((totalPnl / ts.length).toFixed(2)),
+          };
+        }).sort((a, b) => b.totalPnl - a.totalPnl);
+      }
+
+      const totalWins = trades.filter(t => t.win).length;
+      return res.status(200).json({
+        totalTrades:    trades.length,
+        overallWinRate: trades.length ? parseFloat((totalWins / trades.length * 100).toFixed(1)) : 0,
+        byStrategy:     groupBy('strategy'),
+        bySignal:       groupBy('signal'),
+        byTimeOfDay:    groupBy('session'),
+        byDayOfWeek:    groupBy('dow'),
+      });
+    }
+
     return res.status(400).json({ error: `Unknown action: ${action}` });
 
   } catch (err) {
