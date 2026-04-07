@@ -111,6 +111,15 @@ const SR_BOT_CACHE_TTL = 4 * 60 * 60 * 1000; // 4 hours
 const optionsFlowBotCache = {};
 const OPTIONS_FLOW_BOT_CACHE_TTL = 10 * 60 * 1000; // 10 minutes
 
+// ─── GAP CACHE ────────────────────────────────────────────────────────────────
+// Keyed as "gap:SYMBOL" → { ts, gapPct, prevClose, preMarketPrice, gapType, dayOpen, currentPrice }
+const gapCache = {};
+const GAP_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+// Screener watchlist for gap scanning — derived from the sector map
+// (all symbols the bot is aware of and can trade)
+const SCREENER_WATCHLIST = Object.keys(sectorMap);
+
 // ─── MARKET REGIME CACHE ─────────────────────────────────────────────────────
 // { ts, result: { adx, plusDI, minusDI, vix, regime } }
 let regimeBotCache = null;
@@ -582,6 +591,137 @@ async function getSymbolOptionsFlow(symbol) {
     console.warn(`[bot] options flow error for ${symbol}:`, err.message);
     return null;
   }
+}
+
+// ─── PRE-MARKET GAP FUNCTIONS ────────────────────────────────────────────────
+
+/**
+ * Fetches the Polygon stock snapshot for `symbol` and computes the pre-market
+ * gap versus the previous day's close.
+ *
+ * prevClose      = snapshot.ticker.prevDay.c
+ * preMarketPrice = snapshot.ticker.day.o  (if market has opened)
+ *                  OR snapshot.ticker.min.c (last-minute close, covers pre-market)
+ * currentPrice   = snapshot.ticker.min.c  (used for gap-fade detection)
+ * dayOpen        = snapshot.ticker.day.o  (null before market open)
+ *
+ * gapPct  = (preMarketPrice − prevClose) / prevClose × 100
+ * gapType = "gap_up"   if gapPct >  1.5
+ *           "gap_down" if gapPct < −1.5
+ *           "flat"     otherwise
+ *
+ * Cached per symbol for 5 minutes.
+ */
+async function getPreMarketGap(symbol) {
+  const cacheKey = `gap:${symbol}`;
+  const cached = gapCache[cacheKey];
+  if (cached && (Date.now() - cached.ts) < GAP_CACHE_TTL) {
+    console.log(`[bot] gap cache hit for ${symbol}: gap=${cached.gapPct}% type=${cached.gapType}`);
+    return cached;
+  }
+
+  const apiKey = process.env.POLYGON_API_KEY;
+  if (!apiKey) return null;
+
+  const url = `https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers/${symbol}?apiKey=${apiKey}`;
+
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 10000);
+    let resp;
+    try { resp = await fetch(url, { signal: ctrl.signal }); }
+    finally { clearTimeout(timer); }
+
+    if (!resp.ok) {
+      console.warn(`[bot] gap fetch HTTP ${resp.status} for ${symbol}`);
+      return null;
+    }
+
+    const data = await resp.json();
+    const ticker = data?.ticker;
+    if (!ticker) return null;
+
+    const prevClose      = ticker.prevDay?.c  ?? null;
+    const dayOpen        = ticker.day?.o       ?? null;
+    const minClose       = ticker.min?.c       ?? null;
+    // Prefer actual open once market has opened; fall back to last-minute trade price
+    const preMarketPrice = dayOpen || minClose || null;
+    const currentPrice   = minClose;
+
+    if (!prevClose || !preMarketPrice) return null;
+
+    const gapPct = ((preMarketPrice - prevClose) / prevClose) * 100;
+    const gapType = gapPct > 1.5 ? 'gap_up' : gapPct < -1.5 ? 'gap_down' : 'flat';
+
+    const result = {
+      ts: Date.now(),
+      symbol,
+      gapPct:         parseFloat(gapPct.toFixed(2)),
+      prevClose,
+      preMarketPrice: parseFloat(preMarketPrice.toFixed(4)),
+      gapType,
+      dayOpen,
+      currentPrice,
+    };
+    gapCache[cacheKey] = result;
+    console.log(`[bot] GAP_SCAN: ${symbol} gap=${gapPct.toFixed(2)}% type=${gapType}`);
+    return result;
+  } catch (err) {
+    console.warn(`[bot] gap fetch error for ${symbol}:`, err.message);
+    return null;
+  }
+}
+
+/**
+ * Scans all SCREENER_WATCHLIST symbols for pre-market gaps.
+ * Intended for the 8:00–9:30 AM ET pre-market window, but also returns
+ * results during the first 2 hours of the session (9:30–11:30 AM ET).
+ *
+ * Returns { scannedAt, etMin, symbolCount, candidates: [{...gap, tag}] }
+ * where tag is one of: "STRONG_GAP_UP" | "GAP_UP_PLAY" | "GAP_DOWN_SHORT"
+ *
+ * Fetches in batches of 8 to stay well under Polygon's burst rate limits.
+ */
+async function runGapScan() {
+  const now   = new Date();
+  const etMin = getETMinuteOfDay(now);
+
+  // Available 8:00 AM ET through end of gap window (11:30 AM ET)
+  if (etMin < 8 * 60 || etMin >= 11 * 60 + 30) {
+    return {
+      error:    'Gap scan available 8:00–11:30 AM ET only',
+      etMin,
+      isPreMarket: etMin >= 8 * 60 && etMin < 9 * 60 + 30,
+    };
+  }
+
+  const isPreMarket = etMin < 9 * 60 + 30;
+  const BATCH = 8;
+  const allResults = [];
+
+  for (let i = 0; i < SCREENER_WATCHLIST.length; i += BATCH) {
+    const batch = SCREENER_WATCHLIST.slice(i, i + BATCH);
+    const settled = await Promise.allSettled(batch.map(sym => getPreMarketGap(sym)));
+    for (const r of settled) {
+      if (r.status === 'fulfilled' && r.value) allResults.push(r.value);
+    }
+  }
+
+  const candidates = allResults
+    .filter(r => r.gapType !== 'flat')
+    .map(r => {
+      const abs = Math.abs(r.gapPct);
+      let tag = null;
+      if      (r.gapType === 'gap_up'   && abs >= 4) tag = 'STRONG_GAP_UP';
+      else if (r.gapType === 'gap_up'   && abs >= 2) tag = 'GAP_UP_PLAY';
+      else if (r.gapType === 'gap_down' && abs >= 2) tag = 'GAP_DOWN_SHORT';
+      return tag ? { ...r, tag } : null;
+    })
+    .filter(Boolean)
+    .sort((a, b) => Math.abs(b.gapPct) - Math.abs(a.gapPct));
+
+  console.log(`[bot] GAP_SCAN complete: ${allResults.length} symbols scanned, ${candidates.length} candidates`);
+  return { scannedAt: Date.now(), etMin, isPreMarket, symbolCount: allResults.length, candidates };
 }
 
 // ─── MULTI-TIMEFRAME TREND FUNCTIONS ─────────────────────────────────────────
@@ -1557,6 +1697,18 @@ module.exports = async function handler(req, res) {
     return res.status(200).json({ symbol: sym, mode: md, stage, stopPrice, target1, target2, highestPrice, lowestPrice, moved, updatedAt });
   }
 
+  // ── GAP SCAN ─────────────────────────────────────────────────────────────────
+  if (action === 'gapscan') {
+    // Callable 8:00–11:30 AM ET. GET or POST.
+    try {
+      const scanResult = await runGapScan();
+      return res.status(200).json(scanResult);
+    } catch (err) {
+      console.error('[bot/gapscan]', err.message);
+      return res.status(500).json({ error: 'Gap scan failed', detail: err.message });
+    }
+  }
+
   // ── ORDER VALIDATION ─────────────────────────────────────────────────────────
   if (req.method !== 'POST') return res.status(405).json({ error: 'POST required' });
 
@@ -1794,6 +1946,54 @@ module.exports = async function handler(req, res) {
     }
   } catch (flowErr) {
     console.warn(`[bot] options flow gate error for ${symbol}:`, flowErr.message, '— proceeding without filter');
+  }
+
+  // 7f. PRE-MARKET GAP SCORING (day trades, 9:30–11:30 AM ET only)
+  // gap_up  > 4%  + LONG  → +20 confidence, tag "STRONG_GAP_UP"
+  // gap_up  > 2%  + LONG  → +15 confidence, tag "GAP_UP_PLAY"
+  // gap_down > 2% + SHORT → +15 confidence, tag "GAP_DOWN_SHORT"
+  // After 10:00 AM ET: gap_up stock trading below open → −10 (gap fade)
+  if (mode === 'day') {
+    const etMinNow = getETMinuteOfDay();
+    const inGapWindow = etMinNow >= 9 * 60 + 30 && etMinNow < 11 * 60 + 30;
+    if (inGapWindow) {
+      try {
+        const gap = await getPreMarketGap(symbol);
+        if (gap) {
+          const { gapPct, gapType, dayOpen, currentPrice } = gap;
+          const absGap = Math.abs(gapPct);
+          let gapAdj = 0;
+          let gapTag = null;
+
+          if (gapType === 'gap_up' && direction === 'LONG') {
+            if      (absGap >= 4) { gapAdj = +20; gapTag = 'STRONG_GAP_UP'; }
+            else if (absGap >= 2) { gapAdj = +15; gapTag = 'GAP_UP_PLAY'; }
+          } else if (gapType === 'gap_down' && direction === 'SHORT') {
+            if (absGap >= 2) { gapAdj = +15; gapTag = 'GAP_DOWN_SHORT'; }
+          }
+
+          // Gap fade filter: after 10:00 AM ET, if a gap_up stock is now
+          // trading BELOW its opening price, the gap is failing → penalise
+          const afterTen = etMinNow >= 10 * 60;
+          if (afterTen && gapType === 'gap_up' && dayOpen != null && currentPrice != null && currentPrice < dayOpen) {
+            gapAdj -= 10;
+            gapTag  = gapTag ? `${gapTag}+FADE` : 'GAP_FADE';
+            console.log(`[bot] GAP_FADE: ${symbol} gap_up fading — current $${currentPrice} < open $${dayOpen} → −10`);
+          }
+
+          if (gapAdj !== 0) {
+            const prev = rec.confidence ?? 0;
+            rec.confidence = Math.min(100, Math.max(0, prev + gapAdj));
+            if (gapTag) rec.note = (rec.note ? rec.note + ' | ' : '') + gapTag;
+            console.log(`[bot] GAP_SCORE: ${symbol} gap=${gapPct.toFixed ? gapPct.toFixed(2) : gapPct}% type=${gapType} tag=${gapTag} → adj=${gapAdj > 0 ? '+' : ''}${gapAdj} confidence ${prev}→${rec.confidence}`);
+          } else {
+            console.log(`[bot] GAP_SCORE: ${symbol} gap=${gapPct}% type=${gapType} → no adjustment`);
+          }
+        }
+      } catch (gapErr) {
+        console.warn(`[bot] gap scoring error for ${symbol}:`, gapErr.message, '— proceeding without filter');
+      }
+    }
   }
 
   // 8. MULTI-TIMEFRAME CONFLUENCE
