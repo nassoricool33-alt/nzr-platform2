@@ -65,6 +65,10 @@ const VOLUME_CACHE_TTL = 15 * 60 * 1000; // 15 minutes
 const vwapCache = {};
 const VWAP_CACHE_TTL = 3 * 60 * 1000; // 3 minutes
 
+// Minimum adjusted confidence required to enter a day trade.
+// Lunch penalty (-10) will drop a borderline signal (70) below this floor.
+const ENTRY_CONFIDENCE_THRESHOLD = 70;
+
 // ─── ATR CACHE ───────────────────────────────────────────────────────────────
 // Keyed as "atr:day:SYMBOL" or "atr:swing:SYMBOL" → { ts, atr }
 const atrCache = {};
@@ -139,6 +143,27 @@ function getMondayET(d = new Date()) {
 function getEasternTime(d = new Date()) {
   const offset = isNYDST(d) ? 4 : 5;
   return new Date(d.getTime() - offset * 3600 * 1000);
+}
+
+/**
+ * Returns the current US Eastern session quality zone for day trade filtering.
+ *
+ *  "avoid" — 9:30–10:00 AM ET  opening shakeout; block all new entries
+ *  "prime" — 10:00–11:30 AM ET best momentum window; +10 confidence bonus
+ *  "lunch" — 11:30 AM–1:30 PM ET low-volume chop; −10 confidence penalty
+ *  "prime" — 1:30–3:30 PM ET  afternoon trend window; +10 confidence bonus
+ *  "close" — 3:30–4:00 PM ET  closing volatility; block all new entries
+ *  "closed"— outside market hours
+ */
+function getSessionQuality() {
+  const min = getETMinuteOfDay();
+  if (min <  9 * 60 + 30) return 'closed';  // before open
+  if (min < 10 * 60)      return 'avoid';   // 9:30–10:00
+  if (min < 11 * 60 + 30) return 'prime';   // 10:00–11:30
+  if (min < 13 * 60 + 30) return 'lunch';   // 11:30–13:30
+  if (min < 15 * 60 + 30) return 'prime';   // 13:30–15:30
+  if (min < 16 * 60)      return 'close';   // 15:30–16:00
+  return 'closed';
 }
 
 /** Recalculate all allocation-derived limits whenever capital changes */
@@ -974,6 +999,33 @@ module.exports = async function handler(req, res) {
 
   if (!['LONG', 'SHORT'].includes(direction)) {
     return reject('Neutral signal — no clear trade direction');
+  }
+
+  // 7b. SESSION QUALITY FILTER (day trades only)
+  if (mode === 'day') {
+    const session = getSessionQuality();
+
+    if (session === 'avoid') {
+      console.log(`[bot] SESSION_FILTER: avoid zone, skipping ${symbol}`);
+      return reject('SESSION_FILTER: opening shakeout zone (9:30–10:00 AM ET) — no new day trade entries');
+    }
+
+    if (session === 'close') {
+      console.log(`[bot] SESSION_FILTER: close zone, skipping ${symbol}`);
+      return reject('SESSION_FILTER: closing volatility zone (3:30–4:00 PM ET) — no new day trade entries');
+    }
+
+    const sessionAdj = session === 'prime' ? 10 : session === 'lunch' ? -10 : 0;
+    if (sessionAdj !== 0) {
+      const rawConfidence    = rec.confidence ?? 0;
+      const adjConfidence    = rawConfidence + sessionAdj;
+      if (session === 'lunch' && adjConfidence < ENTRY_CONFIDENCE_THRESHOLD) {
+        console.log(`[bot] SESSION_FILTER: lunch zone dropped confidence ${rawConfidence} → ${adjConfidence} below threshold (${ENTRY_CONFIDENCE_THRESHOLD}), skipping ${symbol}`);
+        return reject(`SESSION_FILTER: lunch zone penalty — adjusted confidence ${adjConfidence} below entry threshold ${ENTRY_CONFIDENCE_THRESHOLD}`);
+      }
+      rec.confidence = Math.min(100, Math.max(0, adjConfidence));
+      console.log(`[bot] SESSION_FILTER: ${session} zone ${sessionAdj > 0 ? '+' : ''}${sessionAdj} confidence → ${rec.confidence} for ${symbol}`);
+    }
   }
 
   // 8. MULTI-TIMEFRAME CONFLUENCE
