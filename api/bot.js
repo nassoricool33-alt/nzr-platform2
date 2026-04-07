@@ -74,6 +74,11 @@ const ENTRY_CONFIDENCE_THRESHOLD = 70;
 const sentimentBotCache = {};
 const SENTIMENT_BOT_CACHE_TTL = 15 * 60 * 1000; // 15 minutes
 
+// ─── RELATIVE STRENGTH CACHE ─────────────────────────────────────────────────
+// Keyed as "rs:day:SYMBOL" or "rs:swing:SYMBOL" → { ts, rs, symbolChange, spyChange }
+const rsCache = {};
+const RS_CACHE_TTL = 10 * 60 * 1000; // 10 minutes
+
 // ─── ATR CACHE ───────────────────────────────────────────────────────────────
 // Keyed as "atr:day:SYMBOL" or "atr:swing:SYMBOL" → { ts, atr }
 const atrCache = {};
@@ -682,6 +687,87 @@ async function getSymbolSentiment(symbol) {
   }
 }
 
+// ─── RELATIVE STRENGTH ───────────────────────────────────────────────────────
+
+/**
+ * Fetches the last 6 bars for `symbol` and SPY in parallel at the
+ * mode-appropriate timeframe (15-min for day, daily for swing), then computes
+ * 5-bar percent change and the RS ratio.
+ *
+ * pctChange = (close[last] - close[last-5]) / close[last-5] * 100
+ * rs        = symbolPctChange / spyPctChange  (1.0 when SPY is flat)
+ *
+ * Returns { rs, symbolChange, spyChange } or null on failure.
+ * Cached per symbol+mode for 10 minutes.
+ */
+async function getRelativeStrength(symbol, mode) {
+  if (symbol === 'SPY') return null; // no self-comparison
+
+  const cacheKey = `rs:${mode}:${symbol}`;
+  const cached = rsCache[cacheKey];
+  if (cached && (Date.now() - cached.ts) < RS_CACHE_TTL) {
+    console.log(`[bot] RS cache hit for ${symbol} (${mode}): rs=${cached.rs}`);
+    return cached;
+  }
+
+  const apiKey = process.env.POLYGON_API_KEY;
+  if (!apiKey) return null;
+
+  const [multiplier, timespan, lookbackDays] = mode === 'day'
+    ? [15, 'minute', 5]
+    : [1,  'day',    15];
+
+  const toDate   = toETDate();
+  const fromDate = toETDate(new Date(Date.now() - lookbackDays * 24 * 3600 * 1000));
+  const buildUrl = (ticker) =>
+    `https://api.polygon.io/v2/aggs/ticker/${ticker}/range/${multiplier}/${timespan}/${fromDate}/${toDate}?adjusted=true&sort=asc&limit=6&apiKey=${apiKey}`;
+
+  try {
+    const fetchBar = async (ticker) => {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 10000);
+      try {
+        const resp = await fetch(buildUrl(ticker), { signal: controller.signal });
+        if (!resp.ok) return null;
+        return await resp.json();
+      } finally {
+        clearTimeout(timer);
+      }
+    };
+
+    const [symData, spyData] = await Promise.all([fetchBar(symbol), fetchBar('SPY')]);
+
+    const symBars = symData?.results;
+    const spyBars = spyData?.results;
+
+    if (!Array.isArray(symBars) || symBars.length < 6 ||
+        !Array.isArray(spyBars) || spyBars.length < 6) {
+      console.warn(`[bot] RS insufficient bars for ${symbol} (${symBars?.length ?? 0}) or SPY (${spyBars?.length ?? 0})`);
+      return null;
+    }
+
+    const pct = (bars) => {
+      const first = bars[bars.length - 6].c;
+      const last  = bars[bars.length - 1].c;
+      return ((last - first) / first) * 100;
+    };
+
+    const symbolChange = parseFloat(pct(symBars).toFixed(4));
+    const spyChange    = parseFloat(pct(spyBars).toFixed(4));
+    const rs           = spyChange === 0
+      ? 1.0
+      : parseFloat((symbolChange / spyChange).toFixed(4));
+
+    const result = { ts: Date.now(), rs, symbolChange, spyChange };
+    rsCache[cacheKey] = result;
+    console.log(`[bot] RS_FILTER: ${symbol} rs=${rs}, symbolChange=${symbolChange}%, spyChange=${spyChange}%`);
+    return result;
+  } catch (err) {
+    console.warn(`[bot] RS fetch error for ${symbol} (${mode}):`, err.message);
+    return null;
+  }
+}
+
 // ─── ATR-BASED DYNAMIC STOP ──────────────────────────────────────────────────
 
 /**
@@ -1155,6 +1241,34 @@ module.exports = async function handler(req, res) {
     }
   } catch (sentErr) {
     console.warn(`[bot] Sentiment gate error for ${symbol}:`, sentErr.message, '— proceeding without filter');
+  }
+
+  // 7d. RELATIVE STRENGTH FILTER (day and swing trades)
+  try {
+    const rsResult = await getRelativeStrength(symbol, mode);
+    if (rsResult) {
+      const { rs, symbolChange, spyChange } = rsResult;
+      let rsAdj = 0;
+
+      if (direction === 'LONG') {
+        if      (rs > 2.0) rsAdj = +15;
+        else if (rs > 1.5) rsAdj = +10;
+        else if (rs < 0.8) rsAdj = -10;
+      } else { // SHORT
+        if      (rs < 0.5) rsAdj = +15;
+        else if (rs > 1.2) rsAdj = -10;
+      }
+
+      if (rsAdj !== 0) {
+        const prev = rec.confidence ?? 0;
+        rec.confidence = Math.min(100, Math.max(0, prev + rsAdj));
+        console.log(`[bot] RS_FILTER: ${symbol} rs=${rs}, symbolChange=${symbolChange}%, spyChange=${spyChange}% → adj=${rsAdj > 0 ? '+' : ''}${rsAdj} confidence ${prev}→${rec.confidence}`);
+      } else {
+        console.log(`[bot] RS_FILTER: ${symbol} rs=${rs}, symbolChange=${symbolChange}%, spyChange=${spyChange}% → no adjustment`);
+      }
+    }
+  } catch (rsErr) {
+    console.warn(`[bot] RS filter error for ${symbol}:`, rsErr.message, '— proceeding without filter');
   }
 
   // 8. MULTI-TIMEFRAME CONFLUENCE
