@@ -60,6 +60,11 @@ const TREND_CACHE_TTL = 60 * 60 * 1000; // 60 minutes
 const volumeCache = {};
 const VOLUME_CACHE_TTL = 15 * 60 * 1000; // 15 minutes
 
+// ─── VWAP CACHE ──────────────────────────────────────────────────────────────
+// Keyed as "vwap:SYMBOL" → { ts, vwap, currentPrice, aboveVwap }
+const vwapCache = {};
+const VWAP_CACHE_TTL = 3 * 60 * 1000; // 3 minutes
+
 // Rate limiting
 const rateLimit = new Map();
 function checkRate(ip) {
@@ -113,6 +118,16 @@ function getMondayET(d = new Date()) {
   const diff = day === 0 ? -6 : 1 - day;            // shift to Monday
   et.setUTCDate(et.getUTCDate() + diff);
   return et.toISOString().slice(0, 10);
+}
+
+/**
+ * Returns the current wall-clock time in US/Eastern as a plain Date object
+ * whose UTC fields read as if they were ET local fields.
+ * (Re-uses the DST logic already established by isNYDST.)
+ */
+function getEasternTime(d = new Date()) {
+  const offset = isNYDST(d) ? 4 : 5;
+  return new Date(d.getTime() - offset * 3600 * 1000);
 }
 
 /** Recalculate all allocation-derived limits whenever capital changes */
@@ -381,6 +396,92 @@ async function checkVolumeConfirmation(symbol, currentVolume, mode, isMacdCrosso
     return { confirmed: ratio >= threshold, ratio, avgVolume };
   } catch (err) {
     console.warn(`[bot] VOL fetch error for ${symbol} (${mode}):`, err.message);
+    return null;
+  }
+}
+
+// ─── INTRADAY VWAP ───────────────────────────────────────────────────────────
+
+/**
+ * Fetches all 1-minute bars for today's session (9:30 AM ET onward) and
+ * computes the session VWAP using typical price × volume weighting.
+ *
+ * Returns { vwap, currentPrice, aboveVwap } or null when:
+ *  - The market has not yet opened (< 9:30 AM ET)
+ *  - Fewer than 5 bars are available (too early in session to be meaningful)
+ *  - The Polygon request fails
+ *
+ * A null return signals the caller to skip the filter and allow the trade.
+ * Results are cached per symbol for 3 minutes.
+ */
+async function calculateVWAP(symbol) {
+  // Skip before market open (9:30 AM ET = 570 minutes into ET day)
+  const MARKET_OPEN_MIN = 9 * 60 + 30;
+  if (getETMinuteOfDay() < MARKET_OPEN_MIN) return null;
+
+  const cacheKey = `vwap:${symbol}`;
+  const cached = vwapCache[cacheKey];
+  if (cached && (Date.now() - cached.ts) < VWAP_CACHE_TTL) {
+    console.log(`[bot] VWAP cache hit for ${symbol}: vwap=${cached.vwap}, price=${cached.currentPrice}`);
+    return cached;
+  }
+
+  const apiKey = process.env.POLYGON_API_KEY;
+  if (!apiKey) return null;
+
+  const todayDate = toETDate();
+  const url = `https://api.polygon.io/v2/aggs/ticker/${symbol}/range/1/minute/${todayDate}/${todayDate}?adjusted=true&sort=asc&limit=500&apiKey=${apiKey}`;
+
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 10000);
+    const resp = await fetch(url, { signal: controller.signal });
+    clearTimeout(timer);
+
+    if (!resp.ok) {
+      console.warn(`[bot] VWAP fetch HTTP ${resp.status} for ${symbol}`);
+      return null;
+    }
+
+    const data = await resp.json();
+    const bars = data?.results;
+
+    // Filter to bars at or after 9:30 AM ET (Polygon timestamps are UTC ms)
+    const et = getEasternTime();
+    const now = new Date();
+    const sessionStartMs = Date.UTC(
+      et.getUTCFullYear(), et.getUTCMonth(), et.getUTCDate(),
+      9 + (isNYDST(now) ? 4 : 5), 30  // 9:30 ET expressed as UTC hours
+    );
+    const sessionBars = Array.isArray(bars)
+      ? bars.filter(b => b.t >= sessionStartMs)
+      : [];
+
+    if (sessionBars.length < 5) {
+      console.log(`[bot] VWAP skipped for ${symbol} — only ${sessionBars.length} session bars (< 5)`);
+      return null;
+    }
+
+    let sumTPV = 0;
+    let sumV   = 0;
+    for (const b of sessionBars) {
+      const tp = (b.h + b.l + b.c) / 3;
+      sumTPV += tp * b.v;
+      sumV   += b.v;
+    }
+
+    if (sumV === 0) return null;
+
+    const vwap         = parseFloat((sumTPV / sumV).toFixed(4));
+    const currentPrice = parseFloat(sessionBars[sessionBars.length - 1].c.toFixed(4));
+    const aboveVwap    = currentPrice > vwap;
+
+    const result = { ts: Date.now(), vwap, currentPrice, aboveVwap };
+    vwapCache[cacheKey] = result;
+    console.log(`[bot] VWAP ${symbol}: vwap=${vwap}, price=${currentPrice}, aboveVwap=${aboveVwap} (${sessionBars.length} bars)`);
+    return result;
+  } catch (err) {
+    console.warn(`[bot] VWAP fetch error for ${symbol}:`, err.message);
     return null;
   }
 }
@@ -730,7 +831,27 @@ module.exports = async function handler(req, res) {
     }
   }
 
-  // 10. LIMIT PRICE
+  // 10. VWAP DIRECTIONAL FILTER (day trades only)
+  if (mode === 'day') {
+    try {
+      const vwapResult = await calculateVWAP(symbol);
+      if (vwapResult) {
+        // null = pre-open or < 5 bars → skip filter
+        if (direction === 'LONG' && !vwapResult.aboveVwap) {
+          console.log(`[bot] VWAP_FILTER: rejected LONG ${symbol}, price=${vwapResult.currentPrice}, vwap=${vwapResult.vwap}`);
+          return reject(`VWAP_FILTER: LONG rejected — price $${vwapResult.currentPrice} is below VWAP $${vwapResult.vwap}`);
+        }
+        if (direction === 'SHORT' && vwapResult.aboveVwap) {
+          console.log(`[bot] VWAP_FILTER: rejected SHORT ${symbol}, price=${vwapResult.currentPrice}, vwap=${vwapResult.vwap}`);
+          return reject(`VWAP_FILTER: SHORT rejected — price $${vwapResult.currentPrice} is above VWAP $${vwapResult.vwap}`);
+        }
+      }
+    } catch (vwapErr) {
+      console.warn(`[bot] VWAP filter error for ${symbol}:`, vwapErr.message, '— proceeding without filter');
+    }
+  }
+
+  // 11. LIMIT PRICE
   const lastPrice  = safeNum(body.lastPrice ?? body.price ?? indicators?.price);
   let   limitPrice = safeNum(body.limitPrice);
   let   autoSet    = false;
@@ -748,7 +869,7 @@ module.exports = async function handler(req, res) {
     return reject('Could not calculate a valid limit price');
   }
 
-  // 11. POSITION SIZE
+  // 12. POSITION SIZE
   const quantity      = safeNum(body.quantity) ?? 1;
   const positionValue = limitPrice * quantity;
   if (positionValue > bucket.maxPositionSize) {
