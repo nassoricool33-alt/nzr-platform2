@@ -578,6 +578,105 @@ function runStrategy(name, bars, capital, ctx) {
   return runEMA2050Strategy(bars, capital, ctx);
 }
 
+// ─── WALK-FORWARD VALIDATION ─────────────────────────────────────────────────
+
+/**
+ * Splits `bars` 70/30 and runs the full strategy on each segment independently.
+ *
+ * params: { capital, mode, strategy, earningsDates }
+ *
+ * Returns a walkForward object:
+ * {
+ *   inSample:    { sharpe, totalReturn, winRate, trades, period, bars },
+ *   outOfSample: { sharpe, totalReturn, winRate, trades, period, bars },
+ *   degradation: number | null,   // (IS.sharpe - OOS.sharpe) / |IS.sharpe| × 100
+ *   verdict:     string,
+ * }
+ * Returns null if the dataset is too small to split meaningfully.
+ */
+function walkForwardTest(params, bars) {
+  const { capital, mode, strategy, earningsDates } = params;
+
+  const splitIdx = Math.floor(bars.length * 0.70);
+  // Require at least 50 in-sample bars and 20 out-of-sample bars
+  if (splitIdx < 50 || bars.length - splitIdx < 20) {
+    console.log(`[backtest] walk-forward: insufficient bars (${bars.length}) — skipping`);
+    return null;
+  }
+
+  const isBars  = bars.slice(0, splitIdx);
+  const oosBars = bars.slice(splitIdx);
+
+  // Run strategy on each segment with a fresh context (no cross-contamination)
+  const isCtx  = buildContext(isBars,  mode, 'WF-IS',  earningsDates);
+  const oosCtx = buildContext(oosBars, mode, 'WF-OOS', earningsDates);
+  const isTrades  = runStrategy(strategy, isBars,  capital, isCtx);
+  const oosTrades = runStrategy(strategy, oosBars, capital, oosCtx);
+
+  // Per-segment stats
+  const isSharpe  = calculateSharpe(isTrades);
+  const oosSharpe = calculateSharpe(oosTrades);
+
+  const isTotalPnl  = isTrades.reduce((s, t)  => s + t.pnl, 0);
+  const oosTotalPnl = oosTrades.reduce((s, t) => s + t.pnl, 0);
+  const isTotalReturn  = parseFloat((isTotalPnl  / capital * 100).toFixed(2));
+  const oosTotalReturn = parseFloat((oosTotalPnl / capital * 100).toFixed(2));
+
+  const isWins  = isTrades.filter(t  => t.result === 'WIN').length;
+  const oosWins = oosTrades.filter(t => t.result === 'WIN').length;
+  const isWinRate  = isTrades.length  ? parseFloat((isWins  / isTrades.length  * 100).toFixed(1)) : 0;
+  const oosWinRate = oosTrades.length ? parseFloat((oosWins / oosTrades.length * 100).toFixed(1)) : 0;
+
+  // Period labels
+  const fmtDate = ts => new Date(ts).toISOString().slice(0, 10);
+  const isPeriod  = `${fmtDate(isBars[0].t)} → ${fmtDate(isBars[isBars.length - 1].t)}`;
+  const oosPeriod = `${fmtDate(oosBars[0].t)} → ${fmtDate(oosBars[oosBars.length - 1].t)}`;
+
+  // Degradation: how much the Sharpe ratio drops from IS to OOS
+  // Uses absolute value of IS Sharpe as denominator to handle negative IS Sharpe
+  let degradation = null;
+  if (isSharpe !== 0) {
+    degradation = parseFloat(((isSharpe - oosSharpe) / Math.abs(isSharpe) * 100).toFixed(1));
+  }
+
+  // Verdict — check OOS < 0 first (strongest negative signal)
+  let verdict;
+  if (oosSharpe < 0) {
+    verdict = 'fails out-of-sample — strategy is curve-fitted';
+  } else if (degradation === null) {
+    verdict = 'in-sample Sharpe is zero — inconclusive';
+  } else if (degradation < 20) {
+    verdict = 'robust — strategy holds out-of-sample';
+  } else if (degradation <= 50) {
+    verdict = 'moderate overfitting — use with caution';
+  } else {
+    verdict = 'overfitted — do not use live';
+  }
+
+  console.log(`[backtest] walk-forward: IS ${isBars.length}bars sharpe=${isSharpe} | OOS ${oosBars.length}bars sharpe=${oosSharpe} | degradation=${degradation}% → ${verdict}`);
+
+  return {
+    inSample: {
+      sharpe:      isSharpe,
+      totalReturn: isTotalReturn,
+      winRate:     isWinRate,
+      trades:      isTrades.length,
+      period:      isPeriod,
+      bars:        isBars.length,
+    },
+    outOfSample: {
+      sharpe:      oosSharpe,
+      totalReturn: oosTotalReturn,
+      winRate:     oosWinRate,
+      trades:      oosTrades.length,
+      period:      oosPeriod,
+      bars:        oosBars.length,
+    },
+    degradation,
+    verdict,
+  };
+}
+
 // ─── HANDLER ──────────────────────────────────────────────────────────────────
 
 module.exports = async function handler(req, res) {
@@ -661,12 +760,16 @@ module.exports = async function handler(req, res) {
       const trades  = runStrategy(dayStrategy, dayBars, dayCapital, ctx);
       const summary = calculateSummary(trades, dayCapital, ctx, dailyBars);
       const message = trades.length === 0 ? (ZERO_MESSAGES[dayStrategy]?.(rawSym) ?? null) : null;
+      const walkForward = walkForwardTest(
+        { capital: dayCapital, mode: 'day', strategy: dayStrategy, earningsDates },
+        dayBars
+      );
       return res.status(200).json({
         symbol: rawSym, mode, strategy: dayStrategy,
         startDate, endDate,
         capital: totalCapital, deployedCapital: dayCapital,
         barsUsed: dayBars.length,
-        message, summary, trades,
+        message, summary, trades, walkForward,
       });
     }
 
@@ -676,12 +779,16 @@ module.exports = async function handler(req, res) {
       const trades  = runStrategy(swingStrategy, dailyBars, swingCapital, ctx);
       const summary = calculateSummary(trades, swingCapital, ctx, dailyBars);
       const message = trades.length === 0 ? (ZERO_MESSAGES[swingStrategy]?.(rawSym) ?? null) : null;
+      const walkForward = walkForwardTest(
+        { capital: swingCapital, mode: 'swing', strategy: swingStrategy, earningsDates },
+        dailyBars
+      );
       return res.status(200).json({
         symbol: rawSym, mode, strategy: swingStrategy,
         startDate, endDate,
         capital: totalCapital, deployedCapital: swingCapital,
         barsUsed: dailyBars.length,
-        message, summary, trades,
+        message, summary, trades, walkForward,
       });
     }
 
@@ -694,6 +801,14 @@ module.exports = async function handler(req, res) {
     const swingMsg    = swingTrades.length === 0 ? (ZERO_MESSAGES[swingStrategy]?.(rawSym) ?? null) : null;
     const daySummary  = calculateSummary(dayTrades,   dayCapital,   dayCtx,   dayBars);
     const swingSummary= calculateSummary(swingTrades, swingCapital, swingCtx, dailyBars);
+    const dayWalkForward   = walkForwardTest(
+      { capital: dayCapital,   mode: 'day',   strategy: dayStrategy,   earningsDates },
+      dayBars
+    );
+    const swingWalkForward = walkForwardTest(
+      { capital: swingCapital, mode: 'swing', strategy: swingStrategy, earningsDates },
+      dailyBars
+    );
 
     const combinedPnl    = daySummary.totalPnl + swingSummary.totalPnl;
     const combinedPnlPct = (combinedPnl / totalCapital) * 100;
@@ -704,18 +819,20 @@ module.exports = async function handler(req, res) {
       startDate, endDate,
       capital: totalCapital, dayCapital, swingCapital,
       dayResult: {
-        strategy: dayStrategy,
-        barsUsed: dayBars.length,
-        message:  dayMsg,
-        summary:  daySummary,
-        trades:   dayTrades,
+        strategy:    dayStrategy,
+        barsUsed:    dayBars.length,
+        message:     dayMsg,
+        summary:     daySummary,
+        trades:      dayTrades,
+        walkForward: dayWalkForward,
       },
       swingResult: {
-        strategy: swingStrategy,
-        barsUsed: dailyBars.length,
-        message:  swingMsg,
-        summary:  swingSummary,
-        trades:   swingTrades,
+        strategy:    swingStrategy,
+        barsUsed:    dailyBars.length,
+        message:     swingMsg,
+        summary:     swingSummary,
+        trades:      swingTrades,
+        walkForward: swingWalkForward,
       },
       combined: {
         totalTrades: dayTrades.length + swingTrades.length,

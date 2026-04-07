@@ -1697,6 +1697,8 @@ footer{border-top:1px solid var(--border);padding:32px 0;margin-top:80px}
         <div id="bt-skipped-info" style="display:none;font-family:var(--font-mono);font-size:10px;color:var(--text3);padding:10px 4px;line-height:1.7;border-top:1px solid var(--border);margin-top:4px"></div>
         <!-- Benchmark row -->
         <div id="bt-benchmark-row" style="display:none;background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);padding:14px 18px;margin-top:16px;font-family:var(--font-mono);font-size:11px;color:var(--text2);line-height:1.8"></div>
+        <!-- Walk-Forward Validation -->
+        <div id="bt-walkforward" style="display:none;margin-top:20px;border:1px solid var(--border);border-radius:var(--radius-lg);padding:20px 22px;background:var(--panel)"></div>
       </div>
     </div>
 
@@ -3229,6 +3231,8 @@ async function runBacktest() {
       btRenderTable(_btTrades);
       btRenderSkippedSignals(null, data);
       btRenderChart(data.dayResult?.summary?.equityCurve || [], data.swingResult?.summary?.equityCurve || [], data);
+      // Show swing walk-forward (daily bars — more meaningful); fall back to day
+      btRenderWalkForward(data.swingResult?.walkForward || data.dayResult?.walkForward || null);
     } else {
       _btTrades = data.trades || [];
       btShowMessage(data.message);
@@ -3236,6 +3240,7 @@ async function runBacktest() {
       btRenderTable(_btTrades);
       btRenderSkippedSignals(data.summary);
       btRenderChart(data.summary.equityCurve || [], [], data);
+      btRenderWalkForward(data.walkForward || null);
     }
 
     summary.style.display = 'block';
@@ -3368,6 +3373,90 @@ function btRenderBenchmarkRow(s) {
     <span style="margin-left:16px">Would have returned <strong style="color:${btPctColor(bhr)}">${btFmtPct(bhr, true)}</strong>
     (<strong style="color:${btPctColor(bhr)}">${btFmt$(bhp)}</strong>) · Strategy alpha:
     <strong style="color:${alpC}">${alp >= 0 ? '+' : ''}${alp}%</strong></span>`;
+}
+
+function btRenderWalkForward(wf) {
+  const el = document.getElementById('bt-walkforward');
+  if (!el) return;
+  if (!wf) { el.style.display = 'none'; return; }
+
+  const is  = wf.inSample;
+  const oos = wf.outOfSample;
+
+  // Verdict styling
+  const v = wf.verdict || '';
+  let verdictColor, verdictIcon;
+  if (v.startsWith('robust')) {
+    verdictColor = 'var(--green)'; verdictIcon = '✓';
+  } else if (v.startsWith('moderate')) {
+    verdictColor = 'var(--gold)'; verdictIcon = '⚠';
+  } else {
+    verdictColor = 'var(--red)'; verdictIcon = '✗';
+  }
+
+  const srColor = n => n > 1.0 ? 'var(--green)' : n >= 0.5 ? 'var(--gold)' : 'var(--red)';
+  const retColor = n => n >= 0 ? 'var(--green)' : 'var(--red)';
+  const retFmt  = n => `${n >= 0 ? '+' : ''}${n}%`;
+
+  const deg    = wf.degradation;
+  const degStr = deg != null ? `${deg > 0 ? '+' : ''}${deg}%` : 'N/A';
+  const degColor = deg == null ? 'var(--text3)' : deg < 20 ? 'var(--green)' : deg <= 50 ? 'var(--gold)' : 'var(--red)';
+
+  const tooltip = 'Walk-forward validation splits historical data into a training period (first 70%) and a held-out test period (last 30%). '
+    + 'A robust strategy performs similarly on both. '
+    + 'A large Sharpe ratio drop (degradation) means the strategy was overfit to historical data and may not work in live trading.';
+
+  el.style.display = 'block';
+  el.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:16px">
+      <div style="display:flex;align-items:center;gap:8px">
+        <span style="font-family:var(--font-mono);font-size:10px;color:var(--text3);letter-spacing:1px;text-transform:uppercase">Walk-Forward Validation</span>
+        <span title="${tooltip}" style="cursor:help;font-family:var(--font-mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:50%;width:16px;height:16px;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0">?</span>
+      </div>
+      <span style="font-family:var(--font-mono);font-size:12px;font-weight:700;color:${verdictColor}">${verdictIcon} ${v}</span>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr auto;gap:12px;align-items:stretch">
+      <!-- In-sample card -->
+      <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:14px 16px">
+        <div style="font-family:var(--font-mono);font-size:9px;color:var(--text3);letter-spacing:1px;text-transform:uppercase;margin-bottom:10px">In-Sample · 70%</div>
+        <div style="font-family:var(--font-mono);font-size:10px;color:var(--text3);margin-bottom:10px;line-height:1.4">${is.period}<br>${is.bars} bars</div>
+        <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px">
+          <span style="font-family:var(--font-mono);font-size:10px;color:var(--text3)">Sharpe</span>
+          <span style="font-family:var(--font-mono);font-size:16px;font-weight:700;color:${srColor(is.sharpe)}">${is.sharpe}</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px">
+          <span style="font-family:var(--font-mono);font-size:10px;color:var(--text3)">Return</span>
+          <span style="font-family:var(--font-mono);font-size:12px;font-weight:600;color:${retColor(is.totalReturn)}">${retFmt(is.totalReturn)}</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:baseline">
+          <span style="font-family:var(--font-mono);font-size:10px;color:var(--text3)">Trades · Win%</span>
+          <span style="font-family:var(--font-mono);font-size:11px;color:var(--text2)">${is.trades} · ${is.winRate}%</span>
+        </div>
+      </div>
+      <!-- Out-of-sample card -->
+      <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:14px 16px">
+        <div style="font-family:var(--font-mono);font-size:9px;color:var(--text3);letter-spacing:1px;text-transform:uppercase;margin-bottom:10px">Out-of-Sample · 30%</div>
+        <div style="font-family:var(--font-mono);font-size:10px;color:var(--text3);margin-bottom:10px;line-height:1.4">${oos.period}<br>${oos.bars} bars</div>
+        <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px">
+          <span style="font-family:var(--font-mono);font-size:10px;color:var(--text3)">Sharpe</span>
+          <span style="font-family:var(--font-mono);font-size:16px;font-weight:700;color:${srColor(oos.sharpe)}">${oos.sharpe}</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px">
+          <span style="font-family:var(--font-mono);font-size:10px;color:var(--text3)">Return</span>
+          <span style="font-family:var(--font-mono);font-size:12px;font-weight:600;color:${retColor(oos.totalReturn)}">${retFmt(oos.totalReturn)}</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:baseline">
+          <span style="font-family:var(--font-mono);font-size:10px;color:var(--text3)">Trades · Win%</span>
+          <span style="font-family:var(--font-mono);font-size:11px;color:var(--text2)">${oos.trades} · ${oos.winRate}%</span>
+        </div>
+      </div>
+      <!-- Degradation badge -->
+      <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:14px 16px;min-width:120px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center">
+        <div style="font-family:var(--font-mono);font-size:9px;color:var(--text3);letter-spacing:1px;text-transform:uppercase;margin-bottom:10px">Sharpe Drop</div>
+        <div style="font-family:var(--font-mono);font-size:28px;font-weight:700;color:${degColor};line-height:1">${degStr}</div>
+        <div style="font-family:var(--font-mono);font-size:10px;color:var(--text3);margin-top:10px;line-height:1.5">${is.sharpe} → ${oos.sharpe}<br>IS → OOS</div>
+      </div>
+    </div>`;
 }
 
 function btRenderSkippedSignals(summary, bothData) {
