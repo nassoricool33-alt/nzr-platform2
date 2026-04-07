@@ -101,6 +101,11 @@ const ENTRY_CONFIDENCE_THRESHOLD = 70;
 const sentimentBotCache = {};
 const SENTIMENT_BOT_CACHE_TTL = 15 * 60 * 1000; // 15 minutes
 
+// ─── MARKET REGIME CACHE ─────────────────────────────────────────────────────
+// { ts, result: { adx, plusDI, minusDI, vix, regime } }
+let regimeBotCache = null;
+const REGIME_BOT_CACHE_TTL = 30 * 60 * 1000; // 30 minutes
+
 // ─── ADAPTIVE SIZING CACHE ───────────────────────────────────────────────────
 // Stores the last computed Kelly stats so Supabase isn't queried every request.
 // { ts, winRate, avgWin, avgLoss, kellyFraction, tradeCount }
@@ -362,6 +367,60 @@ function buildATRStop(atr, entryPrice, mode, direction) {
   }
 
   return { atr: parseFloat(atr.toFixed(4)), stopPrice, target1, target2 };
+}
+
+// ─── ADX CALCULATION ─────────────────────────────────────────────────────────
+
+/**
+ * Computes ADX14 (Wilder's method) from an ascending OHLC bar array ({ h, l, c }).
+ * Requires at least 30 bars. Returns { adx, plusDI, minusDI } or null.
+ */
+function calcADX14(bars, period = 14) {
+  if (!bars || bars.length < period * 2 + 2) return null;
+
+  const pdms = [], mdms = [], trs = [];
+  for (let i = 1; i < bars.length; i++) {
+    const p = bars[i - 1], c = bars[i];
+    const up   = c.h - p.h;
+    const down = p.l - c.l;
+    pdms.push(up > down && up > 0 ? up : 0);
+    mdms.push(down > up && down > 0 ? down : 0);
+    trs.push(Math.max(c.h - c.l, Math.abs(c.h - p.c), Math.abs(c.l - p.c)));
+  }
+
+  if (trs.length < period + period) return null;
+
+  let sTR  = trs.slice(0, period).reduce((a, b) => a + b, 0);
+  let sPDM = pdms.slice(0, period).reduce((a, b) => a + b, 0);
+  let sMDM = mdms.slice(0, period).reduce((a, b) => a + b, 0);
+
+  const dxOf = (tr, pdm, mdm) => {
+    if (tr === 0) return 0;
+    const pdi = 100 * pdm / tr, mdi = 100 * mdm / tr;
+    const s = pdi + mdi;
+    return s === 0 ? 0 : 100 * Math.abs(pdi - mdi) / s;
+  };
+
+  const dxVals = [dxOf(sTR, sPDM, sMDM)];
+  for (let i = period; i < trs.length; i++) {
+    sTR  = sTR  - sTR  / period + trs[i];
+    sPDM = sPDM - sPDM / period + pdms[i];
+    sMDM = sMDM - sMDM / period + mdms[i];
+    dxVals.push(dxOf(sTR, sPDM, sMDM));
+  }
+
+  if (dxVals.length < period) return null;
+
+  let adx = dxVals.slice(0, period).reduce((a, b) => a + b, 0) / period;
+  for (let i = period; i < dxVals.length; i++) {
+    adx = (adx * (period - 1) + dxVals[i]) / period;
+  }
+
+  return {
+    adx:     parseFloat(adx.toFixed(2)),
+    plusDI:  sTR === 0 ? 0 : parseFloat((100 * sPDM / sTR).toFixed(2)),
+    minusDI: sTR === 0 ? 0 : parseFloat((100 * sMDM / sTR).toFixed(2)),
+  };
 }
 
 // ─── MULTI-TIMEFRAME TREND FUNCTIONS ─────────────────────────────────────────
@@ -986,6 +1045,85 @@ async function getATRStop(symbol, mode, entryPrice, direction) {
   }
 }
 
+// ─── MARKET REGIME ───────────────────────────────────────────────────────────
+
+/**
+ * Fetches 30 daily SPY bars and current VIX in parallel, computes ADX14, and
+ * classifies the market regime. Cached for 30 minutes.
+ *
+ * Regimes:
+ *  "crisis"   — VIX > 30 AND ADX < 20 (high fear + no trend)
+ *  "trending" — ADX > 25
+ *  "choppy"   — ADX < 20
+ *  "neutral"  — ADX 20–25
+ *
+ * Returns the cached/live result, or a safe neutral default on any failure.
+ */
+async function getMarketRegime() {
+  if (regimeBotCache && (Date.now() - regimeBotCache.ts) < REGIME_BOT_CACHE_TTL) {
+    console.log(`[bot] REGIME cache hit: ${regimeBotCache.result.regime}`);
+    return regimeBotCache.result;
+  }
+
+  const apiKey = process.env.POLYGON_API_KEY;
+  const neutral = { adx: null, plusDI: null, minusDI: null, vix: null, regime: 'neutral' };
+  if (!apiKey) return neutral;
+
+  const today    = toETDate();
+  const fromDate = toETDate(new Date(Date.now() - 45 * 24 * 3600 * 1000));
+
+  const fetchWithTimeout = async (url, opts = {}, ms = 10000) => {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), ms);
+    try {
+      return await fetch(url, { ...opts, signal: ctrl.signal });
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
+  try {
+    const [spyResp, vixResp] = await Promise.all([
+      fetchWithTimeout(
+        `https://api.polygon.io/v2/aggs/ticker/SPY/range/1/day/${fromDate}/${today}?adjusted=true&sort=asc&limit=30&apiKey=${apiKey}`
+      ),
+      fetchWithTimeout(
+        'https://query1.finance.yahoo.com/v8/finance/chart/%5EVIX?interval=1d&range=1d',
+        { headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' } }
+      ),
+    ]);
+
+    const spyJson = spyResp.ok ? await spyResp.json() : null;
+    const vixJson = vixResp.ok ? await vixResp.json() : null;
+
+    const bars = spyJson?.results;
+    const vix  = vixJson?.chart?.result?.[0]?.meta?.regularMarketPrice ?? null;
+
+    if (!Array.isArray(bars) || bars.length < 30) {
+      console.warn(`[bot] REGIME: insufficient SPY bars (${bars?.length ?? 0}) — defaulting to neutral`);
+      return neutral;
+    }
+
+    const adxResult = calcADX14(bars.map(b => ({ h: b.h, l: b.l, c: b.c })));
+    if (!adxResult) return neutral;
+
+    const { adx, plusDI, minusDI } = adxResult;
+    let regime;
+    if (vix != null && vix > 30 && adx < 20) regime = 'crisis';
+    else if (adx > 25)                        regime = 'trending';
+    else if (adx < 20)                        regime = 'choppy';
+    else                                      regime = 'neutral';
+
+    const result = { adx, plusDI, minusDI, vix, regime };
+    regimeBotCache = { ts: Date.now(), result };
+    console.log(`[bot] REGIME computed: adx=${adx} vix=${vix} → ${regime}`);
+    return result;
+  } catch (err) {
+    console.warn(`[bot] REGIME fetch error:`, err.message, '— defaulting to neutral');
+    return neutral;
+  }
+}
+
 // ─── DIRECTION RECOMMENDATION ─────────────────────────────────────────────────
 
 function recommendDirection(ind) {
@@ -1298,6 +1436,13 @@ module.exports = async function handler(req, res) {
   if (killSwitch) return reject('Kill switch active — all trading halted');
   if (!bucket.active) return reject(`${mode} trading mode is halted`);
 
+  // 1b. MARKET REGIME CHECK
+  const regime = await getMarketRegime().catch(() => ({ regime: 'neutral', adx: null, vix: null }));
+  if (regime.regime === 'crisis') {
+    console.log(`[bot] REGIME_BLOCK: crisis regime detected, VIX=${regime.vix} ADX=${regime.adx}`);
+    return reject(`REGIME_BLOCK: crisis regime detected (VIX ${regime.vix}, ADX ${regime.adx}) — no new entries, manage existing positions only`);
+  }
+
   // 2. LOSS LIMITS
   if (mode === 'day' && dayState.pnl <= dayState.maxDailyLoss) {
     return reject(`Daily loss limit reached ($${dayState.pnl.toFixed(2)} vs limit $${dayState.maxDailyLoss.toFixed(2)})`);
@@ -1339,6 +1484,10 @@ module.exports = async function handler(req, res) {
   if (corrGuard.sectorCount === 1) {
     effectiveMaxPositionSize = parseFloat((bucket.maxPositionSize * 0.6).toFixed(2));
     console.log(`[bot] CORRELATION_GUARD: ${symbol} (${corrGuard.sector}) — 1 correlated position open, reducing max size $${bucket.maxPositionSize.toFixed(2)} → $${effectiveMaxPositionSize}`);
+  }
+  if (regime.regime === 'choppy') {
+    effectiveMaxPositionSize = parseFloat((effectiveMaxPositionSize * 0.75).toFixed(2));
+    console.log(`[bot] REGIME: choppy market — reducing position size 25% → $${effectiveMaxPositionSize}`);
   }
 
   // 6. EXPOSURE CHECK
@@ -1382,6 +1531,12 @@ module.exports = async function handler(req, res) {
       rec.confidence = Math.min(100, Math.max(0, adjConfidence));
       console.log(`[bot] SESSION_FILTER: ${session} zone ${sessionAdj > 0 ? '+' : ''}${sessionAdj} confidence → ${rec.confidence} for ${symbol}`);
     }
+  }
+
+  // 7b.5 REGIME LEVERAGE CAP (choppy only — applied after direction is resolved)
+  if (regime.regime === 'choppy' && rec.leverage > 1) {
+    console.log(`[bot] REGIME: choppy market — capping leverage at 1× for ${symbol} (was ${rec.leverage}×)`);
+    rec.leverage = 1;
   }
 
   // 7c. NEWS SENTIMENT GATE (day and swing trades)
@@ -1629,6 +1784,7 @@ module.exports = async function handler(req, res) {
         ? 'unmapped — no sector limit applied'
         : `passed — ${corrGuard.sectorCount} existing position(s) in ${corrGuard.sector}${corrGuard.sectorCount === 1 ? ' (size reduced 40%)' : ''}`,
     },
+    marketRegime:  { regime: regime.regime, adx: regime.adx, vix: regime.vix },
     sectorInfo: {
       sector:        corrGuard.sector,
       sectorCount:   corrGuard.sectorCount,
