@@ -65,6 +65,17 @@ const VOLUME_CACHE_TTL = 15 * 60 * 1000; // 15 minutes
 const vwapCache = {};
 const VWAP_CACHE_TTL = 3 * 60 * 1000; // 3 minutes
 
+// ─── ATR CACHE ───────────────────────────────────────────────────────────────
+// Keyed as "atr:day:SYMBOL" or "atr:swing:SYMBOL" → { ts, atr }
+const atrCache = {};
+const ATR_CACHE_TTL = 10 * 60 * 1000; // 10 minutes
+
+// ─── TRAILING STOP TRACKER ───────────────────────────────────────────────────
+// Keyed as "mode:symbol" → { stage, direction, entryPrice, atr, stopPrice,
+//   target1, target2, highestPrice, lowestPrice, updatedAt }
+// stage 1 = initial ATR stop, 2 = breakeven, 3 = trailing
+const trailingStops = new Map();
+
 // Rate limiting
 const rateLimit = new Map();
 function checkRate(ip) {
@@ -203,6 +214,62 @@ function calcEMA(closes, period) {
     ema = closes[i] * k + ema * (1 - k);
   }
   return ema;
+}
+
+// ─── ATR CALCULATION ─────────────────────────────────────────────────────────
+
+/**
+ * Wilder's ATR over `period` bars (default 14).
+ * `bars` must be ascending (oldest first), each with { h, l, c } fields.
+ * Requires at least period+1 bars (need prevClose for the first TR).
+ * Returns null when data is insufficient.
+ */
+function calcWilderATR(bars, period = 14) {
+  if (!bars || bars.length < period + 1) return null;
+
+  // True ranges starting from bar[1] (bar[0] is used only as prevClose seed)
+  const trs = [];
+  for (let i = 1; i < bars.length; i++) {
+    const prevClose = bars[i - 1].c;
+    const { h, l }  = bars[i];
+    trs.push(Math.max(h - l, Math.abs(h - prevClose), Math.abs(l - prevClose)));
+  }
+
+  if (trs.length < period) return null;
+
+  // Seed: simple average of the first `period` TRs
+  let atr = trs.slice(0, period).reduce((a, b) => a + b, 0) / period;
+
+  // Wilder's smoothing for the remainder
+  for (let i = period; i < trs.length; i++) {
+    atr = (atr * (period - 1) + trs[i]) / period;
+  }
+
+  return atr;
+}
+
+/**
+ * Pure function — builds stop/target levels from a known ATR value.
+ * Separated from the async fetch so the cache path can reuse it without
+ * repeating the multiplier logic.
+ */
+function buildATRStop(atr, entryPrice, mode, direction) {
+  const stopMult    = mode === 'day' ? 1.5 : 2;
+  const target1Mult = mode === 'day' ? 1.5 : 2;
+  const target2Mult = mode === 'day' ? 3   : 4;
+
+  let stopPrice, target1, target2;
+  if (direction === 'LONG') {
+    stopPrice = roundLimitPrice(entryPrice - stopMult    * atr);
+    target1   = roundLimitPrice(entryPrice + target1Mult * atr);
+    target2   = roundLimitPrice(entryPrice + target2Mult * atr);
+  } else {
+    stopPrice = roundLimitPrice(entryPrice + stopMult    * atr);
+    target1   = roundLimitPrice(entryPrice - target1Mult * atr);
+    target2   = roundLimitPrice(entryPrice - target2Mult * atr);
+  }
+
+  return { atr: parseFloat(atr.toFixed(4)), stopPrice, target1, target2 };
 }
 
 // ─── MULTI-TIMEFRAME TREND FUNCTIONS ─────────────────────────────────────────
@@ -486,6 +553,70 @@ async function calculateVWAP(symbol) {
   }
 }
 
+// ─── ATR-BASED DYNAMIC STOP ──────────────────────────────────────────────────
+
+/**
+ * Fetches the last 20 bars at the mode-appropriate timeframe (15-min for day,
+ * daily for swing), computes ATR14 with Wilder's smoothing, and returns the
+ * dynamic stop and two-stage target levels for the given entry.
+ *
+ * Day  LONG : stop = entry - 1.5×ATR, target1 = entry + 1.5×ATR, target2 = entry + 3×ATR
+ * Day  SHORT: stop = entry + 1.5×ATR, target1 = entry - 1.5×ATR, target2 = entry - 3×ATR
+ * Swing LONG : stop = entry - 2×ATR,  target1 = entry + 2×ATR,   target2 = entry + 4×ATR
+ * Swing SHORT: stop = entry + 2×ATR,  target1 = entry - 2×ATR,   target2 = entry - 4×ATR
+ *
+ * Returns null on API failure — caller falls back to fixed-pct stop.
+ * ATR value is cached per symbol+mode for 10 minutes.
+ */
+async function getATRStop(symbol, mode, entryPrice, direction) {
+  const cacheKey = `atr:${mode}:${symbol}`;
+  const cached = atrCache[cacheKey];
+  if (cached && (Date.now() - cached.ts) < ATR_CACHE_TTL) {
+    console.log(`[bot] ATR cache hit for ${symbol} (${mode}): atr=${cached.atr}`);
+    return buildATRStop(cached.atr, entryPrice, mode, direction);
+  }
+
+  const apiKey = process.env.POLYGON_API_KEY;
+  if (!apiKey) return null;
+
+  const [multiplier, timespan, lookbackDays] = mode === 'day'
+    ? [15, 'minute', 5]
+    : [1,  'day',    30];
+
+  const toDate   = toETDate();
+  const fromDate = toETDate(new Date(Date.now() - lookbackDays * 24 * 3600 * 1000));
+  const url = `https://api.polygon.io/v2/aggs/ticker/${symbol}/range/${multiplier}/${timespan}/${fromDate}/${toDate}?adjusted=true&sort=asc&limit=20&apiKey=${apiKey}`;
+
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 10000);
+    const resp = await fetch(url, { signal: controller.signal });
+    clearTimeout(timer);
+
+    if (!resp.ok) {
+      console.warn(`[bot] ATR fetch HTTP ${resp.status} for ${symbol} (${mode})`);
+      return null;
+    }
+
+    const data = await resp.json();
+    const bars = data?.results;
+    if (!Array.isArray(bars) || bars.length < 15) {
+      console.warn(`[bot] ATR insufficient bars (${bars?.length ?? 0}) for ${symbol} (${mode})`);
+      return null;
+    }
+
+    const atr = calcWilderATR(bars, 14);
+    if (atr == null || !isFinite(atr) || atr <= 0) return null;
+
+    atrCache[cacheKey] = { ts: Date.now(), atr };
+    console.log(`[bot] ATR computed for ${symbol} (${mode}): atr=${atr.toFixed(4)} from ${bars.length} bars`);
+    return buildATRStop(atr, entryPrice, mode, direction);
+  } catch (err) {
+    console.warn(`[bot] ATR fetch error for ${symbol} (${mode}):`, err.message);
+    return null;
+  }
+}
+
 // ─── DIRECTION RECOMMENDATION ─────────────────────────────────────────────────
 
 function recommendDirection(ind) {
@@ -681,6 +812,13 @@ module.exports = async function handler(req, res) {
         dayCloseAt: '3:45 PM ET',
         swingCheckAt: 'Market open daily',
       },
+      trailingStops: Object.fromEntries(
+        [...trailingStops.entries()].map(([k, v]) => [k, {
+          stage: v.stage, direction: v.direction, entryPrice: v.entryPrice,
+          stopPrice: v.stopPrice, target1: v.target1, target2: v.target2,
+          atr: v.atr, highestPrice: v.highestPrice, lowestPrice: v.lowestPrice,
+        }])
+      ),
     });
   }
 
@@ -691,6 +829,64 @@ module.exports = async function handler(req, res) {
     if (body.dayPnl !== undefined) { const v = safeNum(body.dayPnl); if (v !== null) dayState.pnl = v; }
     if (body.swingPnl !== undefined) { const v = safeNum(body.swingPnl); if (v !== null) swingState.pnl = v; }
     return res.status(200).json({ dayPnl: dayState.pnl, swingPnl: swingState.pnl });
+  }
+
+  // ── UPDATE TRAILING STOP ────────────────────────────────────────────────────
+  if (action === 'updatetrailingstop') {
+    if (req.method !== 'POST') return res.status(405).json({ error: 'POST required' });
+    const body = req.body || {};
+    const sym  = sanitizeSymbol(body.symbol);
+    const md   = String(body.mode || 'day').toLowerCase();
+    const currentPrice = safeNum(body.currentPrice);
+    if (!sym || !currentPrice) return res.status(400).json({ error: 'symbol and currentPrice required' });
+
+    const key   = `${md}:${sym}`;
+    const state = trailingStops.get(key);
+    if (!state) return res.status(404).json({ error: `No trailing stop found for ${sym} in ${md} mode` });
+
+    const { direction, entryPrice, atr, target1, target2 } = state;
+    let { stage, stopPrice, highestPrice, lowestPrice } = state;
+    let moved = false;
+
+    if (direction === 'LONG') {
+      highestPrice = Math.max(highestPrice, currentPrice);
+      if (stage === 1 && highestPrice >= target1) {
+        stage     = 2;
+        stopPrice = roundLimitPrice(entryPrice); // move to breakeven
+        moved     = true;
+        console.log(`[bot] TRAIL ${sym}: stage 1→2 (breakeven) stop=$${stopPrice}`);
+      }
+      if (stage >= 2 && highestPrice >= target2) {
+        stage     = 3;
+        stopPrice = roundLimitPrice(highestPrice - atr);
+        moved     = true;
+        console.log(`[bot] TRAIL ${sym}: stage 2→3 (trailing) stop=$${stopPrice}`);
+      } else if (stage === 3) {
+        const newStop = roundLimitPrice(highestPrice - atr);
+        if (newStop > stopPrice) { stopPrice = newStop; moved = true; }
+      }
+    } else { // SHORT
+      lowestPrice = Math.min(lowestPrice, currentPrice);
+      if (stage === 1 && lowestPrice <= target1) {
+        stage     = 2;
+        stopPrice = roundLimitPrice(entryPrice);
+        moved     = true;
+        console.log(`[bot] TRAIL ${sym}: stage 1→2 (breakeven) stop=$${stopPrice}`);
+      }
+      if (stage >= 2 && lowestPrice <= target2) {
+        stage     = 3;
+        stopPrice = roundLimitPrice(lowestPrice + atr);
+        moved     = true;
+        console.log(`[bot] TRAIL ${sym}: stage 2→3 (trailing) stop=$${stopPrice}`);
+      } else if (stage === 3) {
+        const newStop = roundLimitPrice(lowestPrice + atr);
+        if (newStop < stopPrice) { stopPrice = newStop; moved = true; }
+      }
+    }
+
+    const updatedAt = Date.now();
+    trailingStops.set(key, { ...state, stage, stopPrice, highestPrice, lowestPrice, updatedAt });
+    return res.status(200).json({ symbol: sym, mode: md, stage, stopPrice, target1, target2, highestPrice, lowestPrice, moved, updatedAt });
   }
 
   // ── ORDER VALIDATION ─────────────────────────────────────────────────────────
@@ -881,17 +1077,48 @@ module.exports = async function handler(req, res) {
   if (mode === 'day') dayState.trades++;
   else swingState.trades++;
 
-  const stopLoss   = direction === 'LONG'
-    ? roundLimitPrice(limitPrice * (1 - bucket.stopLossPct))
-    : roundLimitPrice(limitPrice * (1 + bucket.stopLossPct));
-  const riskPerShare = Math.abs(limitPrice - stopLoss);
-  const target       = direction === 'LONG'
-    ? roundLimitPrice(limitPrice + riskPerShare * bucket.minRR)
-    : roundLimitPrice(limitPrice - riskPerShare * bucket.minRR);
+  // ATR-based dynamic stop (falls back to fixed-pct if Polygon unavailable)
+  let stopLoss, target, target2, atrValue = null;
+  const atrResult = await getATRStop(symbol, mode, limitPrice, direction).catch(() => null);
+
+  if (atrResult) {
+    stopLoss  = atrResult.stopPrice;
+    target    = atrResult.target1;
+    target2   = atrResult.target2;
+    atrValue  = atrResult.atr;
+    console.log(`[bot] ATR_STOP: ${symbol} entry=$${limitPrice} stop=$${stopLoss} atr=${atrValue}`);
+
+    // Register position in trailing stop tracker (stage 1)
+    const tsKey = `${mode}:${symbol}`;
+    trailingStops.set(tsKey, {
+      stage:        1,
+      direction,
+      mode,
+      entryPrice:   limitPrice,
+      atr:          atrValue,
+      stopPrice:    stopLoss,
+      target1:      target,
+      target2,
+      highestPrice: limitPrice,
+      lowestPrice:  limitPrice,
+      updatedAt:    ts,
+    });
+  } else {
+    // Fallback: fixed-percentage stop from bucket rules
+    stopLoss = direction === 'LONG'
+      ? roundLimitPrice(limitPrice * (1 - bucket.stopLossPct))
+      : roundLimitPrice(limitPrice * (1 + bucket.stopLossPct));
+    const riskPerShare = Math.abs(limitPrice - stopLoss);
+    target  = direction === 'LONG'
+      ? roundLimitPrice(limitPrice + riskPerShare * bucket.minRR)
+      : roundLimitPrice(limitPrice - riskPerShare * bucket.minRR);
+    target2 = null;
+    console.log(`[bot] ATR unavailable for ${symbol} — using fixed ${(bucket.stopLossPct * 100).toFixed(1)}% stop`);
+  }
 
   const clientOrderId = `NZR-${mode}-${symbol}-${ts}`;
 
-  console.log(`[bot] ${mode.toUpperCase()} order approved: ${direction} ${quantity}x ${symbol} @ $${limitPrice} | stop $${stopLoss} | target $${target}`);
+  console.log(`[bot] ${mode.toUpperCase()} order approved: ${direction} ${quantity}x ${symbol} @ $${limitPrice} | stop $${stopLoss} | T1 $${target}${target2 ? ` | T2 $${target2}` : ''}`);
 
   return res.status(200).json({
     approved: true,
@@ -902,7 +1129,10 @@ module.exports = async function handler(req, res) {
     limitPrice,
     stopLoss,
     target,
-    riskReward:     `${bucket.minRR}:1`,
+    target2:        target2 ?? undefined,
+    atr:            atrValue ?? undefined,
+    stopMethod:     atrValue != null ? 'atr' : 'fixed-pct',
+    riskReward:     atrValue != null ? '2:1' : `${bucket.minRR}:1`,
     quantity,
     positionValue:  parseFloat(positionValue.toFixed(2)),
     autoLimitSet:   autoSet,
