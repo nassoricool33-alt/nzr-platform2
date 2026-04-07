@@ -1776,9 +1776,12 @@ async function loadQuote(sym){
     const r=await fetch('/api/quote?symbol='+sym);
     if(!r.ok){console.warn('[price] HTTP',r.status,'for',sym);return null;}
     const d=await r.json();
-    console.log('[price render]',sym,d);
-    if(d.error){console.warn('[price] API error for',sym,d.error);return null;}
-    if(d.price==null){console.warn('[price] null price for',sym);return null;}
+    console.log('[quote response]',sym,d.price,d.changePercent);
+    if(d.price==null){
+      console.warn('[price] null price for',sym,d.error||'');
+      Q[sym]={price:'--',change:'N/A',up:false,prevClose:null,open:null,high:null,low:null,volume:null};
+      return Q[sym];
+    }
     const chg=d.changePercent??d.change??0;
     Q[sym]={price:d.price,change:chg,up:chg>=0,prevClose:d.prevClose,open:d.open,high:d.high,low:d.low,volume:d.volume};
     return Q[sym];
