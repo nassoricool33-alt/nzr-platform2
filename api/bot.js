@@ -3,12 +3,28 @@
  * Supports Day Trading (intraday, 15-min) and Swing Trading (4H/daily, up to 30 days).
  * Capital is split: 40% day / 60% swing. All risk limits derived from capital.
  *
- * NOTE: Vercel serverless functions are stateless between cold starts.
- * State (killSwitch, counters, capital) persists within a warm instance only.
- * For production use, persist state to a database (Supabase, Redis, etc.).
+ * State persistence: trading state (kill switch, cooldowns, P&L, trailing stops,
+ * consecutive losses, stopped-out symbols) is written through to the Supabase
+ * bot_state table on every mutation and loaded on cold start.
+ *
+ * Required table (run once in Supabase SQL editor):
+ *   CREATE TABLE IF NOT EXISTS bot_state (
+ *     key        text PRIMARY KEY,
+ *     value      text NOT NULL,
+ *     updated_at timestamptz DEFAULT now()
+ *   );
  */
 
 const ALLOWED_ORIGINS = ['https://nzr-platform2.vercel.app', 'http://localhost:3000'];
+
+// ─── SCAN UNIVERSE ────────────────────────────────────────────────────────────
+// Hard-coded 30-symbol base universe for gap scanning and autonomous analysis.
+// Supabase watchlist symbols are appended at scan time.
+const SCAN_UNIVERSE = [
+  'AAPL','MSFT','NVDA','AMD','TSLA','META','GOOGL','AMZN','JPM','BAC',
+  'SPY','QQQ','SMCI','ARM','PLTR','COIN','MSTR','SOFI','RIVN','HOOD',
+  'UPST','AFRM','DKNG','RBLX','SNAP','UBER','LYFT','ABNB','SHOP','ORCL',
+];
 
 // ── Live-trading gate — set BOT_LIVE_TRADING=true in Vercel env to enable ────
 const BOT_LIVE_TRADING = process.env.BOT_LIVE_TRADING === 'true';
@@ -81,6 +97,13 @@ const swingState = {
 
 // Per-symbol cooldown tracking: symbol → { timestamp, mode }
 const recentOrders = new Map();
+
+// ─── PERSISTENT TRADING STATE ─────────────────────────────────────────────────
+// These variables are the in-memory hot cache. They are written through to the
+// Supabase bot_state table on every mutation and restored on cold start.
+let consecutiveLosses  = 0;
+let stoppedOutSymbols  = []; // [{ symbol: 'AAPL', expiresAt: <ms timestamp> }]
+let _stateLoaded       = false;
 
 // ─── MULTI-TIMEFRAME TREND CACHE ─────────────────────────────────────────────
 // Keyed as "daily:SYMBOL" or "weekly:SYMBOL" → { ts, bullish, bearish, ... }
@@ -200,6 +223,152 @@ function checkRate(ip) {
   return true;
 }
 
+// ─── SUPABASE STATE MANAGEMENT ───────────────────────────────────────────────
+
+function _sbHeaders() {
+  const key = process.env.SUPABASE_ANON_KEY;
+  return key ? {
+    'apikey':        key,
+    'Authorization': `Bearer ${key}`,
+    'Content-Type':  'application/json',
+  } : null;
+}
+
+/** Fire-and-forget upsert of a single key into bot_state. Never awaited. */
+function writeBotState(key, value) {
+  const url  = process.env.SUPABASE_URL;
+  const hdrs = _sbHeaders();
+  if (!url || !hdrs) return;
+  fetch(`${url}/rest/v1/bot_state`, {
+    method:  'POST',
+    headers: { ...hdrs, 'Prefer': 'resolution=merge-duplicates' },
+    body:    JSON.stringify({ key, value: String(value), updated_at: new Date().toISOString() }),
+  }).catch(() => {});
+}
+
+/** Batch fire-and-forget upsert of multiple [key, value] pairs. */
+function writeManyBotState(entries) {
+  const url  = process.env.SUPABASE_URL;
+  const hdrs = _sbHeaders();
+  if (!url || !hdrs || !entries.length) return;
+  const rows = entries.map(([k, v]) => ({ key: k, value: String(v), updated_at: new Date().toISOString() }));
+  fetch(`${url}/rest/v1/bot_state`, {
+    method:  'POST',
+    headers: { ...hdrs, 'Prefer': 'resolution=merge-duplicates' },
+    body:    JSON.stringify(rows),
+  }).catch(() => {});
+}
+
+/**
+ * Loads all trading state from Supabase bot_state into module-level variables.
+ * Called once per warm instance via ensureStateLoaded().
+ */
+async function loadStateFromSupabase() {
+  const url  = process.env.SUPABASE_URL;
+  const hdrs = _sbHeaders();
+  if (!url || !hdrs) { _stateLoaded = true; return; }
+
+  try {
+    const ctrl  = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 6000);
+    let resp;
+    try { resp = await fetch(`${url}/rest/v1/bot_state?select=key,value`, { headers: hdrs, signal: ctrl.signal }); }
+    finally { clearTimeout(timer); }
+
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const rows = await resp.json();
+    if (!Array.isArray(rows)) throw new Error('Unexpected shape');
+
+    const s = {};
+    for (const r of rows) s[r.key] = r.value;
+
+    // Kill switch
+    if (s.kill_switch === 'true') {
+      killSwitch = true; dayState.active = false; swingState.active = false;
+    }
+
+    // Capital
+    const cap = parseFloat(s.capital_amount);
+    if (isFinite(cap) && cap > 0 && !capitalAmount) { capitalAmount = cap; computeAllocations(); }
+
+    // Day state (only restore if same calendar day)
+    const today = toETDate();
+    if (s.day_date === today) {
+      const pnl = parseFloat(s.day_pnl), trades = parseInt(s.day_trades, 10);
+      if (isFinite(pnl))    dayState.pnl    = pnl;
+      if (isFinite(trades)) dayState.trades = trades;
+      dayState.date = today;
+    }
+
+    // Swing state (only restore if same week)
+    const monday = getMondayET();
+    if (s.swing_week_start === monday) {
+      const pnl = parseFloat(s.swing_pnl), trades = parseInt(s.swing_trades, 10);
+      if (isFinite(pnl))    swingState.pnl    = pnl;
+      if (isFinite(trades)) swingState.trades = trades;
+      swingState.weekStart = monday;
+    }
+
+    // Cooldowns
+    if (s.cooldowns) {
+      try {
+        for (const [k, ts] of Object.entries(JSON.parse(s.cooldowns)))
+          recentOrders.set(k, { timestamp: ts });
+      } catch {}
+    }
+
+    // Trailing stops (open position tracker)
+    if (s.trailing_stops) {
+      try {
+        for (const [k, v] of Object.entries(JSON.parse(s.trailing_stops)))
+          trailingStops.set(k, v);
+      } catch {}
+    }
+
+    // Consecutive loss counter
+    const cl = parseInt(s.consecutive_losses, 10);
+    if (isFinite(cl) && cl >= 0) consecutiveLosses = cl;
+
+    // Stopped-out symbols
+    if (s.stopped_out_symbols) {
+      try {
+        const sos = JSON.parse(s.stopped_out_symbols);
+        if (Array.isArray(sos)) stoppedOutSymbols = sos;
+      } catch {}
+    }
+
+    console.log(`[bot] State restored — killSwitch=${killSwitch} capital=${capitalAmount} dayTrades=${dayState.trades} consecutiveLosses=${consecutiveLosses} stoppedOut=${stoppedOutSymbols.length}`);
+  } catch (err) {
+    console.warn('[bot] loadStateFromSupabase error:', err.message);
+  }
+  _stateLoaded = true;
+}
+
+/** Ensures state has been loaded from Supabase at least once per warm instance. */
+async function ensureStateLoaded() {
+  if (!_stateLoaded) await loadStateFromSupabase();
+}
+
+/** Marks a symbol as stopped-out for 2 hours and increments consecutive loss counter. */
+function markStoppedOut(symbol) {
+  const expiresAt = Date.now() + 2 * 60 * 60 * 1000;
+  stoppedOutSymbols = stoppedOutSymbols.filter(s => s.symbol !== symbol);
+  stoppedOutSymbols.push({ symbol, expiresAt });
+  consecutiveLosses++;
+  writeManyBotState([
+    ['stopped_out_symbols', JSON.stringify(stoppedOutSymbols)],
+    ['consecutive_losses',  String(consecutiveLosses)],
+  ]);
+  pushLog(`STOPPED_OUT: ${symbol} blocked 2h, consecutive losses now ${consecutiveLosses}`, 'warn');
+}
+
+/** Returns true if the symbol is currently in the stopped-out list. */
+function isStoppedOut(symbol) {
+  const now = Date.now();
+  stoppedOutSymbols = stoppedOutSymbols.filter(s => s.expiresAt > now);
+  return stoppedOutSymbols.some(s => s.symbol === symbol);
+}
+
 // ─── HELPERS ─────────────────────────────────────────────────────────────────
 
 function safeNum(v, fallback = null) {
@@ -313,23 +482,35 @@ function computeAllocations() {
   swingState.maxWeeklyLoss   = -(capitalAmount * 0.03);
 }
 
-/** Reset day counters when ET date changes */
+/** Reset day counters when ET date changes; write-through to Supabase. */
 function resetDayIfNeeded() {
   const today = toETDate();
   if (today !== dayState.date) {
     dayState.trades = 0;
     dayState.pnl    = 0;
     dayState.date   = today;
+    consecutiveLosses = 0; // reset consecutive losses each new day
+    writeManyBotState([
+      ['day_pnl',            '0'],
+      ['day_trades',         '0'],
+      ['day_date',           today],
+      ['consecutive_losses', '0'],
+    ]);
   }
 }
 
-/** Reset swing weekly counters when ET Monday changes */
+/** Reset swing weekly counters when ET Monday changes; write-through to Supabase. */
 function resetSwingIfNeeded() {
   const monday = getMondayET();
   if (monday !== swingState.weekStart) {
     swingState.trades    = 0;
     swingState.pnl       = 0;
     swingState.weekStart = monday;
+    writeManyBotState([
+      ['swing_pnl',        '0'],
+      ['swing_trades',     '0'],
+      ['swing_week_start', monday],
+    ]);
   }
 }
 
@@ -871,11 +1052,36 @@ async function runGapScan() {
   }
 
   const isPreMarket = etMin < 9 * 60 + 30;
+
+  // Build scan universe: hardcoded base + user watchlist from Supabase
+  let universe = [...SCAN_UNIVERSE];
+  try {
+    const url  = process.env.SUPABASE_URL;
+    const hdrs = _sbHeaders();
+    if (url && hdrs) {
+      const ctrl  = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 4000);
+      let wResp;
+      try { wResp = await fetch(`${url}/rest/v1/watchlist?select=symbol`, { headers: hdrs, signal: ctrl.signal }); }
+      finally { clearTimeout(timer); }
+      if (wResp.ok) {
+        const wRows = await wResp.json();
+        if (Array.isArray(wRows)) {
+          for (const r of wRows) {
+            const s = sanitizeSymbol(r.symbol);
+            if (s && !universe.includes(s)) universe.push(s);
+          }
+        }
+      }
+    }
+  } catch {}
+  console.log(`[bot] GAP_SCAN universe: ${universe.length} symbols (${SCAN_UNIVERSE.length} base + extras)`);
+
   const BATCH = 8;
   const allResults = [];
 
-  for (let i = 0; i < SCREENER_WATCHLIST.length; i += BATCH) {
-    const batch = SCREENER_WATCHLIST.slice(i, i + BATCH);
+  for (let i = 0; i < universe.length; i += BATCH) {
+    const batch = universe.slice(i, i + BATCH);
     const settled = await Promise.allSettled(batch.map(sym => getPreMarketGap(sym)));
     for (const r of settled) {
       if (r.status === 'fulfilled' && r.value) allResults.push(r.value);
@@ -1820,6 +2026,16 @@ function resolveSignalScore(symbol, direction, inputs, mode) {
     else                                         { bd.dailyTrendAligned =  null; }
   }
 
+  // Weekly trend aligned (swing mode only): +10 if aligned, −5 if not; EMA2050 weight
+  if (mode === 'swing' && inputs.weeklyTrendAligned != null) {
+    const pts = inputs.weeklyTrendAligned
+      ? Math.round(10 * wE2050)
+      : -Math.round(5 * wE2050);
+    bd.weeklyTrendAligned = pts; score += pts;
+  } else {
+    bd.weeklyTrendAligned = null;
+  }
+
   // Session quality (day trades): prime → base +10, lunch → base −10; COMBINED weight
   {
     const base = Math.round(10 * wCOMB);
@@ -2026,6 +2242,14 @@ async function executeSignal(signal) {
   if (!BOT_LIVE_TRADING) {
     pushLog(`PAPER_MODE: live trading disabled, signal logged only — ${signal.symbol}`, 'info');
     return { executed: false, reason: 'paper_mode' };
+  }
+
+  // Market hours gate: 9:31 AM – 3:44 PM ET only
+  const etMinNow = getETMinuteOfDay();
+  if (etMinNow < 9 * 60 + 31 || etMinNow > 15 * 60 + 44) {
+    const hh = Math.floor(etMinNow / 60), mm = String(etMinNow % 60).padStart(2, '0');
+    pushLog(`EXEC_SKIP: ${signal.symbol} outside market hours (ET ${hh}:${mm})`, 'warn');
+    return { executed: false, reason: 'outside_market_hours' };
   }
 
   // Respect kill switch
@@ -2257,8 +2481,38 @@ module.exports = async function handler(req, res) {
     const body = req.body || {};
     if (typeof body.active !== 'boolean') return res.status(400).json({ error: 'active (boolean) required' });
     killSwitch = body.active;
-    if (killSwitch) { dayState.active = false; swingState.active = false; }
-    else            { dayState.active = true;  swingState.active = true;  }
+    if (killSwitch) {
+      dayState.active   = false;
+      swingState.active = false;
+      // Cancel ALL open Alpaca orders before halting
+      const alpacaKey    = process.env.ALPACA_API_KEY;
+      const alpacaSecret = process.env.ALPACA_SECRET_KEY;
+      if (alpacaKey && alpacaSecret) {
+        try {
+          const ctrl  = new AbortController();
+          const timer = setTimeout(() => ctrl.abort(), 10000);
+          let cancelResp;
+          try {
+            cancelResp = await fetch(`${ALPACA_BASE}/v2/orders`, {
+              method:  'DELETE',
+              headers: {
+                'APCA-API-KEY-ID':     alpacaKey,
+                'APCA-API-SECRET-KEY': alpacaSecret,
+                'Accept':              'application/json',
+              },
+              signal: ctrl.signal,
+            });
+          } finally { clearTimeout(timer); }
+          pushLog(`KILL_SWITCH: cancelled all open orders (HTTP ${cancelResp.status})`, 'warn');
+        } catch (err) {
+          pushLog(`KILL_SWITCH: order cancellation error — ${err.message}`, 'warn');
+        }
+      }
+    } else {
+      dayState.active   = true;
+      swingState.active = true;
+    }
+    writeBotState('kill_switch', killSwitch ? 'true' : 'false');
     console.log(`[bot] Kill switch ${killSwitch ? 'ACTIVATED' : 'deactivated'}`);
     return res.status(200).json({ killSwitch, message: killSwitch ? 'Kill switch activated — both modes halted' : 'Kill switch deactivated — trading resumed' });
   }
@@ -2271,6 +2525,7 @@ module.exports = async function handler(req, res) {
     if (!cap || cap <= 0) return res.status(400).json({ error: 'capital must be a positive number' });
     capitalAmount = cap;
     computeAllocations();
+    writeBotState('capital_amount', String(capitalAmount));
     console.log(`[bot] Capital set to $${capitalAmount}. Day alloc: $${dayState.allocation}, Swing alloc: $${swingState.allocation}`);
     return res.status(200).json({
       capital: capitalAmount,
@@ -2403,9 +2658,26 @@ module.exports = async function handler(req, res) {
   if (action === 'syncpnl') {
     if (req.method !== 'POST') return res.status(405).json({ error: 'POST required' });
     const body = req.body || {};
-    if (body.dayPnl !== undefined) { const v = safeNum(body.dayPnl); if (v !== null) dayState.pnl = v; }
+    const prevDayPnl   = dayState.pnl;
+    const prevSwingPnl = swingState.pnl;
+    if (body.dayPnl   !== undefined) { const v = safeNum(body.dayPnl);   if (v !== null) dayState.pnl   = v; }
     if (body.swingPnl !== undefined) { const v = safeNum(body.swingPnl); if (v !== null) swingState.pnl = v; }
-    return res.status(200).json({ dayPnl: dayState.pnl, swingPnl: swingState.pnl });
+
+    // Track consecutive losses: meaningful P&L decrease = loss; increase = reset
+    const delta = (dayState.pnl - prevDayPnl) + (swingState.pnl - prevSwingPnl);
+    if (delta < -10) {
+      consecutiveLosses++;
+      writeBotState('consecutive_losses', String(consecutiveLosses));
+      pushLog(`SYNC_PNL: loss Δ$${delta.toFixed(2)}, consecutive losses = ${consecutiveLosses}`, 'warn');
+    } else if (delta > 10) {
+      consecutiveLosses = 0;
+      writeBotState('consecutive_losses', '0');
+    }
+    writeManyBotState([
+      ['day_pnl',   String(dayState.pnl)],
+      ['swing_pnl', String(swingState.pnl)],
+    ]);
+    return res.status(200).json({ dayPnl: dayState.pnl, swingPnl: swingState.pnl, consecutiveLosses });
   }
 
   // ── UPDATE TRAILING STOP ────────────────────────────────────────────────────
@@ -2424,6 +2696,19 @@ module.exports = async function handler(req, res) {
     const { direction, entryPrice, atr, target1, target2 } = state;
     let { stage, stopPrice, highestPrice, lowestPrice } = state;
     let moved = false;
+
+    // Stop-hit detection: if price has breached the stop, mark symbol stopped-out
+    const stopHit = (direction === 'LONG' && currentPrice <= stopPrice) ||
+                    (direction === 'SHORT' && currentPrice >= stopPrice);
+    if (stopHit) {
+      markStoppedOut(sym);
+      trailingStops.delete(key);
+      writeBotState('trailing_stops', JSON.stringify(Object.fromEntries(trailingStops)));
+      return res.status(200).json({
+        symbol: sym, mode: md, stopHit: true, stopPrice,
+        message: `Stop breached at ${currentPrice} — symbol marked stopped-out 2h`,
+      });
+    }
 
     if (direction === 'LONG') {
       highestPrice = Math.max(highestPrice, currentPrice);
@@ -2463,6 +2748,7 @@ module.exports = async function handler(req, res) {
 
     const updatedAt = Date.now();
     trailingStops.set(key, { ...state, stage, stopPrice, highestPrice, lowestPrice, updatedAt });
+    writeBotState('trailing_stops', JSON.stringify(Object.fromEntries(trailingStops)));
     return res.status(200).json({ symbol: sym, mode: md, stage, stopPrice, target1, target2, highestPrice, lowestPrice, moved, updatedAt });
   }
 
@@ -2487,6 +2773,11 @@ module.exports = async function handler(req, res) {
     } else {
       console.log('[bot/cron] outside close window (ET minute', etMin, '— window is', CLOSE_START, '–', CLOSE_END, ')');
     }
+
+    // Heartbeat: record last successful cron execution
+    const heartbeatTs = new Date().toISOString();
+    writeBotState('last_heartbeat', heartbeatTs);
+    results.heartbeat = heartbeatTs;
 
     return res.status(200).json(results);
   }
@@ -2521,6 +2812,7 @@ module.exports = async function handler(req, res) {
     return res.status(400).json({ rejected: true, reason: 'Capital not set — call POST /api/bot?action=setcapital first' });
   }
 
+  await ensureStateLoaded(); // restore state from Supabase on cold start
   resetDayIfNeeded();
   resetSwingIfNeeded();
 
@@ -2595,6 +2887,12 @@ module.exports = async function handler(req, res) {
     : (swingState.cooldownHours * 3600 * 1000);
   const cd = checkCooldown(symbol, mode, cooldownMs);
   if (!cd.ok) return reject(`Cooldown active for ${symbol} in ${mode} mode (${cd.remaining}s remaining)`);
+
+  // 4b. STOPPED-OUT SYMBOL CHECK
+  if (isStoppedOut(symbol)) {
+    pushLog(`STOPPED_OUT_BLOCK: ${symbol} hit a stop recently — 2h re-entry block`, 'block');
+    return reject(`STOPPED_OUT: ${symbol} hit a stop-loss recently — 2-hour re-entry block active`);
+  }
 
   // 5. EXISTING POSITION CHECK
   const openPositions = Array.isArray(body.openPositions) ? body.openPositions : [];
@@ -2759,11 +3057,11 @@ module.exports = async function handler(req, res) {
     if (!dailyTrendAligned)
       console.log(`[bot] MTF: ${symbol} daily trend not aligned for ${direction} (EMA60=${dailyTrend.ema60} EMA200=${dailyTrend.ema200})`);
   }
-  // Swing: also log weekly alignment (soft only — contributes to score via dailyTrendAligned null, not separate field)
+  // Weekly trend alignment for swing mode (now wired into the scorer as a soft signal)
+  let weeklyTrendAligned = null;
   if (mode === 'swing' && weeklyTrend) {
-    const weeklyAligned = direction === 'LONG' ? weeklyTrend.bullish : weeklyTrend.bearish;
-    if (!weeklyAligned)
-      console.log(`[bot] MTF: ${symbol} weekly trend not aligned for ${direction} (EMA20=${weeklyTrend.ema20} EMA50=${weeklyTrend.ema50})`);
+    weeklyTrendAligned = direction === 'LONG' ? weeklyTrend.bullish === true : weeklyTrend.bearish === true;
+    console.log(`[bot] MTF weekly ${symbol}: aligned=${weeklyTrendAligned} (EMA20=${weeklyTrend.ema20} EMA50=${weeklyTrend.ema50})`);
   }
 
   // Sentiment: raw −10..+10 score passed through directly
@@ -2829,10 +3127,11 @@ module.exports = async function handler(req, res) {
     gapBoost,
     regimeOk,
     sectorTag,
-    nearHigh:        week52Data?.nearHigh     ?? null,
-    nearLow:         week52Data?.nearLow      ?? null,
-    pctFrom52High:   week52Data?.pctFrom52High ?? null,
-    rsiValue:        rsiValueRaw,
+    nearHigh:             week52Data?.nearHigh      ?? null,
+    nearLow:              week52Data?.nearLow       ?? null,
+    pctFrom52High:        week52Data?.pctFrom52High ?? null,
+    rsiValue:             rsiValueRaw,
+    weeklyTrendAligned,
     strategyWeights: strategyWeightsData
       ? { MACD: strategyWeightsData.MACD, RSI: strategyWeightsData.RSI,
           EMA2050: strategyWeightsData.EMA2050, EMA60200: strategyWeightsData.EMA60200,
@@ -2946,6 +3245,16 @@ module.exports = async function handler(req, res) {
   if (mode === 'day') dayState.trades++;
   else swingState.trades++;
 
+  // Persist cooldowns and trade counts to Supabase (fire-and-forget)
+  const cooldownsSnapshot = Object.fromEntries(
+    [...recentOrders.entries()].map(([k, v]) => [k, v.timestamp])
+  );
+  writeManyBotState([
+    ['cooldowns',   JSON.stringify(cooldownsSnapshot)],
+    ['day_trades',  String(dayState.trades)],
+    ['swing_trades', String(swingState.trades)],
+  ]);
+
   // ATR-based dynamic stop (falls back to fixed-pct if Polygon unavailable)
   let stopLoss, target, target2, atrValue = null;
   const atrResult = await getATRStop(symbol, mode, limitPrice, direction).catch(() => null);
@@ -2957,7 +3266,7 @@ module.exports = async function handler(req, res) {
     atrValue  = atrResult.atr;
     pushLog(`ATR_STOP: ${symbol} entry=$${limitPrice} stop=$${stopLoss} atr=${atrValue}`, 'pass');
 
-    // Register position in trailing stop tracker (stage 1)
+    // Register position in trailing stop tracker (stage 1) and persist
     const tsKey = `${mode}:${symbol}`;
     trailingStops.set(tsKey, {
       stage:        1,
@@ -2972,6 +3281,7 @@ module.exports = async function handler(req, res) {
       lowestPrice:  limitPrice,
       updatedAt:    ts,
     });
+    writeBotState('trailing_stops', JSON.stringify(Object.fromEntries(trailingStops)));
   } else {
     // Fallback: fixed-percentage stop from bucket rules
     stopLoss = direction === 'LONG'
