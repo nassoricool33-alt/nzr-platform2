@@ -215,6 +215,18 @@ const WEEK52_CACHE_TTL = 60 * 60 * 1000; // 1 hour
 let strategyWeightsCache = null;
 const STRATEGY_WEIGHTS_CACHE_TTL = 4 * 60 * 60 * 1000; // 4 hours
 
+// ─── NEWS INTELLIGENCE CACHES ────────────────────────────────────────────────
+// breaking: { ts, result: { headlines, marketPauseRecommended, highImpactCount, ... } }
+let breakingNewsBotCache = null;
+const BREAKING_NEWS_BOT_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+// georisk: { ts, result: { geoRiskScore, overallMarketRisk, recommendation, ... } }
+let geoRiskBotCache = null;
+const GEO_RISK_BOT_CACHE_TTL = 15 * 60 * 1000; // 15 minutes
+
+// flash_news_halt: expiry timestamp in ms (0 = not active)
+let flashHaltExpiry = 0;
+
 // Rate limiting
 const rateLimit = new Map();
 function checkRate(ip) {
@@ -339,6 +351,10 @@ async function loadStateFromSupabase() {
         if (Array.isArray(sos)) stoppedOutSymbols = sos;
       } catch {}
     }
+
+    // Flash news halt expiry
+    const fnh = parseInt(s.flash_news_halt ?? '0', 10);
+    if (isFinite(fnh) && fnh > Date.now()) flashHaltExpiry = fnh;
 
     // Weekly P&L and halt flag (keyed by current Monday)
     const wpKey = getWeeklyPnlKey();
@@ -1051,6 +1067,227 @@ async function getPreMarketGap(symbol) {
   }
 }
 
+// ─── NEWS INTELLIGENCE ───────────────────────────────────────────────────────
+
+/**
+ * Shared Claude helper for news analysis (bot-side copy — avoids cross-module import).
+ * Returns the parsed JSON object/array or null on any failure.
+ */
+async function callClaudeForNews(prompt, maxTokens = 3000) {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) return null;
+  try {
+    const ctrl  = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 25000);
+    let resp;
+    try {
+      resp = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type':      'application/json',
+          'x-api-key':         apiKey,
+          'anthropic-version': '2023-06-01',
+        },
+        body: JSON.stringify({
+          model:      'claude-sonnet-4-6',
+          max_tokens: maxTokens,
+          messages:   [{ role: 'user', content: prompt }],
+        }),
+        signal: ctrl.signal,
+      });
+    } finally { clearTimeout(timer); }
+    if (!resp.ok) { console.warn('[bot/news] Claude HTTP', resp.status); return null; }
+    const data = await resp.json();
+    const text = data.content?.[0]?.text ?? '';
+    const m = text.match(/\{[\s\S]*\}|\[[\s\S]*\]/);
+    return m ? JSON.parse(m[0]) : null;
+  } catch (err) {
+    console.warn('[bot/news] Claude error:', err.message);
+    return null;
+  }
+}
+
+/**
+ * Fetches and analyses the latest 50 Polygon news headlines.
+ * Returns { headlines, marketPauseRecommended, pauseReason, highImpactCount,
+ *           flashNewsItems, bullishSectors, bearishSectors, analyzedAt }
+ * Cached 5 minutes.
+ */
+async function getBreakingNewsIntelligence() {
+  if (breakingNewsBotCache && (Date.now() - breakingNewsBotCache.ts) < BREAKING_NEWS_BOT_CACHE_TTL) {
+    return breakingNewsBotCache.result;
+  }
+
+  const key = process.env.POLYGON_API_KEY;
+  const finnhubKey = process.env.FINNHUB_API_KEY;
+  if (!key) return null;
+
+  // Fetch Polygon + Finnhub in parallel
+  const [polyRes, finnRes] = await Promise.allSettled([
+    (async () => {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 8000);
+      try {
+        const r = await fetch(
+          `https://api.polygon.io/v2/reference/news?limit=50&order=desc&sort=published_utc&apiKey=${key}`,
+          { signal: ctrl.signal }
+        );
+        return r.ok ? r.json() : null;
+      } finally { clearTimeout(t); }
+    })(),
+    finnhubKey
+      ? (async () => {
+          const ctrl = new AbortController();
+          const t = setTimeout(() => ctrl.abort(), 6000);
+          try {
+            const r = await fetch(
+              `https://finnhub.io/api/v1/news?category=general&token=${finnhubKey}`,
+              { headers: { 'User-Agent': 'Mozilla/5.0' }, signal: ctrl.signal }
+            );
+            return r.ok ? r.json() : null;
+          } finally { clearTimeout(t); }
+        })()
+      : Promise.resolve(null),
+  ]);
+
+  const polyItems = ((polyRes.status === 'fulfilled' ? polyRes.value?.results : null) ?? [])
+    .map(n => ({ title: n.title, datetime: n.published_utc, source: n.publisher?.name ?? 'Polygon', tickers: n.tickers ?? [] }));
+  const finnItems = (finnRes.status === 'fulfilled' && Array.isArray(finnRes.value) ? finnRes.value : [])
+    .map(n => ({ title: n.headline, datetime: new Date(n.datetime * 1000).toISOString(), source: n.source ?? 'Finnhub', tickers: [] }));
+
+  // Combine + deduplicate
+  const seen = new Set();
+  const combined = [];
+  for (const item of [...polyItems, ...finnItems]) {
+    if (!item.title) continue;
+    const key2 = item.title.slice(0, 60).toLowerCase().replace(/[^a-z0-9]/g, '');
+    if (!seen.has(key2)) { seen.add(key2); combined.push(item); }
+  }
+  combined.sort((a, b) => new Date(b.datetime) - new Date(a.datetime));
+  const top50 = combined.slice(0, 50);
+
+  // Single Claude batch analysis
+  const fallback = top50.map(() => ({
+    impact: 'low', direction: 'neutral', affectedSectors: [], affectedSymbols: [],
+    isGeopolitical: false, isFlashNews: false, pauseTrading: false, reason: 'unavailable',
+  }));
+
+  let analyses = fallback;
+  if (top50.length > 0) {
+    const headlineList = top50.map((h, i) => `${i + 1}. ${h.title}`).join('\n');
+    const prompt = `You are a trading risk monitor. Analyze these ${top50.length} news headlines and return ONLY a valid JSON array (same order, no markdown):
+[{"impact":"high"|"medium"|"low"|"none","direction":"bullish"|"bearish"|"neutral","affectedSectors":[],"affectedSymbols":[],"isGeopolitical":bool,"isFlashNews":bool,"pauseTrading":bool,"reason":"one sentence"}]
+pauseTrading=true ONLY for: war/conflict escalation, major central bank surprise, circuit breaker trigger, sovereign default, pandemic declaration, major natural disaster.
+Headlines:\n${headlineList}`;
+    const parsed = await callClaudeForNews(prompt, 3000);
+    if (Array.isArray(parsed)) {
+      analyses = top50.map((_, i) => parsed[i] ?? fallback[i]);
+    }
+  }
+
+  const headlines = top50.map((item, i) => ({ ...item, analysis: analyses[i] ?? fallback[i] }));
+  const now10Min  = Date.now() - 10 * 60 * 1000;
+  const highImpact = headlines.filter(h => h.analysis.impact === 'high');
+  const marketPauseRecommended = headlines.some(h => h.analysis.pauseTrading);
+  const flashNewsItems = headlines.filter(h =>
+    h.analysis.impact === 'high' && h.analysis.isFlashNews && new Date(h.datetime).getTime() > now10Min
+  );
+
+  const sectorB = {}, sectorBear = {};
+  for (const h of headlines) {
+    const { direction, affectedSectors } = h.analysis;
+    if (!Array.isArray(affectedSectors)) continue;
+    for (const s of affectedSectors) {
+      if (direction === 'bullish') sectorB[s] = (sectorB[s] ?? 0) + 1;
+      if (direction === 'bearish') sectorBear[s] = (sectorBear[s] ?? 0) + 1;
+    }
+  }
+
+  const result = {
+    headlines,
+    marketPauseRecommended,
+    pauseReason: marketPauseRecommended ? (headlines.find(h => h.analysis.pauseTrading)?.title ?? 'Breaking news') : null,
+    highImpactCount: highImpact.length,
+    flashNewsItems:  flashNewsItems.map(h => ({ title: h.title, datetime: h.datetime, reason: h.analysis.reason })),
+    bullishSectors:  Object.entries(sectorB).sort((a,b)=>b[1]-a[1]).map(([s])=>s),
+    bearishSectors:  Object.entries(sectorBear).sort((a,b)=>b[1]-a[1]).map(([s])=>s),
+    analyzedAt: new Date().toISOString(),
+  };
+
+  breakingNewsBotCache = { ts: Date.now(), result };
+  console.log(`[bot/news] breaking: ${headlines.length} headlines, ${highImpact.length} high-impact, pause=${marketPauseRecommended}`);
+  return result;
+}
+
+/**
+ * Fetches 100 headlines from Polygon and asks Claude to assess geopolitical risk.
+ * Returns { geoRiskScore, tradeWarRisk, conflictRisk, centralBankRisk,
+ *           overallMarketRisk, keyThemes, recommendation, analyzedAt }
+ * Cached 15 minutes.
+ */
+async function getGeoRiskIntelligence() {
+  if (geoRiskBotCache && (Date.now() - geoRiskBotCache.ts) < GEO_RISK_BOT_CACHE_TTL) {
+    return geoRiskBotCache.result;
+  }
+
+  const key = process.env.POLYGON_API_KEY;
+  if (!key) return null;
+
+  const fallback = {
+    geoRiskScore: 30, tradeWarRisk: 20, conflictRisk: 20, centralBankRisk: 25,
+    overallMarketRisk: 'low', keyThemes: ['Markets operating normally'],
+    recommendation: 'trade normally', analyzedAt: new Date().toISOString(),
+  };
+
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 8000);
+    let resp;
+    try {
+      resp = await fetch(
+        `https://api.polygon.io/v2/reference/news?limit=100&order=desc&sort=published_utc&apiKey=${key}`,
+        { signal: ctrl.signal }
+      );
+    } finally { clearTimeout(t); }
+    if (!resp.ok) { geoRiskBotCache = { ts: Date.now(), result: fallback }; return fallback; }
+
+    const data  = await resp.json().catch(() => ({}));
+    const items = (data.results ?? []).map(n => n.title).filter(Boolean).slice(0, 100);
+    if (items.length === 0) { geoRiskBotCache = { ts: Date.now(), result: fallback }; return fallback; }
+
+    const prompt = `Analyze these ${items.length} recent financial news headlines and return ONLY valid JSON (no markdown):
+{"geoRiskScore":<0-100>,"tradeWarRisk":<0-100>,"conflictRisk":<0-100>,"centralBankRisk":<0-100>,"overallMarketRisk":"low"|"elevated"|"high"|"extreme","keyThemes":["theme1","theme2","theme3"],"recommendation":"trade normally"|"reduce size"|"avoid new entries"|"exit all positions"}
+Headlines: ${items.join(' | ')}`;
+
+    const parsed = await callClaudeForNews(prompt, 400);
+    const result = (parsed && !Array.isArray(parsed))
+      ? {
+          geoRiskScore:      Math.max(0, Math.min(100, Number(parsed.geoRiskScore) || 30)),
+          tradeWarRisk:      Math.max(0, Math.min(100, Number(parsed.tradeWarRisk) || 20)),
+          conflictRisk:      Math.max(0, Math.min(100, Number(parsed.conflictRisk) || 20)),
+          centralBankRisk:   Math.max(0, Math.min(100, Number(parsed.centralBankRisk) || 25)),
+          overallMarketRisk: ['low','elevated','high','extreme'].includes(parsed.overallMarketRisk) ? parsed.overallMarketRisk : 'low',
+          keyThemes:         Array.isArray(parsed.keyThemes) ? parsed.keyThemes.slice(0,3).map(String) : fallback.keyThemes,
+          recommendation:    ['trade normally','reduce size','avoid new entries','exit all positions'].includes(parsed.recommendation) ? parsed.recommendation : 'trade normally',
+          analyzedAt:        new Date().toISOString(),
+        }
+      : fallback;
+
+    geoRiskBotCache = { ts: Date.now(), result };
+    console.log(`[bot/news] georisk: ${result.overallMarketRisk} score=${result.geoRiskScore} rec="${result.recommendation}"`);
+    return result;
+  } catch (err) {
+    console.warn('[bot/news] georisk error:', err.message);
+    geoRiskBotCache = { ts: Date.now(), result: fallback };
+    return fallback;
+  }
+}
+
+/**
+ * Fetches Finnhub news for a specific symbol.
+ * Returns { score, catalyst, summary } — same shape as getSymbolSentiment.
+ */
+
 /**
  * Fetches RSI-14, MACD (12/26/9), EMA-60, and EMA-200 from Polygon for one symbol.
  * Returns { rsi, macdHist, ema60, ema200 } or nulls on any failure.
@@ -1124,7 +1361,106 @@ async function runFullScan() {
 
   pushLog(`SCAN_START: ${universe.length} symbols (${SCAN_UNIVERSE.length} base + ${universe.length - SCAN_UNIVERSE.length} watchlist)`, 'info');
 
-  // ── 2. Shared pre-scan data (fetched once for all symbols) ──────────────────
+  // ── 2. News intelligence — Steps A, B, D (fetched once before any symbol eval) ─
+
+  // Step A: Breaking news
+  let newsHalt         = false;
+  let newsThresholdAdj = 0;          // extra points added to entry threshold
+  let sectorPenalties  = {};         // sector ETF → negative point penalty per symbol
+  let sectorBoosts     = {};         // sector ETF → positive point boost per symbol
+  let newsPauseReason  = null;
+
+  const breakingNews = await getBreakingNewsIntelligence().catch(() => null);
+  if (breakingNews) {
+    if (breakingNews.marketPauseRecommended) {
+      newsHalt = true;
+      newsPauseReason = breakingNews.pauseReason ?? 'Breaking news';
+      pushLog(`NEWS_HALT: trading paused — ${newsPauseReason}`, 'block');
+      // Write notification to Supabase
+      const sbUrl  = process.env.SUPABASE_URL;
+      const sbHdrs = _sbHeaders();
+      if (sbUrl && sbHdrs) {
+        fetch(`${sbUrl}/rest/v1/notifications`, {
+          method: 'POST',
+          headers: { ...sbHdrs, 'Prefer': 'return=minimal' },
+          body: JSON.stringify({ message: `BREAKING NEWS HALT: ${newsPauseReason}`, type: 'alert' }),
+        }).catch(() => {});
+      }
+    }
+
+    if (breakingNews.highImpactCount >= 3) {
+      newsThresholdAdj += 10;
+      pushLog(`NEWS_THRESHOLD: ${breakingNews.highImpactCount} high-impact headlines — raising threshold +10`, 'warn');
+    }
+
+    for (const sector of (breakingNews.bearishSectors ?? [])) {
+      sectorPenalties[sector] = -15;
+      pushLog(`NEWS_SECTOR_BEARISH: ${sector} -15 pts this scan cycle`, 'warn');
+    }
+    for (const sector of (breakingNews.bullishSectors ?? [])) {
+      sectorBoosts[sector] = 10;
+      pushLog(`NEWS_SECTOR_BULLISH: ${sector} +10 pts this scan cycle`, 'info');
+    }
+
+    // Step D: Flash news detection
+    if (Array.isArray(breakingNews.flashNewsItems) && breakingNews.flashNewsItems.length > 0) {
+      const flash = breakingNews.flashNewsItems[0];
+      const haltUntil = Date.now() + 20 * 60 * 1000;
+      flashHaltExpiry = haltUntil;
+      writeBotState('flash_news_halt', String(haltUntil));
+      newsHalt = true;
+      pushLog(`FLASH_HALT: ${flash.title} — trading paused 20 minutes`, 'block');
+      const sbUrl  = process.env.SUPABASE_URL;
+      const sbHdrs = _sbHeaders();
+      if (sbUrl && sbHdrs) {
+        fetch(`${sbUrl}/rest/v1/notifications`, {
+          method: 'POST',
+          headers: { ...sbHdrs, 'Prefer': 'return=minimal' },
+          body: JSON.stringify({ message: `FLASH NEWS: ${flash.title} — trading paused 20 minutes`, type: 'alert' }),
+        }).catch(() => {});
+      }
+    } else if (flashHaltExpiry > Date.now()) {
+      newsHalt = true;
+      const minsLeft = Math.ceil((flashHaltExpiry - Date.now()) / 60000);
+      pushLog(`FLASH_HALT: active (${minsLeft} min remaining) — no new entries`, 'warn');
+    }
+  }
+
+  // Step B: Geo risk
+  let geoSizeMultiplier = 1.0;
+  const geoRisk = await getGeoRiskIntelligence().catch(() => null);
+  if (geoRisk) {
+    if (geoRisk.overallMarketRisk === 'extreme') {
+      newsHalt = true;
+      pushLog(`GEORISK_HALT: extreme geopolitical risk (score=${geoRisk.geoRiskScore}) — blocking all new entries`, 'block');
+    } else if (geoRisk.overallMarketRisk === 'high') {
+      geoSizeMultiplier = 0.5;
+      newsThresholdAdj += 15;
+      pushLog(`GEORISK_HIGH: position sizes -50%, threshold +15 (score=${geoRisk.geoRiskScore})`, 'warn');
+    } else if (geoRisk.overallMarketRisk === 'elevated') {
+      geoSizeMultiplier = 0.75;
+      newsThresholdAdj += 5;
+      pushLog(`GEORISK_ELEVATED: position sizes -25%, threshold +5 (score=${geoRisk.geoRiskScore})`, 'warn');
+    }
+  }
+
+  // Effective threshold for this scan cycle
+  const effectiveThreshold = threshold + newsThresholdAdj;
+
+  if (newsHalt) {
+    pushLog(`SCAN_END: 0 signals found, 0 trades placed — news/geo halt active`, 'warn');
+    return {
+      scannedAt: Date.now(), symbolsScanned: universe.length,
+      signalsPassed: 0, tradesPlaced: 0,
+      threshold: effectiveThreshold, regime: regime.regime,
+      durationMs: Date.now() - startMs, session,
+      newsHalt: true, newsPauseReason,
+      geoRisk: geoRisk?.overallMarketRisk ?? 'unknown',
+      signals: [],
+    };
+  }
+
+  // ── 3. Shared pre-scan data (fetched once for all symbols) ──────────────────
 
   // Open Alpaca positions — used for duplicate-position guard and exposure total
   let openPositions = [];
@@ -1160,7 +1496,7 @@ async function runFullScan() {
     pushLog(`SCAN_END: 0 signals found, 0 trades placed — session zone "${session}" blocks new entries`, 'warn');
     return {
       scannedAt: Date.now(), symbolsScanned: universe.length,
-      signalsPassed: 0, tradesPlaced: 0, threshold, regime: regime.regime,
+      signalsPassed: 0, tradesPlaced: 0, threshold: effectiveThreshold, regime: regime.regime,
       durationMs: Date.now() - startMs, session, signals: [],
     };
   }
@@ -1249,6 +1585,14 @@ async function runFullScan() {
           ? (direction === 'LONG' ? vwapData.aboveVwap : !vwapData.aboveVwap)
           : null;
 
+        // ── 3e.5 Step C: symbol-level news sentiment ──────────────────────────
+        const sentimentData = await getSymbolSentiment(symbol).catch(() => null);
+        const sentimentScore = sentimentData?.score ?? 0;
+        // Top relevant headline for news_context
+        const topHeadline = breakingNews?.headlines?.find(h =>
+          Array.isArray(h.tickers) && h.tickers.includes(symbol)
+        )?.title ?? null;
+
         // ── 3f. resolveSignalScore — composite NZR score ─────────────────────
         const macdCross    = macdHist != null ? (direction === 'LONG' ? macdHist > 0 : macdHist < 0) : null;
         const rsiNotExtreme = rsiVal  != null ? (rsiVal >= 30 && rsiVal <= 70) : null;
@@ -1256,7 +1600,7 @@ async function runFullScan() {
           ? (direction === 'LONG' ? ema60v > ema200v : ema60v < ema200v)
           : null;
 
-        const composite = resolveSignalScore(symbol, direction, {
+        let baseComposite = resolveSignalScore(symbol, direction, {
           macdCross,
           rsiNotExtreme,
           emaAlignment,
@@ -1272,7 +1616,28 @@ async function runFullScan() {
             : null,
         }, 'day');
 
-        const passed = !composite.blocked && composite.score >= threshold;
+        // Apply sector-level news boost/penalty
+        const symbolSector = sectorMap[symbol] ?? null;
+        let sectorAdj = 0;
+        if (symbolSector) {
+          sectorAdj += sectorPenalties[symbolSector] ?? 0;
+          sectorAdj += sectorBoosts[symbolSector]    ?? 0;
+        }
+        const adjustedScore = baseComposite.score + sectorAdj;
+        if (sectorAdj !== 0) {
+          pushLog(`NEWS_SECTOR_ADJ: ${symbol} (${symbolSector}) score ${baseComposite.score} → ${adjustedScore} (${sectorAdj > 0 ? '+' : ''}${sectorAdj} news adj)`, 'info');
+        }
+
+        const composite = { ...baseComposite, score: adjustedScore };
+        const passed = !composite.blocked && composite.score >= effectiveThreshold;
+
+        const newsContext = {
+          geoRiskLevel:     geoRisk?.overallMarketRisk ?? 'unknown',
+          sentimentScore,
+          sectorAdj:        sectorAdj !== 0 ? { sector: symbolSector, points: sectorAdj } : null,
+          topHeadline,
+          analyzedAt:       breakingNews?.analyzedAt ?? null,
+        };
 
         const entry = {
           symbol,
@@ -1280,13 +1645,15 @@ async function runFullScan() {
           score:    composite.score,
           passed,
           blocked:  composite.blocked,
-          reason:   composite.blockReason ?? (passed ? null : `score ${composite.score} < threshold ${threshold}`),
+          reason:   composite.blockReason ?? (passed ? null : `score ${composite.score} < effectiveThreshold ${effectiveThreshold}`),
           rsi:      rsiVal  != null ? parseFloat(rsiVal.toFixed(2))  : null,
           ema60:    ema60v  != null ? parseFloat(ema60v.toFixed(2))  : null,
           ema200:   ema200v != null ? parseFloat(ema200v.toFixed(2)) : null,
           volume:   currentVolume,
           vwap:     vwapData?.vwap ?? null,
           session,
+          sentimentScore,
+          geoRiskLevel: geoRisk?.overallMarketRisk ?? 'unknown',
           executed: false,
           orderId:  null,
         };
@@ -1303,7 +1670,8 @@ async function runFullScan() {
                                                          return { ...entry, reason: 'max_exposure' };
 
         // ── 3h. executeSignal ─────────────────────────────────────────────────
-        const positionSize = Math.min(dayState.maxPositionSize, dayState.allocation * 0.10);
+        // Apply geo risk position size reduction
+        const positionSize = Math.min(dayState.maxPositionSize, dayState.allocation * 0.10) * geoSizeMultiplier;
         const atrStop      = await getATRStop(symbol, 'day', currentPrice, direction).catch(() => null);
         const stopPrice    = atrStop?.stopPrice
           ?? roundLimitPrice(direction === 'LONG' ? currentPrice * 0.985 : currentPrice * 1.015);
@@ -1321,7 +1689,7 @@ async function runFullScan() {
           atr,
         };
 
-        const execResult = await executeSignal(signal)
+        const execResult = await executeSignal(signal, newsContext)
           .catch(e => ({ executed: false, reason: e.message }));
 
         if (execResult.executed) {
@@ -1329,7 +1697,7 @@ async function runFullScan() {
           dayState.trades++;
           writeBotState('day_trades', String(dayState.trades));
           recentOrders.set(`day:${symbol}`, { timestamp: Date.now() });
-          pushLog(`SCAN_TRADE: ${symbol} ${direction} NZR=${composite.score} @ $${currentPrice.toFixed(2)} stop=$${stopPrice.toFixed(2)}`, 'pass');
+          pushLog(`SCAN_TRADE: ${symbol} ${direction} NZR=${composite.score} @ $${currentPrice.toFixed(2)} stop=$${stopPrice.toFixed(2)} geo=${geoRisk?.overallMarketRisk ?? 'n/a'} sent=${sentimentScore}`, 'pass');
         }
 
         return { ...entry, executed: execResult.executed, orderId: execResult.orderId ?? null, reason: execResult.reason ?? null };
@@ -1344,18 +1712,21 @@ async function runFullScan() {
   }
 
   const durationMs = Date.now() - startMs;
-  pushLog(`SCAN_END: ${signalsPassed} signals found, ${tradesPlaced} trades placed — ${universe.length} symbols in ${(durationMs / 1000).toFixed(1)}s`, 'info');
+  pushLog(`SCAN_END: ${signalsPassed} signals found, ${tradesPlaced} trades placed — ${universe.length} symbols in ${(durationMs / 1000).toFixed(1)}s geo=${geoRisk?.overallMarketRisk ?? 'n/a'}`, 'info');
 
   return {
-    scannedAt:      Date.now(),
-    symbolsScanned: universe.length,
+    scannedAt:        Date.now(),
+    symbolsScanned:   universe.length,
     signalsPassed,
     tradesPlaced,
-    threshold,
-    regime:         regime.regime,
+    threshold:        effectiveThreshold,
+    regime:           regime.regime,
     session,
+    geoRisk:          geoRisk?.overallMarketRisk ?? 'unknown',
+    geoRiskScore:     geoRisk?.geoRiskScore ?? null,
+    newsThresholdAdj,
     durationMs,
-    signals:        results.sort((a, b) => (b.score ?? 0) - (a.score ?? 0)),
+    signals:          results.sort((a, b) => (b.score ?? 0) - (a.score ?? 0)),
   };
 }
 
@@ -2532,7 +2903,7 @@ function recommendDirection(ind) {
  * Writes a journal row and a notification row to Supabase after a successful
  * order placement.  Fail-silent: any error is caught and warned.
  */
-async function writeSupabaseRecord(signal, qty) {
+async function writeSupabaseRecord(signal, qty, newsContext = null) {
   const supabaseUrl = process.env.SUPABASE_URL || 'https://chfdvmtnditebmlmyihr.supabase.co';
   const supabaseKey = process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_ANON_KEY;
   if (!supabaseUrl || !supabaseKey) return;
@@ -2544,17 +2915,22 @@ async function writeSupabaseRecord(signal, qty) {
     'Prefer':        'return=minimal',
   };
 
+  const journalRow = {
+    symbol:      signal.symbol,
+    entry_price: signal.entryPrice,
+    avg_cost:    signal.entryPrice,
+    trade_date:  toETDate(),
+    pnl_pct:     0,
+    notes:       `Bot: ${signal.strategy} NZR=${signal.nrzScore}`,
+  };
+  if (newsContext) {
+    journalRow.news_context = JSON.stringify(newsContext);
+  }
+
   await Promise.allSettled([
     fetch(`${supabaseUrl}/rest/v1/journal`, {
       method: 'POST', headers,
-      body: JSON.stringify({
-        symbol:      signal.symbol,
-        entry_price: signal.entryPrice,
-        avg_cost:    signal.entryPrice,
-        trade_date:  toETDate(),
-        pnl_pct:     0,
-        notes:       `Bot: ${signal.strategy} NZR=${signal.nrzScore}`,
-      }),
+      body: JSON.stringify(journalRow),
     }),
     fetch(`${supabaseUrl}/rest/v1/notifications`, {
       method: 'POST', headers,
@@ -2573,7 +2949,7 @@ async function writeSupabaseRecord(signal, qty) {
  *                            entryPrice, stopPrice, target1, positionSize, atr }
  * @returns {{ executed: boolean, orderId?: string, qty?: number, reason?: string }}
  */
-async function executeSignal(signal) {
+async function executeSignal(signal, newsContext = null) {
   // Gate: paper-mode when BOT_LIVE_TRADING is not explicitly enabled
   if (!BOT_LIVE_TRADING) {
     pushLog(`PAPER_MODE: live trading disabled, signal logged only — ${signal.symbol}`, 'info');
@@ -2704,7 +3080,7 @@ async function executeSignal(signal) {
         ` stop=${signal.stopPrice.toFixed(2)} target=${signal.target1.toFixed(2)} id=${orderId}`,
         'pass'
       );
-      writeSupabaseRecord(signal, qty).catch(e => console.warn('[bot] Supabase write error:', e.message));
+      writeSupabaseRecord(signal, qty, newsContext).catch(e => console.warn('[bot] Supabase write error:', e.message));
       return { executed: true, orderId, qty };
     }
 
