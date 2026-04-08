@@ -21,9 +21,10 @@ const ALLOWED_ORIGINS = ['https://nzr-platform2.vercel.app', 'http://localhost:3
 // Hard-coded 30-symbol base universe for gap scanning and autonomous analysis.
 // Supabase watchlist symbols are appended at scan time.
 const SCAN_UNIVERSE = [
-  'AAPL','MSFT','NVDA','AMD','TSLA','META','GOOGL','AMZN','JPM','BAC',
-  'SPY','QQQ','SMCI','ARM','PLTR','COIN','MSTR','SOFI','RIVN','HOOD',
-  'UPST','AFRM','DKNG','RBLX','SNAP','UBER','LYFT','ABNB','SHOP','ORCL',
+  'AAPL','MSFT','NVDA','AMD','TSLA','META','GOOGL','AMZN',
+  'JPM','BAC','SPY','QQQ','SMCI','ARM','PLTR','COIN',
+  'MSTR','SOFI','HOOD','UPST','DKNG','RBLX','UBER','SHOP',
+  'ORCL','CRM','NFLX','DIS','PYPL','SQ',
 ];
 
 // ── Live-trading gate — set BOT_LIVE_TRADING=true in Vercel env to enable ────
@@ -1098,9 +1099,9 @@ async function runFullScan() {
   resetDayIfNeeded();
   resetSwingIfNeeded();
 
-  // Build scan universe: SCAN_UNIVERSE + Supabase watchlist
+  // ── 1. Build scan universe: SCAN_UNIVERSE + Supabase watchlist ──────────────
   let universe = [...SCAN_UNIVERSE];
-  const sbUrl = process.env.SUPABASE_URL;
+  const sbUrl  = process.env.SUPABASE_URL;
   const sbHdrs = _sbHeaders();
   if (sbUrl && sbHdrs) {
     try {
@@ -1121,7 +1122,11 @@ async function runFullScan() {
     } catch {}
   }
 
-  // Fetch open Alpaca positions for correlation guard and existing-position checks
+  pushLog(`SCAN_START: ${universe.length} symbols (${SCAN_UNIVERSE.length} base + ${universe.length - SCAN_UNIVERSE.length} watchlist)`, 'info');
+
+  // ── 2. Shared pre-scan data (fetched once for all symbols) ──────────────────
+
+  // Open Alpaca positions — used for duplicate-position guard and exposure total
   let openPositions = [];
   const alpacaKey    = process.env.ALPACA_API_KEY;
   const alpacaSecret = process.env.ALPACA_SECRET_KEY;
@@ -1132,117 +1137,59 @@ async function runFullScan() {
       let pr;
       try {
         pr = await fetch(`${ALPACA_BASE}/v2/positions`, {
-          headers: {
-            'APCA-API-KEY-ID': alpacaKey, 'APCA-API-SECRET-KEY': alpacaSecret, Accept: 'application/json',
-          },
+          headers: { 'APCA-API-KEY-ID': alpacaKey, 'APCA-API-SECRET-KEY': alpacaSecret, Accept: 'application/json' },
           signal: ctrl.signal,
         });
       } finally { clearTimeout(t); }
       if (pr.ok) openPositions = (await pr.json().catch(() => [])) || [];
     } catch {}
   }
-
   const totalExposure = openPositions.reduce((s, p) => s + Math.abs(parseFloat(p.market_value || 0)), 0);
 
-  // Regime check (shared for all symbols)
-  const regime = await getMarketRegime().catch(() => ({ regime: 'neutral' }));
-  const macroRisk = await getMacroRisk().catch(() => ({ hasHighImpactToday: false }));
+  // Regime + macro risk + strategy weights (shared, cached internally)
+  const [regime, macroRisk, strategyWeights] = await Promise.all([
+    getMarketRegime().catch(() => ({ regime: 'neutral' })),
+    getMacroRisk().catch(() => ({ hasHighImpactToday: false })),
+    getOptimizedStrategyWeights().catch(() => null),
+  ]);
   const threshold = macroRisk.hasHighImpactToday ? 85 : ENTRY_CONFIDENCE_THRESHOLD;
-  const strategyWeights = await getOptimizedStrategyWeights().catch(() => null);
+
+  // Session quality — evaluated once for the whole scan cycle
+  const session = getSessionQuality();
+  if (session === 'avoid' || session === 'close') {
+    pushLog(`SCAN_END: 0 signals found, 0 trades placed — session zone "${session}" blocks new entries`, 'warn');
+    return {
+      scannedAt: Date.now(), symbolsScanned: universe.length,
+      signalsPassed: 0, tradesPlaced: 0, threshold, regime: regime.regime,
+      durationMs: Date.now() - startMs, session, signals: [],
+    };
+  }
+  // session prime/lunch applies scoring bonus/penalty inside resolveSignalScore
+  const sessionPrime = session === 'prime' ? true : session === 'lunch' ? false : null;
 
   const results = [];
   let signalsPassed = 0;
   let tradesPlaced  = 0;
 
-  // Process in batches of 5
+  // ── 3. Per-symbol evaluation in batches of 5 ────────────────────────────────
   const BATCH = 5;
   for (let i = 0; i < universe.length; i += BATCH) {
     const batch = universe.slice(i, i + BATCH);
     const batchResults = await Promise.allSettled(
       batch.map(async (symbol) => {
-        // Skip if kill switch or weekly halt
-        if (killSwitch || weeklyHalt) return { symbol, skipped: true, reason: killSwitch ? 'kill_switch' : 'weekly_halt' };
+        // Hard guards — skip immediately
+        if (killSwitch || weeklyHalt)
+          return { symbol, skipped: true, reason: killSwitch ? 'kill_switch' : 'weekly_halt' };
+        if (openPositions.some(p => sanitizeSymbol(p.symbol) === symbol))
+          return { symbol, skipped: true, reason: 'position_exists' };
+        if (isStoppedOut(symbol))
+          return { symbol, skipped: true, reason: 'stopped_out' };
+        if (regime.regime === 'crisis')
+          return { symbol, skipped: true, reason: 'crisis_regime' };
 
-        // Skip if already have a position in this symbol
-        const hasPos = openPositions.some(p => sanitizeSymbol(p.symbol) === symbol);
-        if (hasPos) return { symbol, skipped: true, reason: 'position_exists' };
-
-        // Skip if stopped out
-        if (isStoppedOut(symbol)) return { symbol, skipped: true, reason: 'stopped_out' };
-
-        // Fetch indicators
-        const ind = await fetchSymbolIndicators(symbol, key).catch(() => ({ rsi: null, macdHist: null, ema60: null, ema200: null }));
-
-        // Fetch daily trend (uses internal cache)
-        const dailyTrend = await checkDailyTrend(symbol).catch(() => null);
-
-        // Derive signal inputs
-        const rsiVal    = ind.rsi;
-        const macdHist  = ind.macdHist;
-        const ema60v    = ind.ema60;
-        const ema200v   = ind.ema200;
-
-        // Direction from EMA alignment + MACD
-        let direction = null;
-        if (ema60v != null && ema200v != null) {
-          direction = ema60v > ema200v ? 'LONG' : 'SHORT';
-        } else if (macdHist != null) {
-          direction = macdHist > 0 ? 'LONG' : 'SHORT';
-        }
-        if (!direction) return { symbol, skipped: true, reason: 'no_direction' };
-
-        // Block crisis regime
-        if (regime.regime === 'crisis') return { symbol, skipped: true, reason: 'crisis_regime' };
-
-        const macdCross    = macdHist != null ? (direction === 'LONG' ? macdHist > 0 : macdHist < 0) : null;
-        const rsiNotExtreme = rsiVal != null ? (rsiVal >= 30 && rsiVal <= 70) : null;
-        const emaAlignment  = (ema60v != null && ema200v != null) ? (direction === 'LONG' ? ema60v > ema200v : ema60v < ema200v) : null;
-        const dailyTrendAligned = dailyTrend ? (direction === 'LONG' ? dailyTrend.bullish : dailyTrend.bearish) : null;
-
-        const composite = resolveSignalScore(symbol, direction, {
-          macdCross,
-          rsiNotExtreme,
-          emaAlignment,
-          dailyTrendAligned,
-          volumeConfirmed: null,   // fail-open — no live volume in scan
-          regimeOk: regime.regime !== 'crisis',
-          strategyWeights: strategyWeights ? {
-            MACD: strategyWeights.MACD, RSI: strategyWeights.RSI,
-            EMA2050: strategyWeights.EMA2050, EMA60200: strategyWeights.EMA60200,
-            COMBINED: strategyWeights.COMBINED,
-          } : null,
-        }, 'day');
-
-        const passed = !composite.blocked && composite.score >= threshold;
-
-        const entry = {
-          symbol,
-          direction,
-          score:   composite.score,
-          passed,
-          blocked: composite.blocked,
-          reason:  composite.blockReason ?? (passed ? null : `score ${composite.score} < threshold ${threshold}`),
-          rsi:     rsiVal != null ? parseFloat(rsiVal.toFixed(2)) : null,
-          ema60:   ema60v  != null ? parseFloat(ema60v.toFixed(2)) : null,
-          ema200:  ema200v != null ? parseFloat(ema200v.toFixed(2)) : null,
-          executed: false,
-          orderId:  null,
-        };
-
-        if (!passed) return entry;
-
-        // Attempt execution
-        if (!capitalAmount) return { ...entry, reason: 'capital_not_set' };
-
-        // Risk checks: day loss limit, trade count, cooldown
-        if (dayState.pnl <= dayState.maxDailyLoss) return { ...entry, reason: 'daily_loss_limit' };
-        if (dayState.trades >= dayState.maxTradesDay) return { ...entry, reason: 'max_trades' };
-        const cd = checkCooldown(symbol, 'day', dayState.cooldownMin * 60 * 1000);
-        if (!cd.ok) return { ...entry, reason: `cooldown_${cd.remaining}s` };
-        if (currentExposureExceeds(totalExposure, dayState.maxExposure)) return { ...entry, reason: 'max_exposure' };
-
-        // Fetch current price from Polygon snapshot
-        let currentPrice = null;
+        // ── 3a. Fetch snapshot (price + today's volume) ──────────────────────
+        let currentPrice   = null;
+        let currentVolume  = null;
         try {
           const ctrl = new AbortController();
           const t = setTimeout(() => ctrl.abort(), 6000);
@@ -1255,21 +1202,118 @@ async function runFullScan() {
           } finally { clearTimeout(t); }
           if (sResp.ok) {
             const sd = await sResp.json().catch(() => ({}));
-            currentPrice = sd?.ticker?.day?.c ?? sd?.ticker?.prevDay?.c ?? null;
+            const ticker = sd?.ticker;
+            currentPrice  = ticker?.day?.c  ?? ticker?.prevDay?.c  ?? null;
+            currentVolume = ticker?.day?.v  ?? null;
           }
         } catch {}
-        if (!currentPrice) return { ...entry, reason: 'price_unavailable' };
+        if (!currentPrice) return { symbol, skipped: true, reason: 'price_unavailable' };
 
+        // ── 3b. Fetch indicators (RSI, MACD, EMA60, EMA200) ─────────────────
+        const ind = await fetchSymbolIndicators(symbol, key)
+          .catch(() => ({ rsi: null, macdHist: null, ema60: null, ema200: null }));
+
+        const rsiVal  = ind.rsi;
+        const macdHist = ind.macdHist;
+        const ema60v  = ind.ema60;
+        const ema200v = ind.ema200;
+
+        // Determine trade direction: EMA alignment takes priority over MACD
+        let direction = null;
+        if (ema60v != null && ema200v != null) {
+          direction = ema60v > ema200v ? 'LONG' : 'SHORT';
+        } else if (macdHist != null) {
+          direction = macdHist > 0 ? 'LONG' : 'SHORT';
+        }
+        if (!direction) return { symbol, skipped: true, reason: 'no_direction' };
+
+        // ── 3c. checkDailyTrend — MTF confluence (uses internal cache) ───────
+        const dailyTrend = await checkDailyTrend(symbol).catch(() => null);
+        const dailyTrendAligned = dailyTrend
+          ? (direction === 'LONG' ? dailyTrend.bullish : dailyTrend.bearish)
+          : null;
+
+        // ── 3d. checkVolumeConfirmation — volume gate ─────────────────────────
+        const isMacdCrossover = macdHist != null && (
+          (direction === 'LONG'  && macdHist > 0 && ind.macdHistPrev != null && ind.macdHistPrev <= 0) ||
+          (direction === 'SHORT' && macdHist < 0 && ind.macdHistPrev != null && ind.macdHistPrev >= 0)
+        );
+        const volData = currentVolume != null
+          ? await checkVolumeConfirmation(symbol, currentVolume, 'day', isMacdCrossover).catch(() => null)
+          : null;
+        const volumeConfirmed = volData ? volData.confirmed : null; // null = fail-open
+
+        // ── 3e. calculateVWAP — day-trade VWAP alignment ─────────────────────
+        const vwapData  = await calculateVWAP(symbol).catch(() => null);
+        const aboveVwap = vwapData
+          ? (direction === 'LONG' ? vwapData.aboveVwap : !vwapData.aboveVwap)
+          : null;
+
+        // ── 3f. resolveSignalScore — composite NZR score ─────────────────────
+        const macdCross    = macdHist != null ? (direction === 'LONG' ? macdHist > 0 : macdHist < 0) : null;
+        const rsiNotExtreme = rsiVal  != null ? (rsiVal >= 30 && rsiVal <= 70) : null;
+        const emaAlignment  = (ema60v != null && ema200v != null)
+          ? (direction === 'LONG' ? ema60v > ema200v : ema60v < ema200v)
+          : null;
+
+        const composite = resolveSignalScore(symbol, direction, {
+          macdCross,
+          rsiNotExtreme,
+          emaAlignment,
+          dailyTrendAligned,
+          volumeConfirmed,
+          aboveVwap,
+          sessionPrime,
+          regimeOk: true,
+          strategyWeights: strategyWeights
+            ? { MACD: strategyWeights.MACD, RSI: strategyWeights.RSI,
+                EMA2050: strategyWeights.EMA2050, EMA60200: strategyWeights.EMA60200,
+                COMBINED: strategyWeights.COMBINED }
+            : null,
+        }, 'day');
+
+        const passed = !composite.blocked && composite.score >= threshold;
+
+        const entry = {
+          symbol,
+          direction,
+          score:    composite.score,
+          passed,
+          blocked:  composite.blocked,
+          reason:   composite.blockReason ?? (passed ? null : `score ${composite.score} < threshold ${threshold}`),
+          rsi:      rsiVal  != null ? parseFloat(rsiVal.toFixed(2))  : null,
+          ema60:    ema60v  != null ? parseFloat(ema60v.toFixed(2))  : null,
+          ema200:   ema200v != null ? parseFloat(ema200v.toFixed(2)) : null,
+          volume:   currentVolume,
+          vwap:     vwapData?.vwap ?? null,
+          session,
+          executed: false,
+          orderId:  null,
+        };
+
+        if (!passed) return entry;
+
+        // ── 3g. Pre-execution risk checks ─────────────────────────────────────
+        if (!capitalAmount)                              return { ...entry, reason: 'capital_not_set' };
+        if (dayState.pnl <= dayState.maxDailyLoss)       return { ...entry, reason: 'daily_loss_limit' };
+        if (dayState.trades >= dayState.maxTradesDay)    return { ...entry, reason: 'max_trades' };
+        const cd = checkCooldown(symbol, 'day', dayState.cooldownMin * 60 * 1000);
+        if (!cd.ok)                                      return { ...entry, reason: `cooldown_${cd.remaining}s` };
+        if (currentExposureExceeds(totalExposure, dayState.maxExposure))
+                                                         return { ...entry, reason: 'max_exposure' };
+
+        // ── 3h. executeSignal ─────────────────────────────────────────────────
         const positionSize = Math.min(dayState.maxPositionSize, dayState.allocation * 0.10);
-        const atrStop = await getATRStop(symbol, 'day', currentPrice, direction).catch(() => null);
-        const fallbackAtr = currentPrice * 0.015;
-        const stopPrice  = atrStop?.stopPrice  ?? roundLimitPrice(direction === 'LONG' ? currentPrice * 0.985 : currentPrice * 1.015);
-        const target1    = atrStop?.target1    ?? roundLimitPrice(direction === 'LONG' ? currentPrice * 1.025 : currentPrice * 0.975);
-        const atr        = atrStop?.atr        ?? fallbackAtr;
+        const atrStop      = await getATRStop(symbol, 'day', currentPrice, direction).catch(() => null);
+        const stopPrice    = atrStop?.stopPrice
+          ?? roundLimitPrice(direction === 'LONG' ? currentPrice * 0.985 : currentPrice * 1.015);
+        const target1      = atrStop?.target1
+          ?? roundLimitPrice(direction === 'LONG' ? currentPrice * 1.025 : currentPrice * 0.975);
+        const atr          = atrStop?.atr ?? currentPrice * 0.015;
 
         const signal = {
           symbol, direction, mode: 'day', strategy: 'SCAN',
-          nrzScore: composite.score,
+          nrzScore:   composite.score,
           entryPrice: parseFloat(currentPrice.toFixed(2)),
           stopPrice:  parseFloat(stopPrice.toFixed(2)),
           target1:    parseFloat(target1.toFixed(2)),
@@ -1277,14 +1321,15 @@ async function runFullScan() {
           atr,
         };
 
-        const execResult = await executeSignal(signal).catch(e => ({ executed: false, reason: e.message }));
+        const execResult = await executeSignal(signal)
+          .catch(e => ({ executed: false, reason: e.message }));
 
         if (execResult.executed) {
           tradesPlaced++;
           dayState.trades++;
           writeBotState('day_trades', String(dayState.trades));
           recentOrders.set(`day:${symbol}`, { timestamp: Date.now() });
-          pushLog(`SCAN_TRADE: ${symbol} ${direction} NZR=${composite.score} executed`, 'pass');
+          pushLog(`SCAN_TRADE: ${symbol} ${direction} NZR=${composite.score} @ $${currentPrice.toFixed(2)} stop=$${stopPrice.toFixed(2)}`, 'pass');
         }
 
         return { ...entry, executed: execResult.executed, orderId: execResult.orderId ?? null, reason: execResult.reason ?? null };
@@ -1299,7 +1344,7 @@ async function runFullScan() {
   }
 
   const durationMs = Date.now() - startMs;
-  pushLog(`FULL_SCAN: ${universe.length} symbols, ${signalsPassed} signals passed, ${tradesPlaced} trades placed (${durationMs}ms)`, 'info');
+  pushLog(`SCAN_END: ${signalsPassed} signals found, ${tradesPlaced} trades placed — ${universe.length} symbols in ${(durationMs / 1000).toFixed(1)}s`, 'info');
 
   return {
     scannedAt:      Date.now(),
@@ -1308,6 +1353,7 @@ async function runFullScan() {
     tradesPlaced,
     threshold,
     regime:         regime.regime,
+    session,
     durationMs,
     signals:        results.sort((a, b) => (b.score ?? 0) - (a.score ?? 0)),
   };
