@@ -3493,10 +3493,19 @@ module.exports = async function handler(req, res) {
         pushLog('Checking ' + symbol, 'info');
         symbolsScanned++;
 
-        const snapUrl = 'https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers/' + symbol + '?apiKey=' + process.env.POLYGON_API_KEY;
-        const snapRes = await Promise.race([
-          fetch(snapUrl).then(r => r.json()),
+        const apiKey = process.env.POLYGON_API_KEY;
+        const raceFetch = (url) => Promise.race([
+          fetch(url).then(r => r.json()),
           new Promise(resolve => setTimeout(() => resolve(null), 3000))
+        ]).catch(() => null);
+
+        // Fetch snapshot + 4 indicators in parallel
+        const [snapRes, rsiData, macdData, ema50Data, ema200Data] = await Promise.all([
+          raceFetch('https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers/' + symbol + '?apiKey=' + apiKey),
+          raceFetch('https://api.polygon.io/v1/indicators/rsi/' + symbol + '?timespan=hour&adjusted=true&window=14&series_type=close&order=desc&limit=3&apiKey=' + apiKey),
+          raceFetch('https://api.polygon.io/v1/indicators/macd/' + symbol + '?timespan=hour&adjusted=true&short_window=12&long_window=26&signal_window=9&series_type=close&order=desc&limit=3&apiKey=' + apiKey),
+          raceFetch('https://api.polygon.io/v1/indicators/ema/' + symbol + '?timespan=day&adjusted=true&window=50&series_type=close&order=desc&limit=1&apiKey=' + apiKey),
+          raceFetch('https://api.polygon.io/v1/indicators/ema/' + symbol + '?timespan=day&adjusted=true&window=200&series_type=close&order=desc&limit=1&apiKey=' + apiKey),
         ]);
 
         const price = snapRes?.ticker?.day?.c || snapRes?.ticker?.lastTrade?.p || snapRes?.ticker?.prevDay?.c || null;
@@ -3506,14 +3515,66 @@ module.exports = async function handler(req, res) {
           continue;
         }
 
-        let nrzScore = 50;
+        // Extract indicator values
+        const rsiValue  = rsiData?.results?.values?.[0]?.value || 50;
+        const macdValue = macdData?.results?.values?.[0]?.value || 0;
+        const macdSignal = macdData?.results?.values?.[0]?.signal || 0;
+        const macdHist  = macdData?.results?.values?.[0]?.histogram || 0;
+        const macdHistPrev = macdData?.results?.values?.[1]?.histogram || 0;
+        const ema50     = ema50Data?.results?.values?.[0]?.value || 0;
+        const ema200    = ema200Data?.results?.values?.[0]?.value || 0;
 
-        pushLog(symbol + ' $' + price + ' score=' + nrzScore, 'info');
-        signalResults.push({ symbol, price, nrzScore, status: nrzScore >= 70 ? 'SIGNAL' : 'FILTERED' });
+        // Calculate NZR score
+        let nrzScore = 40;
+
+        // RSI scoring
+        if (rsiValue > 50 && rsiValue < 70) nrzScore += 15;
+        if (rsiValue < 50 && rsiValue > 30) nrzScore -= 10;
+        if (rsiValue >= 70) nrzScore -= 20;
+        if (rsiValue <= 30) nrzScore += 10;
+
+        // MACD scoring
+        if (macdHist > 0 && macdHist > macdHistPrev) nrzScore += 20;
+        if (macdValue > macdSignal) nrzScore += 15;
+        if (macdHist < 0) nrzScore -= 15;
+
+        // EMA trend scoring
+        if (ema50 > 0 && ema200 > 0) {
+          if (ema50 > ema200) nrzScore += 15;
+          if (ema50 < ema200) nrzScore -= 10;
+        }
+
+        // Price vs EMA200
+        if (ema200 > 0 && price > ema200) nrzScore += 10;
+        if (ema200 > 0 && price < ema200) nrzScore -= 5;
+
+        // Cap score 0–100
+        nrzScore = Math.max(0, Math.min(100, nrzScore));
+
+        // Determine direction
+        const direction = (macdValue > macdSignal && rsiValue > 45) ? 'LONG' : 'SHORT';
+
+        pushLog(symbol + ' RSI=' + rsiValue.toFixed(1) + ' MACD_HIST=' + macdHist.toFixed(3) + ' EMA_TREND=' + (ema50 > ema200 ? 'BULL' : 'BEAR') + ' SCORE=' + nrzScore, nrzScore >= 70 ? 'pass' : 'info');
+
+        signalResults.push({ symbol, price, nrzScore, direction, rsi: rsiValue, macdHist, emaTrend: ema50 > ema200 ? 'BULL' : 'BEAR', status: nrzScore >= 70 ? 'SIGNAL' : 'FILTERED' });
 
         if (nrzScore >= 70) {
           signalsFound++;
-          pushLog('SIGNAL: ' + symbol + ' score=' + nrzScore, 'pass');
+          pushLog('SIGNAL: ' + symbol + ' ' + direction + ' score=' + nrzScore, 'pass');
+          try {
+            const execResult = await executeSignal({
+              symbol, direction, mode: 'day', strategy: 'COMBINED',
+              nrzScore, entryPrice: price, positionSize: dayAlloc * 0.10,
+            });
+            if (execResult.executed) {
+              tradesPlaced++;
+              pushLog('TRADE_EXECUTED: ' + symbol + ' ' + direction + ' @ $' + price, 'pass');
+            } else {
+              pushLog('TRADE_SKIPPED: ' + symbol + ' — ' + (execResult.reason || 'no reason'), 'info');
+            }
+          } catch(execErr) {
+            pushLog('EXEC_ERROR: ' + symbol + ' — ' + execErr.message, 'warn');
+          }
         }
 
       } catch(err) {
