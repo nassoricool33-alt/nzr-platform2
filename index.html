@@ -10,6 +10,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=Space+Mono:ital,wght@0,400;0,700;1,400&family=Inter:wght@300;400;500&display=swap" rel="stylesheet"/>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+<script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
 <style>
 /* ─── RESET & BASE ─────────────────────────────────── */
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
@@ -907,6 +908,10 @@ footer{border-top:1px solid var(--border);padding:32px 0;margin-top:80px}
 <div id="page-dashboard" class="page active">
 <div class="wrapper">
 
+  <div id="macro-warning-banner" style="display:none; background:#ff6d00; color:#fff; padding: 8px 16px; border-radius: 6px; margin-bottom: 12px; font-size: 13px; font-weight: 500;">
+    High-impact macro event today — position sizes reduced, entry threshold raised
+  </div>
+
   <div class="hero sec-fade" style="animation-delay:0ms">
     <div class="hero-badge">⬡ AI-powered trading intelligence</div>
     <h1 class="hero-title">Trade with <span class="accent">intelligence.</span></h1>
@@ -1036,12 +1041,15 @@ footer{border-top:1px solid var(--border);padding:32px 0;margin-top:80px}
       </div>
     </div>
 
-    <!-- Result panel -->
-    <div class="result-panel" id="az-result">
-      <div class="result-placeholder">
-        <div class="placeholder-glyph">⬡</div>
-        <div class="placeholder-title">Ready to analyze</div>
-        <div class="placeholder-desc">Enter any US ticker symbol, choose your timeframe, and let NZR's AI deliver a full institutional-grade analysis with entry, target, stop, and confidence score.</div>
+    <!-- Candlestick chart + result panel -->
+    <div style="display:flex;flex-direction:column;min-width:0">
+      <div id="analyzer-chart-container" style="width:100%; height:400px; margin-bottom: 20px; border-radius: 8px; overflow: hidden; display:none;"></div>
+      <div class="result-panel" id="az-result">
+        <div class="result-placeholder">
+          <div class="placeholder-glyph">⬡</div>
+          <div class="placeholder-title">Ready to analyze</div>
+          <div class="placeholder-desc">Enter any US ticker symbol, choose your timeframe, and let NZR's AI deliver a full institutional-grade analysis with entry, target, stop, and confidence score.</div>
+        </div>
       </div>
     </div>
   </div>
@@ -1084,6 +1092,18 @@ footer{border-top:1px solid var(--border);padding:32px 0;margin-top:80px}
       <div class="empty-icon">📅</div>
       <div class="empty-title">No high-impact events found for this week</div>
       <div class="empty-desc">The economic calendar is currently empty or unavailable. Check back during a live session.</div>
+    </div>
+  </div>
+
+  <!-- Sector Rotation -->
+  <div class="section-header sec-fade" style="margin-top:48px;animation-delay:500ms">
+    <div class="section-eyebrow">Momentum ranking</div>
+    <div class="section-title">Sector <span>Rotation</span></div>
+  </div>
+  <div class="stat-card sec-fade" style="padding:0;animation-delay:550ms" id="sector-rotation-panel">
+    <div class="empty-state" style="padding:36px 24px">
+      <div class="empty-icon">🔄</div>
+      <div class="empty-title">Loading sector rotation data…</div>
     </div>
   </div>
 
@@ -1270,6 +1290,16 @@ footer{border-top:1px solid var(--border);padding:32px 0;margin-top:80px}
     </div>
 
   </div><!-- /attr-results -->
+
+  <!-- Bot activity log -->
+  <div id="bot-log-panel" style="margin-top: 20px;">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+      <span style="font-size: 13px; font-weight: 500;">Bot activity log</span>
+      <button onclick="clearBotLog()" style="font-size: 11px; padding: 3px 8px;">Clear</button>
+    </div>
+    <div id="bot-log-entries" style="height: 280px; overflow-y: auto; font-family: monospace; font-size: 12px; background: #0a0a0a; color: #e0e0e0; padding: 10px; border-radius: 6px; border: 1px solid #333;"></div>
+  </div>
+
 </div>
 </div>
 
@@ -1874,6 +1904,8 @@ function showPage(id){
     pharmaLoadShorts();
   }
   if(id==='bot'&&!_attrLoaded){ loadAttribution(); }
+  if(id==='bot'){ startBotLogPolling(); }
+  if(id==='markets'){ buildSectorRotation(); }
 }
 document.querySelectorAll('.nav-tab').forEach(t=>{
   t.addEventListener('click',()=>showPage(t.dataset.page));
@@ -1965,6 +1997,7 @@ async function initAllData(){
   buildNewsWidget();
   buildEconCalendar();
   buildNewsTicker();
+  loadMacroBanner();
   setInterval(buildNewsTicker, 5 * 60 * 1000);
   setInterval(renderFearGreedLive, 5 * 60 * 1000);
 }
@@ -2918,6 +2951,7 @@ nzrScore must be 0-100. The EMA 60/200 cross is a high-weight signal: add +20 fo
 
       <div class="analysis-block"><div class="block-label">Analysis</div><div class="block-text">${r.summary}</div></div>
       <div class="analysis-block"><div class="block-label">Technical indicators</div><div class="block-text">${r.indicators}</div></div>
+      ${ind ? render52WeekBlock(ind) : ''}
       <div class="analysis-block"><div class="block-label">Best for</div><div class="block-text">${r.bestFor}</div></div>
 
       <div class="disclaimer">⚠ NZR AI analysis is for educational purposes only and does not constitute financial advice. All trading involves risk of loss. Always perform your own due diligence and use real-time data from your broker.</div>
@@ -2926,6 +2960,19 @@ nzrScore must be 0-100. The EMA 60/200 cross is a high-weight signal: add +20 fo
     // ── Direction card: call /api/bot with indicators data (non-blocking)
     if(ind){
       renderDirectionCard(ticker, ind, qd);
+    }
+
+    // ── Candlestick chart (non-blocking)
+    if(hist && hist.bars && hist.bars.length) {
+      const ema60Arr  = ind?.ema60  != null ? [{ time: hist.bars[hist.bars.length-1].time ?? new Date().toISOString().slice(0,10), value: ind.ema60  }] : [];
+      const ema200Arr = ind?.ema200 != null ? [{ time: hist.bars[hist.bars.length-1].time ?? new Date().toISOString().slice(0,10), value: ind.ema200 }] : [];
+      const entryNum  = r.entry  ? parseFloat(String(r.entry).replace(/[^0-9.]/g,''))  : null;
+      const stopNum   = r.stop   ? parseFloat(String(r.stop).replace(/[^0-9.]/g,''))   : null;
+      const targetNum = r.target ? parseFloat(String(r.target).replace(/[^0-9.]/g,'')) : null;
+      renderAnalyzerChart(ticker, hist.bars, ema60Arr, ema200Arr, entryNum, stopNum, targetNum);
+    } else {
+      const c = document.getElementById('analyzer-chart-container');
+      if(c) c.style.display = 'none';
     }
 
   }catch(err){
@@ -5012,6 +5059,275 @@ setInterval(() => {
     pharmaBotRefreshStatus();
   }
 }, 30000);
+
+// ══════════════════════════════════════════════════════════════════════════════
+// IMPROVEMENT 1 — ANALYZER CANDLESTICK CHART
+// ══════════════════════════════════════════════════════════════════════════════
+
+let _analyzerChart = null;
+
+function renderAnalyzerChart(symbol, bars, ema60Array, ema200Array, entryPrice, stopPrice, targetPrice) {
+  const container = document.getElementById('analyzer-chart-container');
+  if (!container) return;
+  if (!bars || bars.length === 0) { container.style.display = 'none'; return; }
+
+  // Clear previous instance
+  container.innerHTML = '';
+  if (_analyzerChart) { try { _analyzerChart.remove(); } catch {} _analyzerChart = null; }
+
+  const isDark = document.body.classList.contains('dark') ||
+    getComputedStyle(document.documentElement).getPropertyValue('--bg').trim().startsWith('#1') ||
+    getComputedStyle(document.documentElement).getPropertyValue('--bg').trim().startsWith('#0');
+  const bg = isDark ? '#131722' : '#FFFFFF';
+  const textColor = isDark ? '#d1d4dc' : '#333333';
+  const gridColor = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)';
+
+  try {
+    _analyzerChart = LightweightCharts.createChart(container, {
+      width:  container.clientWidth || 800,
+      height: 400,
+      layout:       { background: { color: bg }, textColor },
+      grid:         { vertLines: { color: gridColor }, horzLines: { color: gridColor } },
+      crosshair:    { mode: LightweightCharts.CrosshairMode.Normal },
+      rightPriceScale: { borderColor: gridColor },
+      timeScale:    { borderColor: gridColor, timeVisible: true },
+    });
+
+    // Candlestick series
+    const candleSeries = _analyzerChart.addCandlestickSeries({
+      upColor: '#26a69a', downColor: '#ef5350',
+      borderUpColor: '#26a69a', borderDownColor: '#ef5350',
+      wickUpColor: '#26a69a', wickDownColor: '#ef5350',
+    });
+
+    // Normalise bars: Polygon uses { t, o, h, l, c }; time must be YYYY-MM-DD or Unix seconds
+    const candleData = bars.map(b => {
+      const t = b.time ?? (b.t > 1e10 ? Math.floor(b.t / 1000) : b.t);
+      const timeVal = (typeof t === 'number' && t < 1e10)
+        ? new Date(t * 1000).toISOString().slice(0, 10)
+        : typeof t === 'string' ? t : new Date(b.t).toISOString().slice(0, 10);
+      return { time: timeVal, open: b.open ?? b.o, high: b.high ?? b.h, low: b.low ?? b.l, close: b.close ?? b.c };
+    }).filter(b => b.open != null).sort((a, b) => a.time < b.time ? -1 : 1);
+
+    candleSeries.setData(candleData);
+
+    // EMA60
+    if (ema60Array && ema60Array.length) {
+      const ema60Series = _analyzerChart.addLineSeries({ color: '#2962FF', lineWidth: 1, title: 'EMA60' });
+      ema60Series.setData(ema60Array.map(e => ({ time: e.time ?? e.timestamp?.slice(0,10), value: e.value ?? e })).filter(e => e.time && e.value != null).sort((a, b) => a.time < b.time ? -1 : 1));
+    }
+    // EMA200
+    if (ema200Array && ema200Array.length) {
+      const ema200Series = _analyzerChart.addLineSeries({ color: '#FF6D00', lineWidth: 1, title: 'EMA200' });
+      ema200Series.setData(ema200Array.map(e => ({ time: e.time ?? e.timestamp?.slice(0,10), value: e.value ?? e })).filter(e => e.time && e.value != null).sort((a, b) => a.time < b.time ? -1 : 1));
+    }
+
+    // Price lines
+    if (entryPrice != null) {
+      candleSeries.createPriceLine({ price: parseFloat(entryPrice) || 0, color: '#26a69a', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'Entry' });
+    }
+    if (stopPrice != null) {
+      candleSeries.createPriceLine({ price: parseFloat(stopPrice) || 0, color: '#ef5350', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'Stop' });
+    }
+    if (targetPrice != null) {
+      candleSeries.createPriceLine({ price: parseFloat(targetPrice) || 0, color: '#009688', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'Target' });
+    }
+
+    _analyzerChart.timeScale().fitContent();
+    container.style.display = 'block';
+  } catch (e) {
+    console.warn('[chart] render error:', e.message);
+    container.style.display = 'none';
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// IMPROVEMENT 2 — BOT ACTIVITY LOG
+// ══════════════════════════════════════════════════════════════════════════════
+
+let _botLogLastSince = null;
+let _botLogPolling   = false;
+
+function appendBotLog(message, type = 'info') {
+  const el = document.getElementById('bot-log-entries');
+  if (!el) return;
+
+  const colorMap = { pass: '#4caf50', block: '#f44336', warn: '#ff9800', info: '#9e9e9e' };
+  const color = colorMap[type] || '#9e9e9e';
+
+  const now = new Date();
+  const hh  = String(now.getHours()).padStart(2,'0');
+  const mm  = String(now.getMinutes()).padStart(2,'0');
+  const ss  = String(now.getSeconds()).padStart(2,'0');
+  const time = `${hh}:${mm}:${ss}`;
+
+  const row = document.createElement('div');
+  row.style.cssText = `color:${color};padding:1px 0;white-space:pre-wrap;word-break:break-word`;
+  row.textContent = `[${time}] ${message}`;
+  el.appendChild(row);
+
+  // Keep max 200 entries
+  while (el.children.length > 200) el.removeChild(el.firstChild);
+
+  el.scrollTop = el.scrollHeight;
+}
+
+function clearBotLog() {
+  const el = document.getElementById('bot-log-entries');
+  if (el) el.innerHTML = '';
+  _botLogLastSince = null;
+}
+
+async function pollBotLog() {
+  try {
+    let url = '/api/bot?type=log';
+    if (_botLogLastSince) url += '&since=' + encodeURIComponent(_botLogLastSince);
+    const r = await fetch(url);
+    if (!r.ok) return;
+    const d = await r.json();
+    if (Array.isArray(d.logs) && d.logs.length > 0) {
+      d.logs.forEach(e => appendBotLog(e.message, e.type));
+      _botLogLastSince = d.logs[d.logs.length - 1].timestamp;
+    }
+  } catch {}
+}
+
+function startBotLogPolling() {
+  if (_botLogPolling) return;
+  _botLogPolling = true;
+  pollBotLog();
+  setInterval(pollBotLog, 10000);
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// IMPROVEMENT 3 — MACRO WARNING BANNER
+// ══════════════════════════════════════════════════════════════════════════════
+
+async function loadMacroBanner() {
+  try {
+    const r = await fetch('/api/news?type=macro');
+    if (!r.ok) return;
+    const d = await r.json();
+    const banner = document.getElementById('macro-warning-banner');
+    if (!banner) return;
+    if (d.hasHighImpactToday) {
+      const name = d.nextEvent?.name ? ` — ${d.nextEvent.name}` : '';
+      banner.textContent = `High-impact macro event today${name} — position sizes reduced, entry threshold raised`;
+      banner.style.display = 'block';
+    } else {
+      banner.style.display = 'none';
+    }
+  } catch {}
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// IMPROVEMENT 4 — SECTOR ROTATION UI
+// ══════════════════════════════════════════════════════════════════════════════
+
+async function buildSectorRotation() {
+  const panel = document.getElementById('sector-rotation-panel');
+  if (!panel) return;
+  panel.innerHTML = '<div style="padding:20px;text-align:center;font-family:var(--font-mono);font-size:11px;color:var(--text3)">Loading sector data…</div>';
+  try {
+    const r = await fetch('/api/market?type=sectors');
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const d = await r.json();
+    const sectors = d.sectors || [];
+    if (!sectors.length) { panel.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text3)">No sector data available</div>'; return; }
+
+    const maxAbs = Math.max(...sectors.map(s => Math.abs(s.momentum)), 1);
+
+    const rows = sectors.map(s => {
+      const tagColor = s.tag === 'leading' ? '#1a7a40' : s.tag === 'lagging' ? '#b71c1c' : '#555';
+      const tagBg    = s.tag === 'leading' ? 'rgba(26,122,64,.12)' : s.tag === 'lagging' ? 'rgba(183,28,28,.12)' : 'rgba(0,0,0,.04)';
+      const tagLabel = s.tag === 'leading' ? 'IN ROTATION' : s.tag === 'lagging' ? 'AVOID / SHORT' : 'neutral';
+      const barPct   = Math.round(Math.abs(s.momentum) / maxAbs * 100);
+      const barColor = s.momentum >= 0 ? '#1a7a40' : '#b71c1c';
+      const r1dColor = (s.return1d ?? 0) >= 0 ? '#1a7a40' : '#b71c1c';
+      const r5dColor = (s.return5d ?? 0) >= 0 ? '#1a7a40' : '#b71c1c';
+      const r30dColor= (s.return30d ?? 0) >= 0 ? '#1a7a40' : '#b71c1c';
+      const sign = v => (v == null ? '--' : (v >= 0 ? '+' : '') + v.toFixed(1) + '%');
+      return `<tr style="border-bottom:1px solid var(--border)">
+        <td style="padding:10px 16px;font-family:var(--font-mono);font-size:11px;color:var(--text3)">${s.rank}</td>
+        <td style="padding:10px 16px;font-weight:600;color:var(--text)">${s.etf}</td>
+        <td style="padding:10px 16px;color:var(--text2);font-size:12px">${s.name}</td>
+        <td style="padding:10px 16px;text-align:right;font-family:var(--font-mono);font-size:11px;color:${r1dColor}">${sign(s.return1d)}</td>
+        <td style="padding:10px 16px;text-align:right;font-family:var(--font-mono);font-size:11px;color:${r5dColor}">${sign(s.return5d)}</td>
+        <td style="padding:10px 16px;text-align:right;font-family:var(--font-mono);font-size:11px;color:${r30dColor}">${sign(s.return30d)}</td>
+        <td style="padding:10px 16px;min-width:120px">
+          <div style="display:flex;align-items:center;gap:6px">
+            <div style="flex:1;height:4px;background:var(--border2);border-radius:2px;overflow:hidden">
+              <div style="width:${barPct}%;height:100%;background:${barColor};border-radius:2px"></div>
+            </div>
+            <span style="font-family:var(--font-mono);font-size:10px;color:${barColor};min-width:36px;text-align:right">${sign(s.momentum)}</span>
+          </div>
+        </td>
+        <td style="padding:10px 16px">
+          <span style="font-size:9px;font-weight:700;letter-spacing:.5px;padding:3px 7px;border-radius:4px;background:${tagBg};color:${tagColor}">${tagLabel}</span>
+        </td>
+      </tr>`;
+    }).join('');
+
+    panel.innerHTML = `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-family:var(--font-mono);font-size:11px">
+      <thead><tr style="border-bottom:1px solid var(--border)">
+        <th style="padding:10px 16px;text-align:left;color:var(--text3);font-weight:500;font-size:10px">#</th>
+        <th style="padding:10px 16px;text-align:left;color:var(--text3);font-weight:500;font-size:10px">ETF</th>
+        <th style="padding:10px 16px;text-align:left;color:var(--text3);font-weight:500;font-size:10px">Sector</th>
+        <th style="padding:10px 16px;text-align:right;color:var(--text3);font-weight:500;font-size:10px">1D</th>
+        <th style="padding:10px 16px;text-align:right;color:var(--text3);font-weight:500;font-size:10px">5D</th>
+        <th style="padding:10px 16px;text-align:right;color:var(--text3);font-weight:500;font-size:10px">30D</th>
+        <th style="padding:10px 16px;text-align:left;color:var(--text3);font-weight:500;font-size:10px">Momentum</th>
+        <th style="padding:10px 16px;text-align:left;color:var(--text3);font-weight:500;font-size:10px">Status</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>
+    <div style="padding:8px 16px;font-family:var(--font-mono);font-size:9px;color:var(--text3)">Momentum = (1D×0.2) + (5D×0.3) + (30D×0.5) · Updated ${d.updatedAt?.slice(0,16)?.replace('T',' ')} UTC</div>`;
+  } catch (e) {
+    panel.innerHTML = `<div style="padding:20px;text-align:center;color:var(--text3);font-size:12px">Sector data unavailable: ${e.message}</div>`;
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// IMPROVEMENT 5 — 52-WEEK HIGH/LOW DISPLAY IN ANALYZER
+// ══════════════════════════════════════════════════════════════════════════════
+
+function render52WeekBlock(ind) {
+  if (!ind || ind.week52High == null) return '';
+  const { week52High, week52Low, pctFrom52High, pctFrom52Low, nearHigh, nearLow } = ind;
+  const range = week52High - week52Low;
+  const currentPrice = ind.ema20 ?? week52Low; // approximate; actual close not passed here
+
+  // Position marker: calculate from low
+  let markerPct = 0;
+  if (range > 0 && ind.ema20 != null) {
+    markerPct = Math.min(100, Math.max(0, ((ind.ema20 - week52Low) / range) * 100));
+  }
+
+  const highBadge = nearHigh
+    ? `<span style="display:inline-block;background:rgba(26,122,64,.15);color:#1a7a40;border:1px solid rgba(26,122,64,.3);border-radius:4px;font-size:10px;font-weight:700;padding:2px 8px;margin-left:8px">Near 52w High — breakout watch</span>`
+    : '';
+  const lowBadge = nearLow
+    ? `<span style="display:inline-block;background:rgba(255,152,0,.12);color:#ff9800;border:1px solid rgba(255,152,0,.3);border-radius:4px;font-size:10px;font-weight:700;padding:2px 8px;margin-left:8px">Near 52w Low — mean reversion watch</span>`
+    : '';
+
+  return `<div class="analysis-block">
+    <div class="block-label">52-week range</div>
+    <div style="margin-bottom:10px">
+      <div style="position:relative;height:8px;background:var(--bg3);border-radius:4px;margin:8px 0 4px">
+        <div style="position:absolute;left:${markerPct.toFixed(1)}%;top:-3px;width:14px;height:14px;background:var(--gold);border-radius:50%;transform:translateX(-50%);border:2px solid white;box-shadow:0 0 4px rgba(0,0,0,.2)"></div>
+      </div>
+      <div style="display:flex;justify-content:space-between;font-family:var(--font-mono);font-size:10px;color:var(--text3)">
+        <span>52w Low: $${week52Low?.toFixed(2) ?? '--'}</span>
+        <span>52w High: $${week52High?.toFixed(2) ?? '--'}</span>
+      </div>
+    </div>
+    <div style="font-family:var(--font-mono);font-size:11px;color:var(--text2)">
+      ${pctFrom52High != null ? pctFrom52High.toFixed(1) + '% from 52w high' : ''}
+      ${highBadge}${lowBadge}
+    </div>
+  </div>`;
+}
+
 </script>
 </body>
 </html>

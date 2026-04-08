@@ -2,6 +2,8 @@ const https = require('https');
 
 const ALLOWED_ORIGINS = ['https://nzr-platform2.vercel.app', 'http://localhost:3000'];
 
+const HIGH_IMPACT_KEYWORDS = ['FOMC', 'Federal Reserve', 'CPI', 'Non-Farm', 'NFP', 'GDP', 'PCE', 'Unemployment', 'Interest Rate Decision', 'Jackson Hole'];
+
 // ─── SENTIMENT CACHE ─────────────────────────────────────────────────────────
 // Keyed as "sentiment:SYMBOL" → { ts, result: { score, catalyst, summary } }
 const sentimentCache = {};
@@ -82,6 +84,34 @@ function httpsGet(url, opts = {}, timeoutMs = 10000) {
   });
 }
 
+async function getHighImpactEvents(finnhubKey) {
+  const today = new Date().toISOString().slice(0, 10);
+  const to    = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10);
+  let events  = [];
+  try {
+    const data = await httpsGet(
+      `https://finnhub.io/api/v1/calendar/economic?from=${today}&to=${to}&token=${finnhubKey}`
+    );
+    const all = data?.economicCalendar || [];
+    events = all.filter(e => {
+      const isHigh    = e.impact === 'high' || (e.importance != null && e.importance >= 3);
+      const hasKw     = HIGH_IMPACT_KEYWORDS.some(kw => (e.event || '').includes(kw));
+      return isHigh || hasKw;
+    });
+  } catch (err) {
+    console.error('[news/macro] fetch error:', err.message);
+  }
+
+  const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+  const hasHighImpactToday    = events.some(e => (e.time || e.date || '').slice(0, 10) === today);
+  const hasHighImpactTomorrow = events.some(e => (e.time || e.date || '').slice(0, 10) === tomorrow);
+  const nextEvent = events.length > 0
+    ? { name: events[0].event, date: events[0].time || events[0].date, impact: events[0].impact || 'high' }
+    : null;
+
+  return { hasHighImpactToday, hasHighImpactTomorrow, events, nextEvent };
+}
+
 module.exports = async function handler(req, res) {
   const origin = req.headers.origin || '';
   if (ALLOWED_ORIGINS.includes(origin)) {
@@ -101,7 +131,12 @@ module.exports = async function handler(req, res) {
   const type = req.query.type || 'market';
 
   try {
-    if (type === 'economic') {
+    if (type === 'macro') {
+      if (!finnhubKey) return res.status(500).json({ error: 'Not configured' });
+      const result = await getHighImpactEvents(finnhubKey);
+      return res.status(200).json(result);
+
+    } else if (type === 'economic') {
       // Economic calendar still uses Finnhub — Polygon does not cover macro events
       if (!finnhubKey) return res.status(500).json({ error: 'Not configured' });
       const from = req.query.from || new Date().toISOString().split('T')[0];

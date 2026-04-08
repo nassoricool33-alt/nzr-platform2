@@ -136,21 +136,27 @@ module.exports = async function handler(req, res) {
   const common2 = `timespan=day&adjusted=true&series_type=close&order=desc&limit=2&apiKey=${key}`;
   const common3 = `timespan=day&adjusted=true&series_type=close&order=desc&limit=3&apiKey=${key}`;
 
+  const today252  = new Date().toISOString().slice(0, 10);
+  const from252   = new Date(Date.now() - 380 * 24 * 3600 * 1000).toISOString().slice(0, 10);
+  const bars252Url = `https://api.polygon.io/v2/aggs/ticker/${symbol}/range/1/day/${from252}/${today252}?adjusted=true&sort=asc&limit=252&apiKey=${key}`;
+
   try {
-    const [rsiRes, macdRes, ema20Res, ema60Res, ema200Res] = await Promise.allSettled([
+    const [rsiRes, macdRes, ema20Res, ema60Res, ema200Res, bars252Res] = await Promise.allSettled([
       httpsGet(`${base}/rsi/${symbol}?${common2}&window=14`),
       httpsGet(`${base}/macd/${symbol}?${common2}&short_window=12&long_window=26&signal_window=9`),
       httpsGet(`${base}/ema/${symbol}?${common2}&window=20`),
       httpsGet(`${base}/ema/${symbol}?${common3}&window=60`),
       httpsGet(`${base}/ema/${symbol}?${common3}&window=200`),
+      httpsGet(bars252Url),
     ]);
 
     const get = (r) => r.status === 'fulfilled' ? r.value : null;
-    const rsiData   = get(rsiRes);
-    const macdData  = get(macdRes);
-    const ema20Data = get(ema20Res);
-    const ema60Data = get(ema60Res);
-    const ema200Data= get(ema200Res);
+    const rsiData    = get(rsiRes);
+    const macdData   = get(macdRes);
+    const ema20Data  = get(ema20Res);
+    const ema60Data  = get(ema60Res);
+    const ema200Data = get(ema200Res);
+    const bars252Data= get(bars252Res);
 
     // RSI
     const rsiValues = rsiData?.results?.values;
@@ -201,6 +207,20 @@ module.exports = async function handler(req, res) {
       };
     }
 
+    // ── 52-week high/low ──────────────────────────────────────────────────────
+    let week52High = null, week52Low = null, pctFrom52High = null, pctFrom52Low = null;
+    let nearHigh = false, nearLow = false;
+    const bars252 = bars252Data?.results;
+    if (Array.isArray(bars252) && bars252.length >= 10) {
+      week52High = Math.max(...bars252.map(b => b.h));
+      week52Low  = Math.min(...bars252.map(b => b.l));
+      const currentPrice = bars252[bars252.length - 1].c;
+      pctFrom52High = parseFloat(((currentPrice - week52High) / week52High * 100).toFixed(2));
+      pctFrom52Low  = parseFloat(((currentPrice - week52Low)  / week52Low  * 100).toFixed(2));
+      nearHigh = pctFrom52High > -1;
+      nearLow  = pctFrom52Low  < 5;
+    }
+
     return res.status(200).json({
       symbol,
       rsi:          { value: rsiVal, signal: rsiSignal },
@@ -209,6 +229,12 @@ module.exports = async function handler(req, res) {
       ema60:        ema60Values?.[0]?.value  ?? null,
       ema200:       ema200Values?.[0]?.value ?? null,
       golden_cross: goldenCross,
+      week52High,
+      week52Low,
+      pctFrom52High,
+      pctFrom52Low,
+      nearHigh,
+      nearLow,
     });
   } catch (err) {
     console.error('[indicators]', symbol, err.message);

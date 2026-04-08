@@ -147,6 +147,38 @@ const ATR_CACHE_TTL = 10 * 60 * 1000; // 10 minutes
 // stage 1 = initial ATR stop, 2 = breakeven, 3 = trailing
 const trailingStops = new Map();
 
+// ─── BOT LOG BUFFER ──────────────────────────────────────────────────────────
+const botLogBuffer = [];
+const BOT_LOG_MAX  = 200;
+
+/**
+ * Appends a structured entry to the in-memory log buffer.
+ * type: 'pass' | 'block' | 'warn' | 'info'
+ */
+function pushLog(message, type = 'info') {
+  botLogBuffer.push({ timestamp: new Date().toISOString(), message, type });
+  if (botLogBuffer.length > BOT_LOG_MAX) botLogBuffer.shift();
+  console.log(`[bot/${type}] ${message}`);
+}
+
+// ─── MACRO RISK CACHE ────────────────────────────────────────────────────────
+let macroRiskCache = null;
+const MACRO_RISK_CACHE_TTL = 15 * 60 * 1000; // 15 minutes
+
+// ─── SECTOR ROTATION BOT CACHE ───────────────────────────────────────────────
+let sectorRotationBotCache = null;
+const SECTOR_ROTATION_BOT_CACHE_TTL = 30 * 60 * 1000; // 30 minutes
+
+const SECTOR_ETF_NAMES_BOT = {
+  XLK:'Technology', XLF:'Financials', XLV:'Healthcare', XLE:'Energy',
+  XLI:'Industrials', XLB:'Materials', XLU:'Utilities', XLRE:'Real Estate',
+  XLP:'Consumer Staples', XLY:'Consumer Discretionary', XLC:'Communication',
+};
+
+// ─── WEEK52 CACHE ────────────────────────────────────────────────────────────
+const week52Cache = {};
+const WEEK52_CACHE_TTL = 60 * 60 * 1000; // 1 hour
+
 // Rate limiting
 const rateLimit = new Map();
 function checkRate(ip) {
@@ -527,6 +559,139 @@ async function getSymbolSR(symbol) {
   }
 }
 
+// ─── MACRO RISK ──────────────────────────────────────────────────────────────
+
+const HIGH_IMPACT_KW = ['FOMC', 'Federal Reserve', 'CPI', 'Non-Farm', 'NFP', 'GDP', 'PCE', 'Unemployment', 'Interest Rate Decision', 'Jackson Hole'];
+
+async function getMacroRisk() {
+  if (macroRiskCache && (Date.now() - macroRiskCache.ts) < MACRO_RISK_CACHE_TTL) return macroRiskCache.result;
+
+  const finnhubKey = process.env.FINNHUB_API_KEY;
+  if (!finnhubKey) return { hasHighImpactToday: false, hasHighImpactTomorrow: false, events: [], nextEvent: null };
+
+  try {
+    const today    = toETDate();
+    const to       = toETDate(new Date(Date.now() + 7 * 86400000));
+    const ctrl     = new AbortController();
+    const timer    = setTimeout(() => ctrl.abort(), 8000);
+    let resp;
+    try { resp = await fetch(`https://finnhub.io/api/v1/calendar/economic?from=${today}&to=${to}&token=${finnhubKey}`, { signal: ctrl.signal }); }
+    finally { clearTimeout(timer); }
+
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data   = await resp.json();
+    const all    = data?.economicCalendar || [];
+    const events = all.filter(e => {
+      const hi  = e.impact === 'high' || (e.importance != null && e.importance >= 3);
+      const kw  = HIGH_IMPACT_KW.some(k => (e.event || '').includes(k));
+      return hi || kw;
+    });
+
+    const tomorrow         = toETDate(new Date(Date.now() + 86400000));
+    const hasHighImpactToday    = events.some(e => (e.time || e.date || '').slice(0, 10) === today);
+    const hasHighImpactTomorrow = events.some(e => (e.time || e.date || '').slice(0, 10) === tomorrow);
+    const nextEvent = events.length
+      ? { name: events[0].event, date: events[0].time || events[0].date, impact: 'high' }
+      : null;
+
+    const result = { hasHighImpactToday, hasHighImpactTomorrow, events, nextEvent };
+    macroRiskCache = { ts: Date.now(), result };
+    return result;
+  } catch (err) {
+    console.warn('[bot] MACRO_RISK fetch error:', err.message);
+    return { hasHighImpactToday: false, hasHighImpactTomorrow: false, events: [], nextEvent: null };
+  }
+}
+
+// ─── SECTOR ROTATION ─────────────────────────────────────────────────────────
+
+/** Returns a map of ETF → 'leading'|'lagging'|'neutral' based on 30-day momentum. */
+async function getSectorRotationBot() {
+  if (sectorRotationBotCache && (Date.now() - sectorRotationBotCache.ts) < SECTOR_ROTATION_BOT_CACHE_TTL) {
+    return sectorRotationBotCache.result;
+  }
+
+  const apiKey = process.env.POLYGON_API_KEY;
+  if (!apiKey) return null;
+
+  const today    = toETDate();
+  const fromDate = toETDate(new Date(Date.now() - 35 * 24 * 3600 * 1000));
+  const etfs     = Object.keys(SECTOR_ETF_NAMES_BOT);
+
+  const fetches = await Promise.all(etfs.map(async (etf) => {
+    try {
+      const ctrl  = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 10000);
+      let resp;
+      try { resp = await fetch(`https://api.polygon.io/v2/aggs/ticker/${etf}/range/1/day/${fromDate}/${today}?adjusted=true&sort=asc&limit=30&apiKey=${apiKey}`, { signal: ctrl.signal }); }
+      finally { clearTimeout(timer); }
+      if (!resp.ok) return null;
+      const data = await resp.json();
+      const bars = data?.results;
+      if (!Array.isArray(bars) || bars.length < 5) return null;
+      const latest  = bars[bars.length - 1];
+      const prev    = bars[bars.length - 2];
+      const bar5ago = bars.length >= 6 ? bars[bars.length - 6] : bars[0];
+      const r1d  = (latest.c - prev.c) / prev.c * 100;
+      const r5d  = (latest.c - bar5ago.c) / bar5ago.c * 100;
+      const r30d = (latest.c - bars[0].c) / bars[0].c * 100;
+      return { etf, momentum: r1d * 0.2 + r5d * 0.3 + r30d * 0.5 };
+    } catch { return null; }
+  }));
+
+  const valid = fetches.filter(Boolean).sort((a, b) => b.momentum - a.momentum);
+  const n     = valid.length;
+  const tagMap = {};
+  valid.forEach((s, i) => { tagMap[s.etf] = i < 3 ? 'leading' : i >= n - 3 ? 'lagging' : 'neutral'; });
+
+  sectorRotationBotCache = { ts: Date.now(), result: tagMap };
+  console.log(`[bot] SECTOR_ROTATION loaded: leading=${valid.slice(0,3).map(s=>s.etf).join(',')}`);
+  return tagMap;
+}
+
+// ─── 52-WEEK HIGH/LOW ────────────────────────────────────────────────────────
+
+async function getWeek52Data(symbol) {
+  const cacheKey = `w52:${symbol}`;
+  const cached   = week52Cache[cacheKey];
+  if (cached && (Date.now() - cached.ts) < WEEK52_CACHE_TTL) return cached.result;
+
+  const apiKey = process.env.POLYGON_API_KEY;
+  if (!apiKey) return null;
+
+  const today    = toETDate();
+  const fromDate = toETDate(new Date(Date.now() - 365 * 24 * 3600 * 1000));
+
+  try {
+    const ctrl  = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 10000);
+    let resp;
+    try { resp = await fetch(`https://api.polygon.io/v2/aggs/ticker/${symbol}/range/1/day/${fromDate}/${today}?adjusted=true&sort=asc&limit=252&apiKey=${apiKey}`, { signal: ctrl.signal }); }
+    finally { clearTimeout(timer); }
+    if (!resp.ok) return null;
+
+    const data = await resp.json();
+    const bars = data?.results;
+    if (!Array.isArray(bars) || bars.length < 10) return null;
+
+    const week52High   = Math.max(...bars.map(b => b.h));
+    const week52Low    = Math.min(...bars.map(b => b.l));
+    const currentPrice = bars[bars.length - 1].c;
+    const pctFrom52High = parseFloat(((currentPrice - week52High) / week52High * 100).toFixed(2));
+    const pctFrom52Low  = parseFloat(((currentPrice - week52Low)  / week52Low  * 100).toFixed(2));
+    const nearHigh = pctFrom52High > -1;
+    const nearLow  = pctFrom52Low  < 5;
+
+    const result = { week52High, week52Low, currentPrice, pctFrom52High, pctFrom52Low, nearHigh, nearLow };
+    week52Cache[cacheKey] = { ts: Date.now(), result };
+    console.log(`[bot] WEEK52 ${symbol}: high=${week52High.toFixed(2)} pctFromHigh=${pctFrom52High}%`);
+    return result;
+  } catch (err) {
+    console.warn(`[bot] WEEK52 error for ${symbol}:`, err.message);
+    return null;
+  }
+}
+
 // ─── OPTIONS FLOW SCORING ─────────────────────────────────────────────────────
 
 /**
@@ -585,7 +750,7 @@ async function getSymbolOptionsFlow(symbol) {
 
     const entry = { ts: Date.now(), score, signal, volumeRatio, oiRatio, smartMoney };
     optionsFlowBotCache[cacheKey] = entry;
-    console.log(`[bot] OPTIONS_FLOW: ${symbol} score=${score} signal=${signal} volRatio=${volumeRatio.toFixed(3)} smartMoney=${smartMoney}`);
+    pushLog(`OPTIONS_FLOW: ${symbol} score=${score} signal=${signal} volRatio=${volumeRatio.toFixed(3)} smartMoney=${smartMoney}`, score > 0 ? 'pass' : score < 0 ? 'warn' : 'info');
     return entry;
   } catch (err) {
     console.warn(`[bot] options flow error for ${symbol}:`, err.message);
@@ -1450,17 +1615,17 @@ function resolveSignalScore(symbol, direction, inputs, mode) {
   // Check these BEFORE adding any positive points so the reason is always clear.
 
   if (inputs.regimeOk === false) {
-    console.log(`[bot] SIGNAL_SCORE: ${symbol} BLOCKED — regime not ok`);
+    pushLog(`REGIME_BLOCK: ${symbol} market regime does not allow new entries`, 'block');
     return { score: 0, blocked: true, blockReason: 'REGIME_BLOCK: market regime does not allow new entries', breakdown: bd };
   }
 
   if (inputs.volumeConfirmed === false) {
-    console.log(`[bot] SIGNAL_SCORE: ${symbol} BLOCKED — volume not confirmed (hard requirement)`);
+    pushLog(`VOLUME_GATE: ${symbol} insufficient volume — hard requirement not met`, 'block');
     return { score: 0, blocked: true, blockReason: 'VOLUME_GATE: insufficient volume — hard requirement not met', breakdown: bd };
   }
 
   if (mode === 'day' && inputs.dailyTrendAligned === false) {
-    console.log(`[bot] SIGNAL_SCORE: ${symbol} BLOCKED — daily trend not aligned for day trade (hard requirement)`);
+    pushLog(`MTF_CONFLICT: ${symbol} daily trend not aligned for day trade`, 'block');
     return { score: 0, blocked: true, blockReason: 'MTF_CONFLICT: daily trend alignment is a hard requirement for day trades', breakdown: bd };
   }
 
@@ -1540,6 +1705,33 @@ function resolveSignalScore(symbol, direction, inputs, mode) {
     bd.gapBoost = inputs.gapBoost; score += inputs.gapBoost;
   } else {
     bd.gapBoost = null;
+  }
+
+  // Sector rotation: leading sector boosts longs, lagging penalises longs / boosts shorts
+  if (inputs.sectorTag != null) {
+    let sectorPts = 0;
+    if      (inputs.sectorTag === 'leading') sectorPts = direction === 'LONG' ? +10 : -5;
+    else if (inputs.sectorTag === 'lagging') sectorPts = direction === 'LONG' ? -10 : +10;
+    bd.sectorRotation = sectorPts; score += sectorPts;
+  } else {
+    bd.sectorRotation = null;
+  }
+
+  // 52-week proximity scoring
+  {
+    let w52Pts = 0;
+    const pctHigh = inputs.pctFrom52High ?? null;
+    if (inputs.nearHigh === true) {
+      w52Pts = direction === 'LONG' ? +15 : -15;
+    } else if (pctHigh !== null && pctHigh >= -5 && pctHigh <= -1) {
+      // Pulling back from high (healthy pullback zone): +8 for longs
+      if (direction === 'LONG') w52Pts = +8;
+    }
+    if (inputs.nearLow === true && inputs.rsiValue != null && inputs.rsiValue < 35 && direction === 'LONG') {
+      w52Pts += +15; // mean reversion setup
+    }
+    bd.week52 = w52Pts !== 0 ? w52Pts : (inputs.nearHigh != null ? 0 : null);
+    if (w52Pts !== 0) score += w52Pts;
   }
 
   const available = Object.values(bd).filter(v => v !== null).length;
@@ -1724,6 +1916,15 @@ module.exports = async function handler(req, res) {
     return res.status(400).json({ error: 'mode must be "day" or "swing"' });
   }
 
+  // ── BOT LOG ──────────────────────────────────────────────────────────────────
+  if (req.method === 'GET' && req.query.type === 'log') {
+    const since = req.query.since ? new Date(req.query.since).getTime() : 0;
+    const logs  = since
+      ? botLogBuffer.filter(e => new Date(e.timestamp).getTime() > since)
+      : [...botLogBuffer];
+    return res.status(200).json({ logs, count: logs.length });
+  }
+
   // ── STATUS ───────────────────────────────────────────────────────────────────
   if (action === 'status' || (req.method === 'GET' && !action)) {
     resetDayIfNeeded();
@@ -1879,8 +2080,31 @@ module.exports = async function handler(req, res) {
   // 1b. MARKET REGIME CHECK
   const regime = await getMarketRegime().catch(() => ({ regime: 'neutral', adx: null, vix: null }));
   if (regime.regime === 'crisis') {
-    console.log(`[bot] REGIME_BLOCK: crisis regime detected, VIX=${regime.vix} ADX=${regime.adx}`);
+    pushLog(`REGIME_BLOCK: crisis regime detected, VIX=${regime.vix} ADX=${regime.adx}`, 'block');
     return reject(`REGIME_BLOCK: crisis regime detected (VIX ${regime.vix}, ADX ${regime.adx}) — no new entries, manage existing positions only`);
+  }
+
+  // 1c. MACRO RISK CHECK
+  const macroRisk = await getMacroRisk().catch(() => ({ hasHighImpactToday: false, events: [], nextEvent: null }));
+  let macroEntryThreshold = ENTRY_CONFIDENCE_THRESHOLD; // default 70
+  let macroSizeMultiplier = 1.0;
+
+  if (macroRisk.hasHighImpactToday) {
+    macroEntryThreshold = 85;
+    macroSizeMultiplier = 0.5;
+    const eventName = macroRisk.nextEvent?.name || 'high-impact event';
+    pushLog(`MACRO_RISK: high impact event today — ${eventName}, raising threshold to 85, halving position sizes`, 'warn');
+  }
+
+  if (macroRisk.nextEvent?.date) {
+    const eventMs    = new Date(macroRisk.nextEvent.date).getTime();
+    const remaining  = eventMs - Date.now();
+    const twoHoursMs = 2 * 60 * 60 * 1000;
+    if (remaining >= 0 && remaining < twoHoursMs) {
+      const eventName = macroRisk.nextEvent.name;
+      pushLog(`MACRO_BLOCK: ${eventName} in <2 hours, no new entries`, 'block');
+      return reject(`MACRO_BLOCK: ${eventName} in <2 hours — no new entries`);
+    }
   }
 
   // 2. LOSS LIMITS
@@ -1918,7 +2142,7 @@ module.exports = async function handler(req, res) {
   let effectiveMaxPositionSize = bucket.maxPositionSize;
   const corrGuard = checkCorrelationGuard(symbol, openPositions);
   if (!corrGuard.allowed) {
-    console.log(`[bot] CORRELATION_GUARD: blocked ${symbol}, already ${corrGuard.sectorCount} positions in ${corrGuard.sector}`);
+    pushLog(`CORRELATION_GUARD: blocked ${symbol}, already ${corrGuard.sectorCount} positions in ${corrGuard.sector}`, 'block');
     return reject(`CORRELATION_GUARD: already ${corrGuard.sectorCount} positions open in ${corrGuard.sector} sector — max 2 per sector`);
   }
   if (corrGuard.sectorCount === 1) {
@@ -1928,6 +2152,10 @@ module.exports = async function handler(req, res) {
   if (regime.regime === 'choppy') {
     effectiveMaxPositionSize = parseFloat((effectiveMaxPositionSize * 0.75).toFixed(2));
     console.log(`[bot] REGIME: choppy market — reducing position size 25% → $${effectiveMaxPositionSize}`);
+  }
+  if (macroSizeMultiplier < 1) {
+    effectiveMaxPositionSize = parseFloat((effectiveMaxPositionSize * macroSizeMultiplier).toFixed(2));
+    console.log(`[bot] MACRO_RISK: halving position size → $${effectiveMaxPositionSize}`);
   }
 
   // 6. EXPOSURE CHECK
@@ -1978,7 +2206,7 @@ module.exports = async function handler(req, res) {
   const currentVolume   = safeNum(body.currentVolume ?? indicators?.volume);
   const isMacdCrossover = body.isMacdCrossover === true || body.signalType === 'macd';
 
-  const [sentFetch, rsFetch, flowFetch, gapFetch, dailyFetch, weeklyFetch, volFetch, vwapFetch] =
+  const [sentFetch, rsFetch, flowFetch, gapFetch, dailyFetch, weeklyFetch, volFetch, vwapFetch, sectorFetch, week52Fetch] =
     await Promise.allSettled([
       getSymbolSentiment(symbol),
       getRelativeStrength(symbol, mode),
@@ -1990,17 +2218,21 @@ module.exports = async function handler(req, res) {
         ? checkVolumeConfirmation(symbol, currentVolume, mode, isMacdCrossover)
         : Promise.resolve(null),
       mode === 'day' ? calculateVWAP(symbol)        : Promise.resolve(null),
+      getSectorRotationBot(),
+      getWeek52Data(symbol),
     ]);
 
   const getVal = r => r.status === 'fulfilled' ? r.value : null;
-  const sentimentData = getVal(sentFetch);
-  const rsData        = getVal(rsFetch);
-  const flowData      = getVal(flowFetch);
-  const gapData       = getVal(gapFetch);
-  const dailyTrend    = getVal(dailyFetch);
-  const weeklyTrend   = getVal(weeklyFetch);
-  const volData       = getVal(volFetch);
-  const vwapData      = getVal(vwapFetch);
+  const sentimentData  = getVal(sentFetch);
+  const rsData         = getVal(rsFetch);
+  const flowData       = getVal(flowFetch);
+  const gapData        = getVal(gapFetch);
+  const dailyTrend     = getVal(dailyFetch);
+  const weeklyTrend    = getVal(weeklyFetch);
+  const volData        = getVal(volFetch);
+  const vwapData       = getVal(vwapFetch);
+  const sectorTags     = getVal(sectorFetch);
+  const week52Data     = getVal(week52Fetch);
 
   if (sentFetch.status   === 'rejected') console.warn(`[bot] signal fetch: sentiment:`,    sentFetch.reason?.message);
   if (rsFetch.status     === 'rejected') console.warn(`[bot] signal fetch: RS:`,           rsFetch.reason?.message);
@@ -2098,7 +2330,7 @@ module.exports = async function handler(req, res) {
       }
       if (adj !== 0) {
         gapBoost = adj;
-        console.log(`[bot] GAP_SCAN: ${symbol} gap=${gapPct.toFixed(2)}% type=${gapType} tag=${gapTag}`);
+        pushLog(`GAP_SCAN: ${symbol} gap=${gapPct.toFixed(2)}% type=${gapType} tag=${gapTag}`, adj > 0 ? 'pass' : 'warn');
       }
     }
   }
@@ -2106,10 +2338,15 @@ module.exports = async function handler(req, res) {
   // Regime ok (crisis already hard-blocked at step 1b; this is belt-and-suspenders)
   const regimeOk = regime.regime !== 'crisis';
 
+  // Derive sector tag and 52-week data for scorer
+  const symbolSectorEtf = sectorMap[symbol];
+  const sectorTag       = (symbolSectorEtf && sectorTags) ? (sectorTags[symbolSectorEtf] ?? null) : null;
+  const rsiValueRaw     = safeNum(indicators?.rsi?.value);
+
   // 9. COMPOSITE SIGNAL SCORE
   // resolveSignalScore enforces hard requirements (volume, daily trend day mode, regime)
   // and accumulates weighted points for everything else.
-  // Entry threshold: composite.score >= 70
+  // Entry threshold: composite.score >= macroEntryThreshold (default 70, 85 on macro days)
   const composite = resolveSignalScore(symbol, direction, {
     macdCross,
     rsiNotExtreme,
@@ -2123,18 +2360,23 @@ module.exports = async function handler(req, res) {
     optionsFlowScore,
     gapBoost,
     regimeOk,
+    sectorTag,
+    nearHigh:      week52Data?.nearHigh     ?? null,
+    nearLow:       week52Data?.nearLow      ?? null,
+    pctFrom52High: week52Data?.pctFrom52High ?? null,
+    rsiValue:      rsiValueRaw,
   }, mode);
 
   if (composite.blocked) {
     return reject(composite.blockReason);
   }
 
-  if (composite.score < 70) {
+  if (composite.score < macroEntryThreshold) {
     const parts = Object.entries(composite.breakdown)
       .filter(([, v]) => v !== null)
       .map(([k, v]) => `${k}:${v > 0 ? '+' : ''}${v}`)
       .join(' ');
-    return reject(`NZR score ${composite.score} below entry threshold (70). Breakdown: [${parts}]`);
+    return reject(`NZR score ${composite.score} below entry threshold (${macroEntryThreshold}). Breakdown: [${parts}]`);
   }
 
   // Collect human-readable trade tags for the approved response
@@ -2168,7 +2410,7 @@ module.exports = async function handler(req, res) {
               limitPrice  = srPrice;
               srLevelUsed = nearest.price;
               autoSet     = true;
-              console.log(`[bot] SR_ORDER: ${symbol} limit set at ${limitPrice} based on support level at ${srLevelUsed}`);
+              pushLog(`SR_ORDER: ${symbol} limit set at ${limitPrice} based on support ${srLevelUsed}`, 'info');
             }
           }
         } else if (direction === 'SHORT' && sr.resistance.length) {
@@ -2182,7 +2424,7 @@ module.exports = async function handler(req, res) {
               limitPrice  = srPrice;
               srLevelUsed = nearest.price;
               autoSet     = true;
-              console.log(`[bot] SR_ORDER: ${symbol} limit set at ${limitPrice} based on resistance level at ${srLevelUsed}`);
+              pushLog(`SR_ORDER: ${symbol} limit set at ${limitPrice} based on resistance ${srLevelUsed}`, 'info');
             }
           }
         }
@@ -2240,7 +2482,7 @@ module.exports = async function handler(req, res) {
     target    = atrResult.target1;
     target2   = atrResult.target2;
     atrValue  = atrResult.atr;
-    console.log(`[bot] ATR_STOP: ${symbol} entry=$${limitPrice} stop=$${stopLoss} atr=${atrValue}`);
+    pushLog(`ATR_STOP: ${symbol} entry=$${limitPrice} stop=$${stopLoss} atr=${atrValue}`, 'pass');
 
     // Register position in trailing stop tracker (stage 1)
     const tsKey = `${mode}:${symbol}`;

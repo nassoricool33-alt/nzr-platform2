@@ -39,6 +39,17 @@ function httpsGet(url, opts = {}, timeoutMs = 10000) {
 let regimeCache = null;
 const REGIME_CACHE_TTL = 30 * 60 * 1000; // 30 minutes
 
+// ── Sectors cache ─────────────────────────────────────────────────────────────
+let sectorsCache = null;
+const SECTORS_CACHE_TTL = 30 * 60 * 1000; // 30 minutes
+
+const SECTOR_ETF_NAMES = {
+  XLK: 'Technology',          XLF: 'Financials',            XLV: 'Healthcare',
+  XLE: 'Energy',              XLI: 'Industrials',           XLB: 'Materials',
+  XLU: 'Utilities',           XLRE: 'Real Estate',          XLP: 'Consumer Staples',
+  XLY: 'Consumer Discretionary', XLC: 'Communication',
+};
+
 // ── ADX14 (Wilder's method) ───────────────────────────────────────────────────
 /**
  * Computes ADX14 from an ascending array of OHLC bars ({ h, l, c }).
@@ -231,6 +242,60 @@ async function handleFearGreed() {
   return { value: null, rating: 'Unavailable', error: 'Fear & Greed data unavailable' };
 }
 
+// ── type=sectors ─────────────────────────────────────────────────────────────
+async function handleSectors(key) {
+  if (sectorsCache && (Date.now() - sectorsCache.ts) < SECTORS_CACHE_TTL) {
+    console.log('[market/sectors] cache hit');
+    return sectorsCache.result;
+  }
+
+  const today    = new Date().toISOString().slice(0, 10);
+  const fromDate = new Date(Date.now() - 35 * 24 * 3600 * 1000).toISOString().slice(0, 10);
+  const etfs     = Object.keys(SECTOR_ETF_NAMES);
+
+  const fetches = await Promise.all(etfs.map(async (etf) => {
+    try {
+      const data = await httpsGet(
+        `https://api.polygon.io/v2/aggs/ticker/${etf}/range/1/day/${fromDate}/${today}?adjusted=true&sort=asc&limit=30&apiKey=${key}`
+      );
+      const bars = data?.results;
+      if (!Array.isArray(bars) || bars.length < 5) return null;
+
+      const latest  = bars[bars.length - 1];
+      const prev    = bars[bars.length - 2];
+      const bar5ago = bars.length >= 6 ? bars[bars.length - 6] : bars[0];
+      const bar30   = bars[0];
+
+      const r1d  = ((latest.c - prev.c)   / prev.c)   * 100;
+      const r5d  = ((latest.c - bar5ago.c) / bar5ago.c) * 100;
+      const r30d = ((latest.c - bar30.c)  / bar30.c)  * 100;
+      const mom  = r1d * 0.2 + r5d * 0.3 + r30d * 0.5;
+
+      return {
+        etf,
+        name:      SECTOR_ETF_NAMES[etf],
+        return1d:  parseFloat(r1d.toFixed(2)),
+        return5d:  parseFloat(r5d.toFixed(2)),
+        return30d: parseFloat(r30d.toFixed(2)),
+        momentum:  parseFloat(mom.toFixed(2)),
+      };
+    } catch { return null; }
+  }));
+
+  const valid = fetches.filter(Boolean).sort((a, b) => b.momentum - a.momentum);
+  const n     = valid.length;
+  const sectors = valid.map((s, i) => ({
+    ...s,
+    rank: i + 1,
+    tag:  i < 3 ? 'leading' : i >= n - 3 ? 'lagging' : 'neutral',
+  }));
+
+  const result = { sectors, updatedAt: new Date().toISOString() };
+  sectorsCache = { ts: Date.now(), result };
+  console.log(`[market/sectors] ${n} ETFs loaded, top=${valid.slice(0,3).map(s=>s.etf).join(',')}`);
+  return result;
+}
+
 // ── type=wstoken ──────────────────────────────────────────────────────────────
 function handleWsToken(key) {
   // Returns the Polygon API key for client-side WebSocket auth (read-only market data)
@@ -264,6 +329,7 @@ module.exports = async function handler(req, res) {
   if (type === 'feargreed') return res.status(200).json(await handleFearGreed());
   if (type === 'wstoken')   return res.status(200).json(handleWsToken(key));
   if (type === 'regime')    return res.status(200).json(await handleRegime(key));
+  if (type === 'sectors')   return res.status(200).json(await handleSectors(key));
 
-  return res.status(400).json({ error: `Unknown type: "${type}". Valid: vix, feargreed, wstoken, regime` });
+  return res.status(400).json({ error: `Unknown type: "${type}". Valid: vix, feargreed, wstoken, regime, sectors` });
 };
