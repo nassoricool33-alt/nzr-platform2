@@ -1340,9 +1340,9 @@ async function runFullScan(testMode = false) {
   const key = process.env.POLYGON_API_KEY;
   if (!key) throw new Error('POLYGON_API_KEY not configured');
 
-  await ensureStateLoaded();
-  resetDayIfNeeded();
-  resetSwingIfNeeded();
+  try { await ensureStateLoaded(); } catch(e) { pushLog('STATE_LOAD_ERROR: ' + e.message, 'warn'); }
+  try { resetDayIfNeeded(); } catch(e) { pushLog('RESET_DAY_ERROR: ' + e.message, 'warn'); }
+  try { resetSwingIfNeeded(); } catch(e) { pushLog('RESET_SWING_ERROR: ' + e.message, 'warn'); }
 
   // ── 1. Build scan universe: SCAN_UNIVERSE + Supabase watchlist ──────────────
   let universe = [...SCAN_UNIVERSE];
@@ -1375,6 +1375,19 @@ async function runFullScan(testMode = false) {
   pushLog(`PRE_SCAN: market status=checking...`, 'info');
   pushLog(`PRE_SCAN: Alpaca connected=${process.env.ALPACA_API_KEY ? 'yes' : 'NO KEY FOUND'}`, 'info');
   if (testMode) pushLog('SCAN_TEST_MODE: market closed, signals evaluated but no orders placed', 'warn');
+
+  // ── Pre-scan shared data: regime, macro risk, strategy weights ────────────
+  // Must be computed BEFORE effectiveThreshold is derived below.
+  let regime = { regime: 'neutral' };
+  try { regime = await getMarketRegime(); } catch(e) { pushLog('REGIME_ERROR: ' + e.message, 'warn'); }
+
+  let macroRisk = { hasHighImpactToday: false };
+  try { macroRisk = await getMacroRisk(); } catch(e) { pushLog('MACRO_ERROR: ' + e.message, 'warn'); }
+
+  let strategyWeights = null;
+  try { strategyWeights = await getOptimizedStrategyWeights(); } catch(e) { pushLog('STRATEGY_WEIGHTS_ERROR: ' + e.message, 'warn'); }
+
+  const threshold = macroRisk.hasHighImpactToday ? 85 : ENTRY_CONFIDENCE_THRESHOLD;
 
   // ── 2. News intelligence — Steps A, B, D (fetched once before any symbol eval) ─
 
@@ -1497,16 +1510,9 @@ async function runFullScan(testMode = false) {
   }
   const totalExposure = openPositions.reduce((s, p) => s + Math.abs(parseFloat(p.market_value || 0)), 0);
 
-  // Regime + macro risk + strategy weights (shared, cached internally)
-  const [regime, macroRisk, strategyWeights] = await Promise.all([
-    getMarketRegime().catch(() => ({ regime: 'neutral' })),
-    getMacroRisk().catch(() => ({ hasHighImpactToday: false })),
-    getOptimizedStrategyWeights().catch(() => null),
-  ]);
-  const threshold = macroRisk.hasHighImpactToday ? 85 : ENTRY_CONFIDENCE_THRESHOLD;
-
   // Session quality — evaluated once for the whole scan cycle
-  const session = getSessionQuality();
+  let session = 'normal';
+  try { session = getSessionQuality(); } catch(e) { pushLog('SESSION_ERROR: ' + e.message, 'warn'); }
   if (session === 'avoid' || session === 'close') {
     pushLog(`SCAN_END: 0 signals found, 0 trades placed — session zone "${session}" blocks new entries`, 'warn');
     return {
@@ -3808,6 +3814,9 @@ module.exports = async function handler(req, res) {
   // Responds immediately to avoid 504; actual scan runs async and writes
   // result to Supabase bot_state('last_scan_result'). Poll with ?type=scanresult.
   if (req.method === 'GET' && (req.query.type === 'scan' || action === 'scan')) {
+    const startTime = Date.now();
+    try {
+    pushLog('SCAN_HANDLER_ENTERED', 'info');
     // Market hours gate: before 9 AM or at/after 4 PM ET → test mode (no orders)
     const etMinScan  = getETMinuteOfDay();
     const etHourScan = Math.floor(etMinScan / 60);
@@ -3816,6 +3825,10 @@ module.exports = async function handler(req, res) {
       pushLog('SCAN_TEST_MODE: market closed, signals evaluated but no orders placed', 'warn');
     }
     pushLog(`SCAN_ASYNC_START: ${SCAN_UNIVERSE.length} symbols queued (testMode=${testMode})`, 'info');
+
+    let signalsFound = 0;
+    let tradesPlaced = 0;
+    let signalResults = [];
 
     // Defer scan to next event loop tick so the response above flushes first
     setImmediate(() => runFullScan(testMode).then(scanResult => {
@@ -3826,6 +3839,7 @@ module.exports = async function handler(req, res) {
       // runFullScan already calls writeBotState('last_scan_result', ...) at its end
     }).catch(err => {
       console.error('[bot/scan/async]', err.message);
+      pushLog('SCAN_ASYNC_ERROR: ' + err.message, 'warn');
       writeBotState('last_scan_result', JSON.stringify({
         success: false, error: err.message, scannedAt: Date.now(),
         symbolsScanned: SCAN_UNIVERSE.length, signalsPassed: 0, tradesPlaced: 0,
@@ -3842,6 +3856,17 @@ module.exports = async function handler(req, res) {
       testMode,
       pollUrl:        '/api/bot?type=scanresult',
     });
+    } catch(err) {
+      console.error('SCAN_CRASH:', err);
+      return res.status(200).json({
+        success: false,
+        error: err.message,
+        symbolsScanned: 0,
+        signalsPassed: 0,
+        tradesPlaced: 0,
+        duration: `${Date.now() - startTime}ms`
+      });
+    }
   }
 
   // ── ORDER VALIDATION ─────────────────────────────────────────────────────────

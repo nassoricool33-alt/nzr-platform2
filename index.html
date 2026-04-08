@@ -6050,8 +6050,7 @@ async function runManualScan() {
   try {
     // ── Step 1: Submit scan request (returns immediately) ─────────────────
     const startResp = await fetch('/api/bot?type=scan&manual=true');
-    if (!startResp.ok) throw new Error(`HTTP ${startResp.status}`);
-    const startData = await startResp.json();
+    const startData = await startResp.json().catch(() => ({ success: false, error: 'Invalid response', symbolsScanned: 0, signalsPassed: 0, tradesPlaced: 0 }));
     if (!startData.success) throw new Error(startData.error || 'Scan failed to start');
 
     if (statusTxt) statusTxt.textContent = msgs[0];
