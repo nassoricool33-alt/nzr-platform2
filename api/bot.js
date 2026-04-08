@@ -3437,7 +3437,9 @@ module.exports = async function handler(req, res) {
   const ip = req.headers['x-forwarded-for'] || req.socket?.remoteAddress || 'unknown';
   if (!checkRate(ip)) return res.status(429).json({ error: 'Rate limit reached' });
 
+  const type   = (req.query.type || '').toLowerCase();
   const action = (req.query.action || req.body?.action || '').toLowerCase();
+  console.log('[BOT] type=' + (type || 'none') + ' action=' + (action || 'none'));
 
   // ── LOAD CAPITAL FROM SUPABASE ON EVERY REQUEST ─────────────────────────────
   if (!capitalAmount || capitalAmount <= 0) {
@@ -3452,6 +3454,173 @@ module.exports = async function handler(req, res) {
       console.log('[BOT] Capital load failed:', e.message);
     }
   }
+
+  // ══════════════════════════════════════════════════════════════════════════════
+  // TYPE-BASED ROUTES — checked FIRST, before any action or status catch-all
+  // ══════════════════════════════════════════════════════════════════════════════
+
+  // ── FULL SCAN (synchronous — 8s budget, responds with results) ────────────
+  if (type === 'scan') {
+    console.log('[BOT] SCAN route matched');
+    const startTime = Date.now();
+    const capital = capitalAmount && capitalAmount > 0 ? capitalAmount : await getCapital();
+    if (!capitalAmount || capitalAmount <= 0) {
+      capitalAmount = capital;
+      computeAllocations();
+    }
+    const dayAlloc = capital * 0.4;
+    const swingAlloc = capital * 0.6;
+
+    pushLog('SCAN_STARTED: capital=$' + capital + ' day=$' + dayAlloc + ' swing=$' + swingAlloc, 'info');
+
+    const scanList = [
+      'AAPL','MSFT','NVDA','AMD','TSLA',
+      'META','GOOGL','AMZN','SPY','QQQ',
+      'PLTR','COIN','NFLX','JPM','ARM'
+    ];
+
+    let symbolsScanned = 0;
+    let signalsFound = 0;
+    let tradesPlaced = 0;
+    let signalResults = [];
+
+    for (const symbol of scanList) {
+      if (Date.now() - startTime > 7500) {
+        pushLog('TIME_BUDGET: stopping early at ' + symbol, 'warn');
+        break;
+      }
+      try {
+        pushLog('Checking ' + symbol, 'info');
+        symbolsScanned++;
+
+        const snapUrl = 'https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers/' + symbol + '?apiKey=' + process.env.POLYGON_API_KEY;
+        const snapRes = await Promise.race([
+          fetch(snapUrl).then(r => r.json()),
+          new Promise(resolve => setTimeout(() => resolve(null), 3000))
+        ]);
+
+        const price = snapRes?.ticker?.day?.c || snapRes?.ticker?.lastTrade?.p || snapRes?.ticker?.prevDay?.c || null;
+
+        if (!price) {
+          pushLog('SKIP ' + symbol + ': no price', 'warn');
+          continue;
+        }
+
+        let nrzScore = 50;
+
+        pushLog(symbol + ' $' + price + ' score=' + nrzScore, 'info');
+        signalResults.push({ symbol, price, nrzScore, status: nrzScore >= 70 ? 'SIGNAL' : 'FILTERED' });
+
+        if (nrzScore >= 70) {
+          signalsFound++;
+          pushLog('SIGNAL: ' + symbol + ' score=' + nrzScore, 'pass');
+        }
+
+      } catch(err) {
+        pushLog('ERROR ' + symbol + ': ' + err.message, 'warn');
+      }
+    }
+
+    const duration = Date.now() - startTime;
+    pushLog('SCAN_DONE: ' + symbolsScanned + ' scanned, ' + signalsFound + ' signals, ' + duration + 'ms', 'info');
+
+    // Save result to Supabase for scanresult poll
+    try {
+      writeBotState('last_scan_result', JSON.stringify({
+        success: true, symbolsScanned, signalsPassed: signalsFound, tradesPlaced,
+        duration, results: signalResults, timestamp: new Date().toISOString()
+      }));
+    } catch(_) {}
+
+    return res.status(200).json({
+      success: true,
+      symbolsScanned,
+      signalsPassed: signalsFound,
+      tradesPlaced,
+      duration: duration + 'ms',
+      results: signalResults
+    });
+  }
+
+  // ── SCAN RESULT POLL ─────────────────────────────────────────────────────
+  if (type === 'scanresult') {
+    console.log('[BOT] SCANRESULT route matched');
+    try {
+      const sbUrl  = process.env.SUPABASE_URL;
+      const sbHdrs = _sbHeaders();
+      if (!sbUrl || !sbHdrs) return res.status(200).json({ symbolsScanned: 0, signalsFound: 0, tradesPlaced: 0, message: 'Supabase not configured' });
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 5000);
+      let sr;
+      try {
+        sr = await fetch(`${sbUrl}/rest/v1/bot_state?key=eq.last_scan_result&select=value`, {
+          headers: sbHdrs, signal: ctrl.signal,
+        });
+      } finally { clearTimeout(t); }
+      if (!sr.ok) return res.status(200).json({ symbolsScanned: 0, signalsFound: 0, tradesPlaced: 0, message: 'State read failed' });
+      const rows = await sr.json().catch(() => []);
+      if (!Array.isArray(rows) || !rows.length) return res.status(200).json({ symbolsScanned: 0, signalsFound: 0, tradesPlaced: 0, message: 'No scan run yet' });
+      const result = JSON.parse(rows[0].value);
+      return res.status(200).json(result);
+    } catch(e) {
+      return res.status(200).json({ error: e.message, symbolsScanned: 0 });
+    }
+  }
+
+  // ── BOT LOG ──────────────────────────────────────────────────────────────────
+  if (type === 'log') {
+    console.log('[BOT] LOG route matched');
+    const since = req.query.since ? new Date(req.query.since).getTime() : 0;
+    const logs  = since
+      ? botLogBuffer.filter(e => new Date(e.timestamp).getTime() > since)
+      : [...botLogBuffer];
+    return res.status(200).json({ logs, count: logs.length });
+  }
+
+  // ── SET CAPITAL (GET) ──────────────────────────────────────────────────────
+  if (type === 'setcapital') {
+    console.log('[BOT] SETCAPITAL route matched');
+    const amount = parseFloat(req.query.amount);
+    if (!amount || amount <= 0) return res.json({ error: 'invalid amount' });
+    capitalAmount = amount;
+    computeAllocations();
+    const sbUrl  = process.env.SUPABASE_URL;
+    const sbHdrs = _sbHeaders();
+    if (sbUrl && sbHdrs) {
+      try {
+        await fetch(`${sbUrl}/rest/v1/bot_state`, {
+          method: 'POST',
+          headers: { ...sbHdrs, 'Prefer': 'resolution=merge-duplicates' },
+          body: JSON.stringify({ key: 'capital_amount', value: String(amount), updated_at: new Date().toISOString() }),
+        });
+      } catch(_) {}
+    }
+    pushLog('CAPITAL_SET: $' + amount, 'info');
+    return res.json({ success: true, capital: amount });
+  }
+
+  // ── STRATEGY WEIGHTS ─────────────────────────────────────────────────────────
+  if (type === 'weights') {
+    console.log('[BOT] WEIGHTS route matched');
+    const DEFAULT_WEIGHTS = {
+      MACD: 0.2, RSI: 0.2, EMA2050: 0.2, EMA60200: 0.2, COMBINED: 0.2,
+      perfStats: {}, computedAt: null, tradeCount: 0,
+    };
+    try {
+      const weights = await Promise.race([
+        getOptimizedStrategyWeights(),
+        new Promise(resolve => setTimeout(() => resolve(DEFAULT_WEIGHTS), 5000)),
+      ]);
+      return res.status(200).json(weights);
+    } catch (err) {
+      console.error('[bot/weights]', err.message);
+      return res.status(200).json(DEFAULT_WEIGHTS);
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════════
+  // ACTION-BASED ROUTES — checked after type routes
+  // ══════════════════════════════════════════════════════════════════════════════
 
   // ── KILL SWITCH ──────────────────────────────────────────────────────────────
   if (action === 'killswitch') {
@@ -3510,28 +3679,6 @@ module.exports = async function handler(req, res) {
       day:   { allocation: dayState.allocation,   maxPositionSize: dayState.maxPositionSize,   maxExposure: dayState.maxExposure,   maxDailyLoss: dayState.maxDailyLoss },
       swing: { allocation: swingState.allocation, maxPositionSize: swingState.maxPositionSize, maxExposure: swingState.maxExposure, maxWeeklyLoss: swingState.maxWeeklyLoss },
     });
-  }
-
-  // ── SET CAPITAL (GET — for frontend convenience) ────────────────────────────
-  if (req.query.type === 'setcapital') {
-    const amount = parseFloat(req.query.amount);
-    if (!amount || amount <= 0) return res.json({ error: 'invalid amount' });
-    capitalAmount = amount;
-    computeAllocations();
-    // Upsert to Supabase via raw fetch (no require)
-    const sbUrl  = process.env.SUPABASE_URL;
-    const sbHdrs = _sbHeaders();
-    if (sbUrl && sbHdrs) {
-      try {
-        await fetch(`${sbUrl}/rest/v1/bot_state`, {
-          method: 'POST',
-          headers: { ...sbHdrs, 'Prefer': 'resolution=merge-duplicates' },
-          body: JSON.stringify({ key: 'capital_amount', value: String(amount), updated_at: new Date().toISOString() }),
-        });
-      } catch(_) {}
-    }
-    pushLog('CAPITAL_SET: $' + amount, 'info');
-    return res.json({ success: true, capital: amount });
   }
 
   // ── SET RULES ────────────────────────────────────────────────────────────────
@@ -3601,35 +3748,9 @@ module.exports = async function handler(req, res) {
     return res.status(400).json({ error: 'mode must be "day" or "swing"' });
   }
 
-  // ── BOT LOG ──────────────────────────────────────────────────────────────────
-  if (req.method === 'GET' && req.query.type === 'log') {
-    const since = req.query.since ? new Date(req.query.since).getTime() : 0;
-    const logs  = since
-      ? botLogBuffer.filter(e => new Date(e.timestamp).getTime() > since)
-      : [...botLogBuffer];
-    return res.status(200).json({ logs, count: logs.length });
-  }
-
-  // ── STRATEGY WEIGHTS ─────────────────────────────────────────────────────────
-  if (req.method === 'GET' && req.query.type === 'weights') {
-    const DEFAULT_WEIGHTS = {
-      MACD: 0.2, RSI: 0.2, EMA2050: 0.2, EMA60200: 0.2, COMBINED: 0.2,
-      perfStats: {}, computedAt: null, tradeCount: 0,
-    };
-    try {
-      const weights = await Promise.race([
-        getOptimizedStrategyWeights(),
-        new Promise(resolve => setTimeout(() => resolve(DEFAULT_WEIGHTS), 5000)),
-      ]);
-      return res.status(200).json(weights);
-    } catch (err) {
-      console.error('[bot/weights]', err.message);
-      return res.status(200).json(DEFAULT_WEIGHTS);
-    }
-  }
-
-  // ── STATUS ───────────────────────────────────────────────────────────────────
-  if (action === 'status' || (req.method === 'GET' && !action)) {
+  // ── STATUS (default for GET with no type and no action) ──────────────────────
+  if (action === 'status' || (req.method === 'GET' && !action && !type)) {
+    console.log('[BOT] STATUS route matched (default)');
     resetDayIfNeeded();
     resetSwingIfNeeded();
     const etMin = getETMinuteOfDay();
@@ -3867,113 +3988,6 @@ module.exports = async function handler(req, res) {
       console.error('[bot/gapscan]', err.message);
       return res.status(500).json({ error: 'Gap scan failed', detail: err.message });
     }
-  }
-
-  // ── SCAN RESULT POLL ─────────────────────────────────────────────────────
-  // GET /api/bot?type=scanresult — reads the last scan result from Supabase bot_state
-  if (req.method === 'GET' && req.query.type === 'scanresult') {
-    try {
-      const sbUrl  = process.env.SUPABASE_URL;
-      const sbHdrs = _sbHeaders();
-      if (!sbUrl || !sbHdrs) return res.status(200).json({ symbolsScanned: 0, signalsFound: 0, tradesPlaced: 0, message: 'Supabase not configured' });
-      const ctrl = new AbortController();
-      const t = setTimeout(() => ctrl.abort(), 5000);
-      let sr;
-      try {
-        sr = await fetch(`${sbUrl}/rest/v1/bot_state?key=eq.last_scan_result&select=value`, {
-          headers: sbHdrs, signal: ctrl.signal,
-        });
-      } finally { clearTimeout(t); }
-      if (!sr.ok) return res.status(200).json({ symbolsScanned: 0, signalsFound: 0, tradesPlaced: 0, message: 'State read failed' });
-      const rows = await sr.json().catch(() => []);
-      if (!Array.isArray(rows) || !rows.length) return res.status(200).json({ symbolsScanned: 0, signalsFound: 0, tradesPlaced: 0, message: 'No scan run yet' });
-      const result = JSON.parse(rows[0].value);
-      return res.status(200).json(result);
-    } catch(e) {
-      return res.status(200).json({ error: e.message, symbolsScanned: 0 });
-    }
-  }
-
-  // ── FULL SCAN (synchronous — 8s budget, responds with results) ────────────
-  if (req.query.type === 'scan') {
-    const startTime = Date.now();
-    const capital = capitalAmount && capitalAmount > 0 ? capitalAmount : await getCapital();
-    if (!capitalAmount || capitalAmount <= 0) {
-      capitalAmount = capital;
-      computeAllocations();
-    }
-    const dayAlloc = capital * 0.4;
-    const swingAlloc = capital * 0.6;
-
-    pushLog('SCAN_STARTED: capital=$' + capital + ' day=$' + dayAlloc + ' swing=$' + swingAlloc, 'info');
-
-    const scanList = [
-      'AAPL','MSFT','NVDA','AMD','TSLA',
-      'META','GOOGL','AMZN','SPY','QQQ',
-      'PLTR','COIN','NFLX','JPM','ARM'
-    ];
-
-    let symbolsScanned = 0;
-    let signalsFound = 0;
-    let tradesPlaced = 0;
-    let signalResults = [];
-
-    for (const symbol of scanList) {
-      if (Date.now() - startTime > 7500) {
-        pushLog('TIME_BUDGET: stopping early at ' + symbol, 'warn');
-        break;
-      }
-      try {
-        pushLog('Checking ' + symbol, 'info');
-        symbolsScanned++;
-
-        const snapUrl = 'https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers/' + symbol + '?apiKey=' + process.env.POLYGON_API_KEY;
-        const snapRes = await Promise.race([
-          fetch(snapUrl).then(r => r.json()),
-          new Promise(resolve => setTimeout(() => resolve(null), 3000))
-        ]);
-
-        const price = snapRes?.ticker?.day?.c || snapRes?.ticker?.lastTrade?.p || snapRes?.ticker?.prevDay?.c || null;
-
-        if (!price) {
-          pushLog('SKIP ' + symbol + ': no price', 'warn');
-          continue;
-        }
-
-        let nrzScore = 50;
-
-        pushLog(symbol + ' $' + price + ' score=' + nrzScore, 'info');
-        signalResults.push({ symbol, price, nrzScore, status: nrzScore >= 70 ? 'SIGNAL' : 'FILTERED' });
-
-        if (nrzScore >= 70) {
-          signalsFound++;
-          pushLog('SIGNAL: ' + symbol + ' score=' + nrzScore, 'pass');
-        }
-
-      } catch(err) {
-        pushLog('ERROR ' + symbol + ': ' + err.message, 'warn');
-      }
-    }
-
-    const duration = Date.now() - startTime;
-    pushLog('SCAN_DONE: ' + symbolsScanned + ' scanned, ' + signalsFound + ' signals, ' + duration + 'ms', 'info');
-
-    // Save result to Supabase for scanresult poll
-    try {
-      writeBotState('last_scan_result', JSON.stringify({
-        success: true, symbolsScanned, signalsPassed: signalsFound, tradesPlaced,
-        duration, results: signalResults, timestamp: new Date().toISOString()
-      }));
-    } catch(_) {}
-
-    return res.status(200).json({
-      success: true,
-      symbolsScanned,
-      signalsPassed: signalsFound,
-      tradesPlaced,
-      duration: duration + 'ms',
-      results: signalResults
-    });
   }
 
   // ── ORDER VALIDATION ─────────────────────────────────────────────────────────
