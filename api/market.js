@@ -302,8 +302,19 @@ function handleWsToken(key) {
   return { token: key };
 }
 
+function withTimeout(promise, ms = 8000, fallback = null) {
+  return Promise.race([
+    promise,
+    new Promise(resolve => setTimeout(() => resolve(fallback), ms)),
+  ]);
+}
+
 // ── Main handler ──────────────────────────────────────────────────────────────
 module.exports = async function handler(req, res) {
+  const _deadline = setTimeout(() => {
+    if (!res.headersSent) res.status(200).json({ error: 'timeout' });
+  }, 8000);
+
   const origin = req.headers.origin || '';
   if (ALLOWED_ORIGINS.includes(origin)) res.setHeader('Access-Control-Allow-Origin', origin);
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
@@ -325,11 +336,17 @@ module.exports = async function handler(req, res) {
   const key = process.env.POLYGON_API_KEY;
   if (!key) return res.status(500).json({ error: 'POLYGON_API_KEY not configured' });
 
-  if (type === 'vix')       return res.status(200).json(await handleVix());
-  if (type === 'feargreed') return res.status(200).json(await handleFearGreed());
-  if (type === 'wstoken')   return res.status(200).json(handleWsToken(key));
-  if (type === 'regime')    return res.status(200).json(await handleRegime(key));
-  if (type === 'sectors')   return res.status(200).json(await handleSectors(key));
-
-  return res.status(400).json({ error: `Unknown type: "${type}". Valid: vix, feargreed, wstoken, regime, sectors` });
+  try {
+    if (type === 'vix')       return res.status(200).json(await handleVix());
+    if (type === 'feargreed') return res.status(200).json(await handleFearGreed());
+    if (type === 'wstoken')   return res.status(200).json(handleWsToken(key));
+    if (type === 'regime')    return res.status(200).json(await handleRegime(key));
+    if (type === 'sectors')   return res.status(200).json(await handleSectors(key));
+    return res.status(400).json({ error: `Unknown type: "${type}". Valid: vix, feargreed, wstoken, regime, sectors` });
+  } catch (err) {
+    console.error('[market]', type, err.message);
+    return res.status(200).json({ error: 'Market data unavailable' });
+  } finally {
+    clearTimeout(_deadline);
+  }
 };

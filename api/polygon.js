@@ -2,6 +2,13 @@ const https = require('https');
 
 const ALLOWED_ORIGINS = ['https://nzr-platform2.vercel.app', 'http://localhost:3000'];
 
+function withTimeout(promise, ms = 8000, fallback = null) {
+  return Promise.race([
+    promise,
+    new Promise(resolve => setTimeout(() => resolve(fallback), ms)),
+  ]);
+}
+
 const rateLimit = new Map();
 function checkRate(ip) {
   const now = Date.now(), w = 60000, max = 30;
@@ -122,6 +129,10 @@ const TF_DAYS = {
 };
 
 module.exports = async function handler(req, res) {
+  const _deadline = setTimeout(() => {
+    if (!res.headersSent) res.status(200).json({ error: 'timeout', data: [] });
+  }, 8000);
+
   const origin = req.headers.origin || '';
   if (ALLOWED_ORIGINS.includes(origin)) {
     res.setHeader('Access-Control-Allow-Origin', origin);
@@ -266,6 +277,8 @@ module.exports = async function handler(req, res) {
 
   } catch (err) {
     console.error('[polygon]', type, err.message);
-    return res.status(500).json({ error: 'Data unavailable — market may be closed or rate limit reached.' });
+    return res.status(200).json({ error: 'Data unavailable — market may be closed or rate limit reached.' });
+  } finally {
+    clearTimeout(_deadline);
   }
 };

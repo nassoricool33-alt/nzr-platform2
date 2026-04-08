@@ -2365,6 +2365,41 @@ function fmtChg(c){
   return(c>=0?'+':'')+c.toFixed(2)+'%';
 }
 
+// ── fetchWithRetry: 504-safe fetch for all widget loaders ─────────────────────
+// On 504 / network error: shows inline "retrying" message, retries once after 5s.
+// On second failure: shows "Service timeout" message.
+async function fetchWithRetry(url, options, errorElId) {
+  function showMsg(elId, msg, isError) {
+    const el = elId ? document.getElementById(elId) : null;
+    if (el) {
+      el.style.color = isError ? 'var(--red, #e05)' : 'var(--text3, #888)';
+      el.textContent = msg;
+    }
+  }
+
+  async function doFetch() {
+    const r = await fetch(url, options);
+    if (r.status === 504) throw Object.assign(new Error('504'), { is504: true });
+    return r;
+  }
+
+  try {
+    return await doFetch();
+  } catch (e) {
+    if (!e.is504 && e.name !== 'TypeError') throw e; // non-network errors bubble up
+    showMsg(errorElId, 'Data temporarily unavailable — retrying…', false);
+    await new Promise(res => setTimeout(res, 5000));
+    try {
+      const r = await doFetch();
+      showMsg(errorElId, '', false);
+      return r;
+    } catch {
+      showMsg(errorElId, 'Service timeout — please refresh', true);
+      throw new Error('Service timeout after retry');
+    }
+  }
+}
+
 async function loadQuote(sym){
   try{
     const r=await fetch('/api/quote?symbol='+sym);
@@ -2451,7 +2486,7 @@ let lastUpdatedSec=0;
 
 async function loadVix(){
   try{
-    const r=await fetch('/api/market?type=vix');
+    const r=await fetchWithRetry('/api/market?type=vix', undefined, 'vix-content');
     if(!r.ok)return;
     const d=await r.json();
     if(d.price==null)return;
@@ -2528,7 +2563,7 @@ function fgColor(score){
 async function renderFearGreedLive(){
   const el=document.getElementById('fear-greed-content');
   try{
-    const r=await fetch('/api/market?type=feargreed');
+    const r=await fetchWithRetry('/api/market?type=feargreed', undefined, 'fear-greed-content');
     if(!r.ok)throw new Error();
     const data=await r.json();
     if(data.value==null)throw new Error();
@@ -2568,7 +2603,7 @@ function retryFearGreed(){
 async function renderTopMoversPolygon(){
   const el=document.getElementById('top-movers-content');
   try{
-    const r=await fetch('/api/polygon?type=movers');
+    const r=await fetchWithRetry('/api/polygon?type=movers', undefined, 'top-movers-content');
     if(!r.ok)throw new Error();
     const data=await r.json();
     const gainers=data.gainers||[];
@@ -2811,7 +2846,7 @@ async function buildEconCalendar(){
     const today=new Date();
     const from=today.toISOString().split('T')[0];
     const to=new Date(today.getTime()+30*86400000).toISOString().split('T')[0];
-    const r=await fetch('/api/news?type=economic&from='+from+'&to='+to);
+    const r=await fetchWithRetry('/api/news?type=economic&from='+from+'&to='+to, undefined, null);
     if(!r.ok)throw new Error('fetch failed');
     const data=await r.json();
     const items=(data.economicCalendar||[])
@@ -2842,7 +2877,7 @@ async function buildNewsWidget(){
   const el=document.getElementById('news-widget');
   if(!el)return;
   try{
-    const r=await fetch('/api/news?type=market');
+    const r=await fetchWithRetry('/api/news?type=market', undefined, null);
     if(!r.ok)throw new Error('fetch failed');
     const data=await r.json();
     const items=(data.news||[]).slice(0,5);
@@ -4583,7 +4618,7 @@ async function loadAttribution() {
   results.style.display = 'none';
 
   try {
-    const r    = await fetch('/api/alpaca?action=attribution');
+    const r    = await fetchWithRetry('/api/alpaca?action=attribution', undefined, null);
     const data = await r.json();
 
     if (!r.ok || data.error) {

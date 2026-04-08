@@ -8,6 +8,15 @@
 const ALLOWED_ORIGINS = ['https://nzr-platform2.vercel.app', 'http://localhost:3000'];
 const DEFAULT_BASE    = 'https://paper-api.alpaca.markets'; // swap to 'https://api.alpaca.markets' for live
 
+// ── Attribution cache — 10 minute TTL ────────────────────────────────────────
+let _attributionCache = null;
+const ATTRIBUTION_CACHE_TTL = 10 * 60 * 1000;
+
+const ATTRIBUTION_EMPTY = {
+  error: null, trades: [], byStrategy: [], bySignal: [],
+  byTimeOfDay: [], byDayOfWeek: [], totalTrades: 0, overallWinRate: 0,
+};
+
 const rateLimit = new Map();
 function checkRate(ip) {
   const now = Date.now(), w = 60000, max = 30;
@@ -160,15 +169,32 @@ module.exports = async function handler(req, res) {
 
     // ── GET P&L attribution ─────────────────────────────────────────────────
     if (action === 'attribution' && req.method === 'GET') {
-      // Fetch all closed orders from the last 30 days
-      const after30 = new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString();
-      const r = await alpacaRequest({
-        ...ctx, method: 'GET',
-        path: `/v2/orders?status=closed&limit=500&after=${encodeURIComponent(after30)}`,
-      });
-      if (r.status !== 200) {
-        return res.status(r.status).json({ error: 'Failed to fetch orders from Alpaca', detail: r.body });
+      // Return cached result if fresh (< 10 min)
+      if (_attributionCache && (Date.now() - _attributionCache.ts) < ATTRIBUTION_CACHE_TTL) {
+        return res.status(200).json(_attributionCache.data);
       }
+
+      // Hard 8 s timeout — return empty attribution rather than 504
+      const attributionWork = (async () => {
+        const after7 = new Date(Date.now() - 7 * 24 * 3600 * 1000).toISOString();
+
+        // Give Alpaca orders fetch 4 s; if it misses, return empty gracefully
+        const ordersFetch = Promise.race([
+          alpacaRequest({
+            ...ctx, method: 'GET',
+            path: `/v2/orders?status=closed&limit=50&after=${encodeURIComponent(after7)}`,
+          }),
+          new Promise(resolve => setTimeout(() => resolve({ status: 408, body: [] }), 4000)),
+        ]);
+
+        const r = await ordersFetch;
+        if (r.status !== 200) return { ...ATTRIBUTION_EMPTY };
+
+        const orders = Array.isArray(r.body) ? r.body : [];
+        // Keep only filled NZR-tagged orders
+        const nzr = orders.filter(o =>
+          o.client_order_id?.startsWith('NZR-') && parseFloat(o.filled_qty || 0) > 0
+        );
 
       const orders = Array.isArray(r.body) ? r.body : [];
       // Keep only filled NZR-tagged orders
@@ -271,15 +297,27 @@ module.exports = async function handler(req, res) {
         }).sort((a, b) => b.totalPnl - a.totalPnl);
       }
 
-      const totalWins = trades.filter(t => t.win).length;
-      return res.status(200).json({
-        totalTrades:    trades.length,
-        overallWinRate: trades.length ? parseFloat((totalWins / trades.length * 100).toFixed(1)) : 0,
-        byStrategy:     groupBy('strategy'),
-        bySignal:       groupBy('signal'),
-        byTimeOfDay:    groupBy('session'),
-        byDayOfWeek:    groupBy('dow'),
-      });
+        const totalWins = trades.filter(t => t.win).length;
+        return {
+          totalTrades:    trades.length,
+          overallWinRate: trades.length ? parseFloat((totalWins / trades.length * 100).toFixed(1)) : 0,
+          byStrategy:     groupBy('strategy'),
+          bySignal:       groupBy('signal'),
+          byTimeOfDay:    groupBy('session'),
+          byDayOfWeek:    groupBy('dow'),
+        };
+      })(); // end attributionWork IIFE
+
+      // Race attribution work against hard 8 s wall
+      const data = await Promise.race([
+        attributionWork,
+        new Promise(resolve => setTimeout(() => resolve({ ...ATTRIBUTION_EMPTY, error: 'timeout' }), 8000)),
+      ]);
+
+      // Cache successful result
+      if (!data.error) _attributionCache = { ts: Date.now(), data };
+
+      return res.status(200).json(data);
     }
 
     return res.status(400).json({ error: `Unknown action: ${action}` });

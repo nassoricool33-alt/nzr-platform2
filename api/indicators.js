@@ -2,6 +2,13 @@ const https = require('https');
 
 const ALLOWED_ORIGINS = ['https://nzr-platform2.vercel.app', 'http://localhost:3000'];
 
+function withTimeout(promise, ms = 8000, fallback = null) {
+  return Promise.race([
+    promise,
+    new Promise(resolve => setTimeout(() => resolve(fallback), ms)),
+  ]);
+}
+
 const rateLimit = new Map();
 function checkRate(ip) {
   const now = Date.now(), w = 60000, max = 20;
@@ -99,6 +106,9 @@ async function getSupportResistance(symbol, key) {
 }
 
 module.exports = async function handler(req, res) {
+  const _deadline = setTimeout(() => {
+    if (!res.headersSent) res.status(200).json({ error: 'timeout', symbol: req.query.symbol || '' });
+  }, 8000);
   const origin = req.headers.origin || '';
   if (ALLOWED_ORIGINS.includes(origin)) {
     res.setHeader('Access-Control-Allow-Origin', origin);
@@ -238,6 +248,8 @@ module.exports = async function handler(req, res) {
     });
   } catch (err) {
     console.error('[indicators]', symbol, err.message);
-    return res.status(500).json({ error: 'Indicators unavailable.' });
+    return res.status(200).json({ error: 'Indicators unavailable.' });
+  } finally {
+    clearTimeout(_deadline);
   }
 };

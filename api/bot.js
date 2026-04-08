@@ -212,7 +212,7 @@ const WEEK52_CACHE_TTL = 60 * 60 * 1000; // 1 hour
 // ─── STRATEGY WEIGHTS CACHE ──────────────────────────────────────────────────
 // { ts, result: { MACD, RSI, EMA2050, EMA60200, COMBINED, perfStats, computedAt, tradeCount } }
 let strategyWeightsCache = null;
-const STRATEGY_WEIGHTS_CACHE_TTL = 4 * 60 * 60 * 1000; // 4 hours
+const STRATEGY_WEIGHTS_CACHE_TTL = 2 * 60 * 60 * 1000; // 2 hours
 
 // ─── NEWS INTELLIGENCE CACHES ────────────────────────────────────────────────
 // breaking: { ts, result: { headlines, marketPauseRecommended, highImpactCount, ... } }
@@ -2449,7 +2449,7 @@ async function getOptimizedStrategyWeights() {
     let resp;
     try {
       resp = await fetch(
-        `${supabaseUrl}/rest/v1/journal?select=pnl_pct,notes&pnl_pct=not.is.null&order=id.desc&limit=50`,
+        `${supabaseUrl}/rest/v1/journal?select=pnl_pct,notes&pnl_pct=not.is.null&order=id.desc&limit=20`,
         {
           headers: {
             'apikey':        supabaseKey,
@@ -3519,12 +3519,19 @@ module.exports = async function handler(req, res) {
 
   // ── STRATEGY WEIGHTS ─────────────────────────────────────────────────────────
   if (req.method === 'GET' && req.query.type === 'weights') {
+    const DEFAULT_WEIGHTS = {
+      MACD: 0.2, RSI: 0.2, EMA2050: 0.2, EMA60200: 0.2, COMBINED: 0.2,
+      perfStats: {}, computedAt: null, tradeCount: 0,
+    };
     try {
-      const weights = await getOptimizedStrategyWeights();
+      const weights = await Promise.race([
+        getOptimizedStrategyWeights(),
+        new Promise(resolve => setTimeout(() => resolve(DEFAULT_WEIGHTS), 5000)),
+      ]);
       return res.status(200).json(weights);
     } catch (err) {
       console.error('[bot/weights]', err.message);
-      return res.status(500).json({ error: 'Strategy weights unavailable' });
+      return res.status(200).json(DEFAULT_WEIGHTS);
     }
   }
 
@@ -3810,8 +3817,8 @@ module.exports = async function handler(req, res) {
     }
     pushLog(`SCAN_ASYNC_START: ${SCAN_UNIVERSE.length} symbols queued (testMode=${testMode})`, 'info');
 
-    // Fire the scan in the background — do NOT await
-    runFullScan(testMode).then(scanResult => {
+    // Defer scan to next event loop tick so the response above flushes first
+    setImmediate(() => runFullScan(testMode).then(scanResult => {
       pushLog(
         `SCAN_ASYNC_DONE: ${scanResult.symbolsScanned ?? 0} scanned, ` +
         `${scanResult.signalsPassed ?? 0} passed, ${scanResult.tradesPlaced ?? 0} trades`, 'info'
@@ -3824,7 +3831,7 @@ module.exports = async function handler(req, res) {
         symbolsScanned: SCAN_UNIVERSE.length, signalsPassed: 0, tradesPlaced: 0,
         durationMs: 0, signals: [], completedAt: new Date().toISOString(),
       }));
-    });
+    })); // end setImmediate
 
     // Respond immediately — client polls ?type=scanresult for the actual data
     return res.status(200).json({

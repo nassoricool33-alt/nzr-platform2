@@ -11,6 +11,13 @@ const https = require('https');
 const ALLOWED_ORIGINS = ['https://nzr-platform2.vercel.app', 'http://localhost:3000'];
 const DEFAULT_ALPACA  = 'https://paper-api.alpaca.markets';
 
+function withTimeout(promise, ms = 8000, fallback = null) {
+  return Promise.race([
+    promise,
+    new Promise(resolve => setTimeout(() => resolve(fallback), ms)),
+  ]);
+}
+
 // ── Pharma universe ───────────────────────────────────────────────────────────
 const PHARMA_SYMBOLS = [
   'MRNA','PFE','BIIB','NVAX','GILD','REGN','VRTX','BMY','ABBV','JNJ',
@@ -880,6 +887,10 @@ async function handleBotCheck(key) {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 module.exports = async function handler(req, res) {
+  const _deadline = setTimeout(() => {
+    if (!res.headersSent) res.status(200).json({ error: 'timeout', data: null });
+  }, 8000);
+
   const origin = req.headers.origin || '';
   if (ALLOWED_ORIGINS.includes(origin)) res.setHeader('Access-Control-Allow-Origin', origin);
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -956,6 +967,8 @@ module.exports = async function handler(req, res) {
 
   } catch (err) {
     console.error('[pharma]', action, err.message);
-    return res.status(500).json({ error: 'Pharma request failed', detail: err.message });
+    return res.status(200).json({ error: 'Pharma request failed', detail: err.message });
+  } finally {
+    clearTimeout(_deadline);
   }
 };

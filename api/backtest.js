@@ -10,6 +10,13 @@ const https = require('https');
 const ALLOWED_ORIGINS = ['https://nzr-platform2.vercel.app', 'http://localhost:3000'];
 const MAX_HOLD_DAYS   = 30;
 
+function withTimeout(promise, ms = 8000, fallback = null) {
+  return Promise.race([
+    promise,
+    new Promise(resolve => setTimeout(() => resolve(fallback), ms)),
+  ]);
+}
+
 // ─── RATE LIMITING ────────────────────────────────────────────────────────────
 
 const rateLimit = new Map();
@@ -680,6 +687,10 @@ function walkForwardTest(params, bars) {
 // ─── HANDLER ──────────────────────────────────────────────────────────────────
 
 module.exports = async function handler(req, res) {
+  const _deadline = setTimeout(() => {
+    if (!res.headersSent) res.status(200).json({ error: 'timeout', message: 'Backtest timed out — try a shorter date range or fewer symbols' });
+  }, 8000);
+
   const origin = req.headers.origin || '';
   if (ALLOWED_ORIGINS.includes(origin)) res.setHeader('Access-Control-Allow-Origin', origin);
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -846,6 +857,8 @@ module.exports = async function handler(req, res) {
 
   } catch (err) {
     console.error('[backtest] Error:', rawSym, err.message);
-    return res.status(500).json({ error: `Backtest failed: ${err.message}` });
+    return res.status(200).json({ error: `Backtest failed: ${err.message}` });
+  } finally {
+    clearTimeout(_deadline);
   }
 };

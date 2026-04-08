@@ -2,6 +2,13 @@ const https = require('https');
 
 const ALLOWED_ORIGINS = ['https://nzr-platform2.vercel.app', 'http://localhost:3000'];
 
+function withTimeout(promise, ms = 8000, fallback = null) {
+  return Promise.race([
+    promise,
+    new Promise(resolve => setTimeout(() => resolve(fallback), ms)),
+  ]);
+}
+
 const HIGH_IMPACT_KEYWORDS = ['FOMC', 'Federal Reserve', 'CPI', 'Non-Farm', 'NFP', 'GDP', 'PCE', 'Unemployment', 'Interest Rate Decision', 'Jackson Hole'];
 
 // ─── BREAKING NEWS CACHE ──────────────────────────────────────────────────────
@@ -352,6 +359,10 @@ Headlines: ${headlineList.join(' | ')}`;
 }
 
 module.exports = async function handler(req, res) {
+  const _deadline = setTimeout(() => {
+    if (!res.headersSent) res.status(200).json({ error: 'timeout', news: [] });
+  }, 8000);
+
   const origin = req.headers.origin || '';
   if (ALLOWED_ORIGINS.includes(origin)) {
     res.setHeader('Access-Control-Allow-Origin', origin);
@@ -456,6 +467,8 @@ module.exports = async function handler(req, res) {
     }
   } catch (err) {
     console.error('[news]', type, err.message);
-    return res.status(500).json({ error: 'Failed to fetch data' });
+    return res.status(200).json({ error: 'Failed to fetch data', news: [] });
+  } finally {
+    clearTimeout(_deadline);
   }
 };
