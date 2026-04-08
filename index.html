@@ -1311,6 +1311,21 @@ footer{border-top:1px solid var(--border);padding:32px 0;margin-top:80px}
 
   </div><!-- /attr-results -->
 
+  <!-- Strategy weights optimizer -->
+  <div id="strategy-weights-panel" style="margin-top:24px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <div>
+        <span style="font-size:13px;font-weight:600">Strategy Weights</span>
+        <span style="font-family:var(--font-mono);font-size:10px;color:var(--text3);margin-left:10px">auto-optimized from journal P&amp;L</span>
+      </div>
+      <button onclick="loadStrategyWeights()" style="font-size:11px;padding:3px 8px">↻ Refresh</button>
+    </div>
+    <div id="strategy-weights-body" style="display:grid;gap:10px">
+      <div style="font-family:var(--font-mono);font-size:11px;color:var(--text3);text-align:center;padding:16px">Loading…</div>
+    </div>
+    <div id="strategy-weights-meta" style="font-family:var(--font-mono);font-size:10px;color:var(--text3);margin-top:8px;text-align:right"></div>
+  </div>
+
   <!-- Bot activity log -->
   <div id="bot-log-panel" style="margin-top: 20px;">
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
@@ -1998,7 +2013,7 @@ function showPage(id){
     pharmaLoadShorts();
   }
   if(id==='bot'&&!_attrLoaded){ loadAttribution(); }
-  if(id==='bot'){ startBotLogPolling(); }
+  if(id==='bot'){ startBotLogPolling(); loadStrategyWeights(); }
   if(id==='markets'){ buildSectorRotation(); }
   if(id==='watchlist'&&currentUser){ loadWatchlist(currentUser.id); }
   if(id==='portfolio'&&currentUser){ loadPortfolio(currentUser.id); }
@@ -5555,6 +5570,78 @@ function startBotLogPolling() {
   _botLogPolling = true;
   pollBotLog();
   setInterval(pollBotLog, 10000);
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// STRATEGY WEIGHTS OPTIMIZER
+// ══════════════════════════════════════════════════════════════════════════════
+
+let _weightsRefreshTimer = null;
+
+async function loadStrategyWeights() {
+  const body = document.getElementById('strategy-weights-body');
+  const meta = document.getElementById('strategy-weights-meta');
+  if (!body) return;
+
+  try {
+    const r = await fetch('/api/bot?type=weights');
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const d = await r.json();
+
+    const STRATEGIES = [
+      { key: 'MACD',     label: 'MACD Crossover' },
+      { key: 'RSI',      label: 'RSI' },
+      { key: 'EMA2050',  label: 'EMA 20/50 Trend' },
+      { key: 'EMA60200', label: 'EMA 60/200 Align' },
+      { key: 'COMBINED', label: 'Combined/Other' },
+    ];
+
+    body.innerHTML = STRATEGIES.map(({ key, label }) => {
+      const w    = d[key] ?? 0.2;
+      const pct  = (w * 100).toFixed(1);
+      const ps   = d.perfStats?.[key] || {};
+      const insufficient = ps.trades < 5;
+
+      // Colour: green if >0.2, gold if neutral, red if <0.1
+      const barColor = w > 0.28 ? '#4caf50'
+                     : w < 0.1  ? '#f44336'
+                     : 'var(--gold)';
+
+      const winStr = ps.winRate != null ? `${ps.winRate}% win` : 'n/a';
+      const pnlStr = ps.avgPnl  != null
+        ? `avg ${ps.avgPnl > 0 ? '+' : ''}${ps.avgPnl}%`
+        : 'n/a';
+      const tradeStr = ps.trades > 0 ? `${ps.trades} trades` : '0 trades';
+      const badge = insufficient
+        ? '<span style="font-size:9px;color:var(--text3);margin-left:6px">insufficient data</span>'
+        : w <= 0.06
+          ? '<span style="font-size:9px;color:#f44336;margin-left:6px">underperforming</span>'
+          : '';
+
+      return `<div style="background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:12px 16px">
+  <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px">
+    <span style="font-size:12px;font-weight:600">${label}${badge}</span>
+    <span style="font-family:var(--font-mono);font-size:12px;font-weight:700;color:${barColor}">${pct}%</span>
+  </div>
+  <div style="background:var(--border);border-radius:4px;height:6px;overflow:hidden;margin-bottom:6px">
+    <div style="height:100%;border-radius:4px;background:${barColor};width:${Math.min(100, parseFloat(pct) * 2)}%;transition:width .4s ease"></div>
+  </div>
+  <div style="font-family:var(--font-mono);font-size:10px;color:var(--text3)">${tradeStr} &nbsp;·&nbsp; ${winStr} &nbsp;·&nbsp; ${pnlStr}</div>
+</div>`;
+    }).join('');
+
+    if (meta) {
+      const ts = d.computedAt ? new Date(d.computedAt).toLocaleTimeString() : '—';
+      meta.textContent = `Based on ${d.tradeCount ?? 0} bot trades · computed ${ts} · refreshes every 4h`;
+    }
+
+    // Schedule next auto-refresh in 30 minutes
+    if (_weightsRefreshTimer) clearTimeout(_weightsRefreshTimer);
+    _weightsRefreshTimer = setTimeout(loadStrategyWeights, 30 * 60 * 1000);
+
+  } catch (err) {
+    body.innerHTML = `<div style="font-family:var(--font-mono);font-size:11px;color:var(--text3);padding:12px">Unable to load strategy weights</div>`;
+  }
 }
 
 // ══════════════════════════════════════════════════════════════════════════════

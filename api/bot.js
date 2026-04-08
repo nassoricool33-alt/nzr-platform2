@@ -184,6 +184,11 @@ const SECTOR_ETF_NAMES_BOT = {
 const week52Cache = {};
 const WEEK52_CACHE_TTL = 60 * 60 * 1000; // 1 hour
 
+// ─── STRATEGY WEIGHTS CACHE ──────────────────────────────────────────────────
+// { ts, result: { MACD, RSI, EMA2050, EMA60200, COMBINED, perfStats, computedAt, tradeCount } }
+let strategyWeightsCache = null;
+const STRATEGY_WEIGHTS_CACHE_TTL = 4 * 60 * 60 * 1000; // 4 hours
+
 // Rate limiting
 const rateLimit = new Map();
 function checkRate(ip) {
@@ -1452,6 +1457,125 @@ async function getAdaptivePositionSize(baseSize, confidence, symbol) {
   return adjustedSize;
 }
 
+// ─── STRATEGY PERFORMANCE OPTIMIZER ─────────────────────────────────────────
+
+/**
+ * Queries the last 50 closed bot trades from Supabase, parses the strategy name
+ * from the notes field (format: "Bot: MACD NZR=82"), computes per-strategy
+ * win rate / avg P&L / score, normalises into weights summing to 1.0.
+ *
+ * Rules:
+ *  - < 5 trades for a strategy → neutral weight seed of 0.2
+ *  - avgPnl < −1% → weight capped at 0.05 before normalisation
+ *  - winRate > 60% AND avgPnl > 1% → score boosted 1.5× before normalisation
+ *
+ * Returns { MACD, RSI, EMA2050, EMA60200, COMBINED, perfStats, computedAt, tradeCount }
+ * Cached for 4 hours.
+ */
+async function getOptimizedStrategyWeights() {
+  if (strategyWeightsCache && (Date.now() - strategyWeightsCache.ts) < STRATEGY_WEIGHTS_CACHE_TTL) {
+    console.log('[bot] STRATEGY_WEIGHTS cache hit');
+    return strategyWeightsCache.result;
+  }
+
+  const STRATEGIES = ['MACD', 'RSI', 'EMA2050', 'EMA60200', 'COMBINED'];
+  const neutral = {
+    MACD: 0.2, RSI: 0.2, EMA2050: 0.2, EMA60200: 0.2, COMBINED: 0.2,
+    perfStats: Object.fromEntries(STRATEGIES.map(s => [s, { trades: 0, winRate: null, avgPnl: null }])),
+    computedAt: null,
+    tradeCount: 0,
+  };
+
+  const supabaseUrl = process.env.SUPABASE_URL;
+  const supabaseKey = process.env.SUPABASE_ANON_KEY;
+  if (!supabaseUrl || !supabaseKey) return neutral;
+
+  try {
+    const ctrl  = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 8000);
+    let resp;
+    try {
+      resp = await fetch(
+        `${supabaseUrl}/rest/v1/journal?select=pnl_pct,notes&pnl_pct=not.is.null&order=id.desc&limit=50`,
+        {
+          headers: {
+            'apikey':        supabaseKey,
+            'Authorization': `Bearer ${supabaseKey}`,
+            'Content-Type':  'application/json',
+          },
+          signal: ctrl.signal,
+        }
+      );
+    } finally { clearTimeout(timer); }
+
+    if (!resp.ok) throw new Error(`Supabase HTTP ${resp.status}`);
+    const trades = await resp.json();
+    if (!Array.isArray(trades)) throw new Error('Unexpected response shape');
+
+    // ── Aggregate per strategy ──────────────────────────────────────────────
+    const agg = {};
+    for (const s of STRATEGIES) agg[s] = { wins: 0, total: 0, sumPnl: 0 };
+
+    for (const t of trades) {
+      const pnl = parseFloat(t.pnl_pct);
+      if (!isFinite(pnl)) continue;
+      const match = (t.notes || '').match(/^Bot:\s+(\w+)\s+NZR=/);
+      if (!match) continue;
+      const s = match[1];
+      if (!agg[s]) continue;
+      agg[s].total++;
+      agg[s].sumPnl += pnl;
+      if (pnl > 0) agg[s].wins++;
+    }
+
+    // ── Compute raw weights ─────────────────────────────────────────────────
+    const rawWeights = {};
+    const perfStats  = {};
+
+    for (const s of STRATEGIES) {
+      const st = agg[s];
+      const winRate = st.total > 0 ? st.wins / st.total : null;
+      const avgPnl  = st.total > 0 ? st.sumPnl / st.total : null;
+
+      perfStats[s] = {
+        trades:  st.total,
+        winRate: winRate != null ? parseFloat((winRate * 100).toFixed(1)) : null,
+        avgPnl:  avgPnl  != null ? parseFloat(avgPnl.toFixed(3))         : null,
+      };
+
+      if (st.total < 5) {
+        rawWeights[s] = 0.2;           // insufficient data — neutral seed
+      } else if (avgPnl < -1) {
+        rawWeights[s] = 0.05;          // severely underperforming — cap
+      } else {
+        let score = winRate * avgPnl;
+        if (winRate > 0.6 && avgPnl > 1) score *= 1.5; // outperformance boost
+        rawWeights[s] = Math.max(0.01, score);          // floor so it stays in the mix
+      }
+    }
+
+    // ── Normalise to sum to 1.0 ─────────────────────────────────────────────
+    const total   = Object.values(rawWeights).reduce((a, b) => a + b, 0);
+    const weights = {};
+    for (const s of STRATEGIES) {
+      weights[s] = total > 0 ? parseFloat((rawWeights[s] / total).toFixed(4)) : 0.2;
+    }
+
+    const result = {
+      ...weights,
+      perfStats,
+      computedAt: new Date().toISOString(),
+      tradeCount: trades.length,
+    };
+    strategyWeightsCache = { ts: Date.now(), result };
+    console.log(`[bot] STRATEGY_WEIGHTS computed from ${trades.length} trades: ${STRATEGIES.map(s => `${s}=${weights[s]}`).join(' ')}`);
+    return result;
+  } catch (err) {
+    console.warn('[bot] STRATEGY_WEIGHTS error:', err.message);
+    return neutral;
+  }
+}
+
 // ─── ATR-BASED DYNAMIC STOP ──────────────────────────────────────────────────
 
 /**
@@ -1634,108 +1758,149 @@ function resolveSignalScore(symbol, direction, inputs, mode) {
     return { score: 0, blocked: true, blockReason: 'MTF_CONFLICT: daily trend alignment is a hard requirement for day trades', breakdown: bd };
   }
 
+  // ── Per-strategy weight multipliers (neutral weight = 0.2 → multiplier 1.0) ─
+  // Passed via inputs.strategyWeights from getOptimizedStrategyWeights().
+  // A strategy with weight 0.4 gets a 2× multiplier vs neutral 0.2.
+  const wm      = inputs.strategyWeights || {};
+  const wMACD   = wm.MACD     != null ? wm.MACD     / 0.2 : 1.0;
+  const wRSI    = wm.RSI      != null ? wm.RSI      / 0.2 : 1.0;
+  const wE6200  = wm.EMA60200 != null ? wm.EMA60200 / 0.2 : 1.0;
+  const wE2050  = wm.EMA2050  != null ? wm.EMA2050  / 0.2 : 1.0;
+  const wCOMB   = wm.COMBINED != null ? wm.COMBINED / 0.2 : 1.0;
+
   // ── Weighted contributions ───────────────────────────────────────────────────
 
-  // MACD crossover confirmed: +30 (LONG needs positive histogram, SHORT needs negative)
-  if      (inputs.macdCross === true)  { bd.macdCross = +30; score += 30; }
-  else if (inputs.macdCross === false) { bd.macdCross =   0; }
-  else                                 { bd.macdCross = null; }
+  // MACD crossover confirmed: base +30 scaled by MACD weight
+  {
+    const base = Math.round(30 * wMACD);
+    if      (inputs.macdCross === true)  { bd.macdCross = +base; score += base; }
+    else if (inputs.macdCross === false) { bd.macdCross =     0; }
+    else                                 { bd.macdCross =  null; }
+  }
 
-  // RSI not extreme (30–70): +20; extreme: −20
-  if      (inputs.rsiNotExtreme === true)  { bd.rsiNotExtreme = +20; score += 20; }
-  else if (inputs.rsiNotExtreme === false) { bd.rsiNotExtreme = -20; score -= 20; }
-  else                                     { bd.rsiNotExtreme = null; }
+  // RSI not extreme (30–70): base +20; extreme: base −20; scaled by RSI weight
+  {
+    const base = Math.round(20 * wRSI);
+    if      (inputs.rsiNotExtreme === true)  { bd.rsiNotExtreme = +base; score += base; }
+    else if (inputs.rsiNotExtreme === false) { bd.rsiNotExtreme = -base; score -= base; }
+    else                                     { bd.rsiNotExtreme =  null; }
+  }
 
-  // EMA alignment (EMA60 vs EMA200 in direction): +20
-  if      (inputs.emaAlignment === true)  { bd.emaAlignment = +20; score += 20; }
-  else if (inputs.emaAlignment === false) { bd.emaAlignment =   0; }
-  else                                    { bd.emaAlignment = null; }
+  // EMA alignment (EMA60 vs EMA200): base +20, scaled by EMA60200 weight
+  {
+    const base = Math.round(20 * wE6200);
+    if      (inputs.emaAlignment === true)  { bd.emaAlignment = +base; score += base; }
+    else if (inputs.emaAlignment === false) { bd.emaAlignment =     0; }
+    else                                    { bd.emaAlignment =  null; }
+  }
 
-  // Volume confirmed: +20 (hard requirement already cleared above)
-  if      (inputs.volumeConfirmed === true) { bd.volumeConfirmed = +20; score += 20; }
-  else                                      { bd.volumeConfirmed = inputs.volumeConfirmed === null ? null : 0; }
+  // Volume confirmed: base +20, scaled by COMBINED weight (hard requirement already cleared)
+  {
+    const base = Math.round(20 * wCOMB);
+    if      (inputs.volumeConfirmed === true) { bd.volumeConfirmed = +base; score += base; }
+    else                                      { bd.volumeConfirmed = inputs.volumeConfirmed === null ? null : 0; }
+  }
 
-  // VWAP alignment (day trades only): +15 if price is on the right side
+  // VWAP alignment (day trades only): base +15, scaled by COMBINED weight
   if (mode === 'day') {
-    if      (inputs.aboveVwap === true)  { bd.aboveVwap = +15; score += 15; }
-    else if (inputs.aboveVwap === false) { bd.aboveVwap =   0; }  // miss — no bonus, not a hard block
-    else                                 { bd.aboveVwap = null; }
+    const base = Math.round(15 * wCOMB);
+    if      (inputs.aboveVwap === true)  { bd.aboveVwap = +base; score += base; }
+    else if (inputs.aboveVwap === false) { bd.aboveVwap =     0; }
+    else                                 { bd.aboveVwap =  null; }
   } else {
     bd.aboveVwap = null; // N/A for swing
   }
 
-  // Daily trend aligned: +15 (hard block only for day — swing is soft)
-  if      (inputs.dailyTrendAligned === true)  { bd.dailyTrendAligned = +15; score += 15; }
-  else if (inputs.dailyTrendAligned === false) { bd.dailyTrendAligned =   0; }  // swing: soft miss
-  else                                         { bd.dailyTrendAligned = null; }
+  // Daily trend aligned: base +15, scaled by EMA2050 weight
+  // (hard block only for day — swing is soft)
+  {
+    const base = Math.round(15 * wE2050);
+    if      (inputs.dailyTrendAligned === true)  { bd.dailyTrendAligned = +base; score += base; }
+    else if (inputs.dailyTrendAligned === false) { bd.dailyTrendAligned =     0; }
+    else                                         { bd.dailyTrendAligned =  null; }
+  }
 
-  // Session quality (day trades): prime → +10, lunch → −10
-  if      (inputs.sessionPrime === true)  { bd.sessionPrime = +10; score += 10; }
-  else if (inputs.sessionPrime === false) { bd.sessionPrime = -10; score -= 10; }
-  else                                    { bd.sessionPrime = null; }
+  // Session quality (day trades): prime → base +10, lunch → base −10; COMBINED weight
+  {
+    const base = Math.round(10 * wCOMB);
+    if      (inputs.sessionPrime === true)  { bd.sessionPrime = +base; score += base; }
+    else if (inputs.sessionPrime === false) { bd.sessionPrime = -base; score -= base; }
+    else                                    { bd.sessionPrime =  null; }
+  }
 
-  // News sentiment: direct pass-through of −10..+10 score
+  // News sentiment: −10..+10 scaled by COMBINED weight
   if (inputs.sentimentScore != null) {
-    const pts = Math.max(-10, Math.min(10, Math.round(inputs.sentimentScore)));
+    const raw = Math.max(-10, Math.min(10, Math.round(inputs.sentimentScore)));
+    const pts = raw >= 0 ? Math.round(raw * wCOMB) : -Math.round(Math.abs(raw) * wCOMB);
     bd.sentimentScore = pts; score += pts;
   } else {
     bd.sentimentScore = null;
   }
 
-  // Relative strength vs SPY: RS > 1.5 = +10, RS < 0.8 = −10 (LONG perspective)
+  // Relative strength vs SPY: ±10 base scaled by COMBINED weight
   if (inputs.relativeStrength != null) {
-    let rsPoints = 0;
+    let rsBase = 0;
     if (direction === 'LONG') {
-      if      (inputs.relativeStrength > 1.5) rsPoints = +10;
-      else if (inputs.relativeStrength < 0.8) rsPoints = -10;
+      if      (inputs.relativeStrength > 1.5) rsBase = +10;
+      else if (inputs.relativeStrength < 0.8) rsBase = -10;
     } else {
-      if      (inputs.relativeStrength < 0.5) rsPoints = +10;
-      else if (inputs.relativeStrength > 1.2) rsPoints = -10;
+      if      (inputs.relativeStrength < 0.5) rsBase = +10;
+      else if (inputs.relativeStrength > 1.2) rsBase = -10;
     }
+    const rsPoints = rsBase >= 0 ? Math.round(rsBase * wCOMB) : -Math.round(Math.abs(rsBase) * wCOMB);
     bd.relativeStrength = rsPoints; score += rsPoints;
   } else {
     bd.relativeStrength = null;
   }
 
-  // Options flow: direct pass-through of −20..+20 score
+  // Options flow: −20..+20 scaled by COMBINED weight
   if (inputs.optionsFlowScore != null) {
-    const pts = Math.max(-20, Math.min(20, Math.round(inputs.optionsFlowScore)));
+    const raw = Math.max(-20, Math.min(20, Math.round(inputs.optionsFlowScore)));
+    const pts = raw >= 0 ? Math.round(raw * wCOMB) : -Math.round(Math.abs(raw) * wCOMB);
     bd.optionsFlowScore = pts; score += pts;
   } else {
     bd.optionsFlowScore = null;
   }
 
-  // Gap boost: pre-computed net point adjustment from getPreMarketGap (+20/+15/−10…)
+  // Gap boost: scaled by COMBINED weight
   if (inputs.gapBoost != null) {
-    bd.gapBoost = inputs.gapBoost; score += inputs.gapBoost;
+    const pts = inputs.gapBoost >= 0
+      ? Math.round(inputs.gapBoost * wCOMB)
+      : -Math.round(Math.abs(inputs.gapBoost) * wCOMB);
+    bd.gapBoost = pts; score += pts;
   } else {
     bd.gapBoost = null;
   }
 
-  // Sector rotation: leading sector boosts longs, lagging penalises longs / boosts shorts
+  // Sector rotation: ±10 base scaled by COMBINED weight
   if (inputs.sectorTag != null) {
-    let sectorPts = 0;
-    if      (inputs.sectorTag === 'leading') sectorPts = direction === 'LONG' ? +10 : -5;
-    else if (inputs.sectorTag === 'lagging') sectorPts = direction === 'LONG' ? -10 : +10;
+    let sectorBase = 0;
+    if      (inputs.sectorTag === 'leading') sectorBase = direction === 'LONG' ? +10 : -5;
+    else if (inputs.sectorTag === 'lagging') sectorBase = direction === 'LONG' ? -10 : +10;
+    const sectorPts = sectorBase >= 0
+      ? Math.round(sectorBase * wCOMB)
+      : -Math.round(Math.abs(sectorBase) * wCOMB);
     bd.sectorRotation = sectorPts; score += sectorPts;
   } else {
     bd.sectorRotation = null;
   }
 
-  // 52-week proximity scoring
+  // 52-week proximity scoring scaled by COMBINED weight
   {
-    let w52Pts = 0;
+    let w52Base = 0;
     const pctHigh = inputs.pctFrom52High ?? null;
     if (inputs.nearHigh === true) {
-      w52Pts = direction === 'LONG' ? +15 : -15;
+      w52Base = direction === 'LONG' ? +15 : -15;
     } else if (pctHigh !== null && pctHigh >= -5 && pctHigh <= -1) {
-      // Pulling back from high (healthy pullback zone): +8 for longs
-      if (direction === 'LONG') w52Pts = +8;
+      if (direction === 'LONG') w52Base = +8;
     }
     if (inputs.nearLow === true && inputs.rsiValue != null && inputs.rsiValue < 35 && direction === 'LONG') {
-      w52Pts += +15; // mean reversion setup
+      w52Base += +15;
     }
-    bd.week52 = w52Pts !== 0 ? w52Pts : (inputs.nearHigh != null ? 0 : null);
+    const w52Pts = w52Base >= 0
+      ? Math.round(w52Base * wCOMB)
+      : -Math.round(Math.abs(w52Base) * wCOMB);
+    bd.week52 = w52Base !== 0 ? w52Pts : (inputs.nearHigh != null ? 0 : null);
     if (w52Pts !== 0) score += w52Pts;
   }
 
@@ -2190,6 +2355,17 @@ module.exports = async function handler(req, res) {
     return res.status(200).json({ logs, count: logs.length });
   }
 
+  // ── STRATEGY WEIGHTS ─────────────────────────────────────────────────────────
+  if (req.method === 'GET' && req.query.type === 'weights') {
+    try {
+      const weights = await getOptimizedStrategyWeights();
+      return res.status(200).json(weights);
+    } catch (err) {
+      console.error('[bot/weights]', err.message);
+      return res.status(500).json({ error: 'Strategy weights unavailable' });
+    }
+  }
+
   // ── STATUS ───────────────────────────────────────────────────────────────────
   if (action === 'status' || (req.method === 'GET' && !action)) {
     resetDayIfNeeded();
@@ -2496,7 +2672,7 @@ module.exports = async function handler(req, res) {
   const currentVolume   = safeNum(body.currentVolume ?? indicators?.volume);
   const isMacdCrossover = body.isMacdCrossover === true || body.signalType === 'macd';
 
-  const [sentFetch, rsFetch, flowFetch, gapFetch, dailyFetch, weeklyFetch, volFetch, vwapFetch, sectorFetch, week52Fetch] =
+  const [sentFetch, rsFetch, flowFetch, gapFetch, dailyFetch, weeklyFetch, volFetch, vwapFetch, sectorFetch, week52Fetch, weightsFetch] =
     await Promise.allSettled([
       getSymbolSentiment(symbol),
       getRelativeStrength(symbol, mode),
@@ -2510,6 +2686,7 @@ module.exports = async function handler(req, res) {
       mode === 'day' ? calculateVWAP(symbol)        : Promise.resolve(null),
       getSectorRotationBot(),
       getWeek52Data(symbol),
+      getOptimizedStrategyWeights(),
     ]);
 
   const getVal = r => r.status === 'fulfilled' ? r.value : null;
@@ -2523,6 +2700,7 @@ module.exports = async function handler(req, res) {
   const vwapData       = getVal(vwapFetch);
   const sectorTags     = getVal(sectorFetch);
   const week52Data     = getVal(week52Fetch);
+  const strategyWeightsData = getVal(weightsFetch);
 
   if (sentFetch.status   === 'rejected') console.warn(`[bot] signal fetch: sentiment:`,    sentFetch.reason?.message);
   if (rsFetch.status     === 'rejected') console.warn(`[bot] signal fetch: RS:`,           rsFetch.reason?.message);
@@ -2651,10 +2829,15 @@ module.exports = async function handler(req, res) {
     gapBoost,
     regimeOk,
     sectorTag,
-    nearHigh:      week52Data?.nearHigh     ?? null,
-    nearLow:       week52Data?.nearLow      ?? null,
-    pctFrom52High: week52Data?.pctFrom52High ?? null,
-    rsiValue:      rsiValueRaw,
+    nearHigh:        week52Data?.nearHigh     ?? null,
+    nearLow:         week52Data?.nearLow      ?? null,
+    pctFrom52High:   week52Data?.pctFrom52High ?? null,
+    rsiValue:        rsiValueRaw,
+    strategyWeights: strategyWeightsData
+      ? { MACD: strategyWeightsData.MACD, RSI: strategyWeightsData.RSI,
+          EMA2050: strategyWeightsData.EMA2050, EMA60200: strategyWeightsData.EMA60200,
+          COMBINED: strategyWeightsData.COMBINED }
+      : null,
   }, mode);
 
   if (composite.blocked) {
