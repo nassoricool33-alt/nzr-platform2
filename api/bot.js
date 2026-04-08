@@ -19,12 +19,15 @@
 const ALLOWED_ORIGINS = ['https://nzr-platform2.vercel.app', 'http://localhost:3000'];
 
 // ─── SCAN UNIVERSE ────────────────────────────────────────────────────────────
-// 15 most-liquid symbols — keeps full scan under Vercel's 10s execution budget.
+// 30 liquid symbols — scanned in parallel batches within the 25s budget.
 // Supabase watchlist symbols are appended at scan time.
 const SCAN_UNIVERSE = [
   'AAPL','MSFT','NVDA','AMD','TSLA',
   'META','GOOGL','AMZN','SPY','QQQ',
   'PLTR','COIN','NFLX','JPM','ARM',
+  'MSTR','SOFI','HOOD','UPST','DKNG',
+  'RBLX','UBER','SHOP','ORCL','CRM',
+  'MELI','SNOW','CRWD','SQ','PYPL',
 ];
 
 // ── Live-trading gate — set BOT_LIVE_TRADING=true in Vercel env to enable ────
@@ -3485,7 +3488,7 @@ module.exports = async function handler(req, res) {
   // TYPE-BASED ROUTES — checked FIRST, before any action or status catch-all
   // ══════════════════════════════════════════════════════════════════════════════
 
-  // ── FULL SCAN (synchronous — 8s budget, responds with results) ────────────
+  // ── FULL SCAN (synchronous — 25s budget, batched in groups of 5) ───────────
   if (type === 'scan') {
     console.log('[BOT] SCAN route matched');
     const startTime = Date.now();
@@ -3497,33 +3500,23 @@ module.exports = async function handler(req, res) {
     const dayAlloc = capital * 0.4;
     const swingAlloc = capital * 0.6;
 
-    pushLog('SCAN_STARTED: capital=$' + capital + ' day=$' + dayAlloc + ' swing=$' + swingAlloc, 'info');
-
-    const scanList = [
-      'AAPL','MSFT','NVDA','AMD','TSLA',
-      'META','GOOGL','AMZN','SPY','QQQ',
-      'PLTR','COIN','NFLX','JPM','ARM'
-    ];
+    pushLog('SCAN_STARTED: capital=$' + capital + ' day=$' + dayAlloc + ' swing=$' + swingAlloc + ' universe=' + SCAN_UNIVERSE.length, 'info');
 
     let symbolsScanned = 0;
     let signalsFound = 0;
     let tradesPlaced = 0;
     let signalResults = [];
 
-    for (const symbol of scanList) {
-      if (Date.now() - startTime > 7500) {
-        pushLog('TIME_BUDGET: stopping early at ' + symbol, 'warn');
-        break;
-      }
-      try {
-        pushLog('Checking ' + symbol, 'info');
-        symbolsScanned++;
+    const apiKey = process.env.POLYGON_API_KEY;
+    const raceFetch = (url) => Promise.race([
+      fetch(url).then(r => r.json()),
+      new Promise(resolve => setTimeout(() => resolve(null), 3000))
+    ]).catch(() => null);
 
-        const apiKey = process.env.POLYGON_API_KEY;
-        const raceFetch = (url) => Promise.race([
-          fetch(url).then(r => r.json()),
-          new Promise(resolve => setTimeout(() => resolve(null), 3000))
-        ]).catch(() => null);
+    // ── evaluateSymbol — self-contained per-symbol evaluation ────────────────
+    async function evaluateSymbol(symbol) {
+      try {
+        symbolsScanned++;
 
         // Fetch snapshot + 4 indicators in parallel
         const [snapRes, rsiData, macdData, ema50Data, ema200Data] = await Promise.all([
@@ -3538,17 +3531,17 @@ module.exports = async function handler(req, res) {
 
         if (!price) {
           pushLog('SKIP ' + symbol + ': no price', 'warn');
-          continue;
+          return;
         }
 
         // Extract indicator values
-        const rsiValue  = rsiData?.results?.values?.[0]?.value || 50;
-        const macdValue = macdData?.results?.values?.[0]?.value || 0;
-        const macdSignal = macdData?.results?.values?.[0]?.signal || 0;
-        const macdHist  = macdData?.results?.values?.[0]?.histogram || 0;
+        const rsiValue     = rsiData?.results?.values?.[0]?.value || 50;
+        const macdValue    = macdData?.results?.values?.[0]?.value || 0;
+        const macdSig      = macdData?.results?.values?.[0]?.signal || 0;
+        const macdHist     = macdData?.results?.values?.[0]?.histogram || 0;
         const macdHistPrev = macdData?.results?.values?.[1]?.histogram || 0;
-        const ema50     = ema50Data?.results?.values?.[0]?.value || 0;
-        const ema200    = ema200Data?.results?.values?.[0]?.value || 0;
+        const ema50        = ema50Data?.results?.values?.[0]?.value || 0;
+        const ema200       = ema200Data?.results?.values?.[0]?.value || 0;
 
         // Calculate NZR score
         let nrzScore = 40;
@@ -3561,7 +3554,7 @@ module.exports = async function handler(req, res) {
 
         // MACD scoring
         if (macdHist > 0 && macdHist > macdHistPrev) nrzScore += 20;
-        if (macdValue > macdSignal) nrzScore += 15;
+        if (macdValue > macdSig) nrzScore += 15;
         if (macdHist < 0) nrzScore -= 15;
 
         // EMA trend scoring
@@ -3578,7 +3571,7 @@ module.exports = async function handler(req, res) {
         nrzScore = Math.max(0, Math.min(100, nrzScore));
 
         // Determine direction
-        const direction = (macdValue > macdSignal && rsiValue > 45) ? 'LONG' : 'SHORT';
+        const direction = (macdValue > macdSig && rsiValue > 45) ? 'LONG' : 'SHORT';
 
         pushLog(symbol + ' RSI=' + rsiValue.toFixed(1) + ' MACD_HIST=' + macdHist.toFixed(3) + ' EMA_TREND=' + (ema50 > ema200 ? 'BULL' : 'BEAR') + ' SCORE=' + nrzScore, nrzScore >= 70 ? 'pass' : 'info');
 
@@ -3609,14 +3602,27 @@ module.exports = async function handler(req, res) {
       }
     }
 
+    // ── Process symbols in parallel batches of 5 ─────────────────────────────
+    const BATCH_SIZE = 5;
+    for (let i = 0; i < SCAN_UNIVERSE.length; i += BATCH_SIZE) {
+      if (Date.now() - startTime > 25000) {
+        pushLog('TIME_BUDGET: stopping early at batch starting ' + SCAN_UNIVERSE[i] + ' (' + (Date.now() - startTime) + 'ms elapsed)', 'warn');
+        break;
+      }
+      const batch = SCAN_UNIVERSE.slice(i, i + BATCH_SIZE);
+      pushLog('BATCH ' + (Math.floor(i / BATCH_SIZE) + 1) + ': ' + batch.join(','), 'info');
+      await Promise.all(batch.map(symbol => evaluateSymbol(symbol)));
+    }
+
     const duration = Date.now() - startTime;
-    pushLog('SCAN_DONE: ' + symbolsScanned + ' scanned, ' + signalsFound + ' signals, ' + duration + 'ms', 'info');
+    pushLog('SCAN_DONE: ' + symbolsScanned + '/' + SCAN_UNIVERSE.length + ' scanned, ' + signalsFound + ' signals, ' + tradesPlaced + ' trades, ' + duration + 'ms', 'info');
 
     // Save result to Supabase for scanresult poll
     try {
       writeBotState('last_scan_result', JSON.stringify({
         success: true, symbolsScanned, signalsPassed: signalsFound, tradesPlaced,
-        duration, results: signalResults, timestamp: new Date().toISOString()
+        duration, results: signalResults.sort((a, b) => b.nrzScore - a.nrzScore),
+        timestamp: new Date().toISOString()
       }));
     } catch(_) {}
 
@@ -3626,7 +3632,7 @@ module.exports = async function handler(req, res) {
       signalsPassed: signalsFound,
       tradesPlaced,
       duration: duration + 'ms',
-      results: signalResults
+      results: signalResults.sort((a, b) => b.nrzScore - a.nrzScore)
     });
   }
 
