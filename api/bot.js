@@ -3500,7 +3500,21 @@ module.exports = async function handler(req, res) {
     const dayAlloc = capital * 0.4;
     const swingAlloc = capital * 0.6;
 
-    pushLog('SCAN_STARTED: capital=$' + capital + ' day=$' + dayAlloc + ' swing=$' + swingAlloc + ' universe=' + SCAN_UNIVERSE.length, 'info');
+    // ── Market hours check (proper ET timezone) ─────────────────────────────
+    const nowET = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+    const etHour = nowET.getHours();
+    const etMinute = nowET.getMinutes();
+    const etDay = nowET.getDay();
+    const etTimeDecimal = etHour + etMinute / 60;
+    const isWeekday = etDay >= 1 && etDay <= 5;
+    const isMarketOpen = isWeekday && etTimeDecimal >= 9.5 && etTimeDecimal < 15.75;
+
+    if (!isMarketOpen) {
+      pushLog('MARKET_CLOSED: ' + etHour + ':' + String(etMinute).padStart(2,'0') + ' ET (day=' + etDay + ')', 'info');
+      return res.status(200).json({ success: true, message: 'Market closed', symbolsScanned: 0, signalsPassed: 0, tradesPlaced: 0, duration: '0ms' });
+    }
+
+    pushLog('SCAN_STARTED: capital=$' + capital + ' day=$' + dayAlloc + ' swing=$' + swingAlloc + ' universe=' + SCAN_UNIVERSE.length + ' ET=' + etHour + ':' + String(etMinute).padStart(2,'0'), 'info');
 
     let symbolsScanned = 0;
     let signalsFound = 0;
