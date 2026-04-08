@@ -1051,6 +1051,274 @@ async function getPreMarketGap(symbol) {
 }
 
 /**
+ * Fetches RSI-14, MACD (12/26/9), EMA-60, and EMA-200 from Polygon for one symbol.
+ * Returns { rsi, macdHist, ema60, ema200 } or nulls on any failure.
+ * Used by runFullScan to build indicator inputs without a browser fetch.
+ */
+async function fetchSymbolIndicators(symbol, key) {
+  const base   = `https://api.polygon.io/v1/indicators`;
+  const common = `timespan=day&adjusted=true&series_type=close&order=desc&limit=3&apiKey=${key}`;
+
+  const [rsiR, macdR, ema60R, ema200R] = await Promise.allSettled([
+    fetch(`${base}/rsi/${symbol}?timespan=day&adjusted=true&series_type=close&order=desc&limit=2&apiKey=${key}&window=14`)
+      .then(r => r.ok ? r.json() : null),
+    fetch(`${base}/macd/${symbol}?timespan=day&adjusted=true&series_type=close&order=desc&limit=2&apiKey=${key}&short_window=12&long_window=26&signal_window=9`)
+      .then(r => r.ok ? r.json() : null),
+    fetch(`${base}/ema/${symbol}?${common}&window=60`).then(r => r.ok ? r.json() : null),
+    fetch(`${base}/ema/${symbol}?${common}&window=200`).then(r => r.ok ? r.json() : null),
+  ]);
+
+  const get = r => r.status === 'fulfilled' ? r.value : null;
+  const rsiV   = get(rsiR)?.results?.values?.[0]?.value   ?? null;
+  const macdE  = get(macdR)?.results?.values?.[0]         ?? null;
+  const ema60  = get(ema60R)?.results?.values?.[0]?.value  ?? null;
+  const ema200 = get(ema200R)?.results?.values?.[0]?.value ?? null;
+
+  return {
+    rsi:      rsiV,
+    macdHist: macdE?.histogram ?? null,
+    ema60,
+    ema200,
+  };
+}
+
+/**
+ * Autonomous full-universe scan: fetches indicators for each symbol in
+ * SCAN_UNIVERSE, scores with resolveSignalScore, executes signals that pass.
+ *
+ * Processes in batches of 5 to avoid burst rate limits on Polygon.
+ * Returns { symbolsScanned, signalsPassed, tradesPlaced, signals, durationMs }
+ */
+async function runFullScan() {
+  const startMs = Date.now();
+  const key = process.env.POLYGON_API_KEY;
+  if (!key) throw new Error('POLYGON_API_KEY not configured');
+
+  await ensureStateLoaded();
+  resetDayIfNeeded();
+  resetSwingIfNeeded();
+
+  // Build scan universe: SCAN_UNIVERSE + Supabase watchlist
+  let universe = [...SCAN_UNIVERSE];
+  const sbUrl = process.env.SUPABASE_URL;
+  const sbHdrs = _sbHeaders();
+  if (sbUrl && sbHdrs) {
+    try {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 5000);
+      let wr;
+      try { wr = await fetch(`${sbUrl}/rest/v1/watchlist?select=symbol`, { headers: sbHdrs, signal: ctrl.signal }); }
+      finally { clearTimeout(t); }
+      if (wr.ok) {
+        const rows = await wr.json().catch(() => []);
+        if (Array.isArray(rows)) {
+          for (const r of rows) {
+            const s = sanitizeSymbol(r.symbol || '');
+            if (s && !universe.includes(s)) universe.push(s);
+          }
+        }
+      }
+    } catch {}
+  }
+
+  // Fetch open Alpaca positions for correlation guard and existing-position checks
+  let openPositions = [];
+  const alpacaKey    = process.env.ALPACA_API_KEY;
+  const alpacaSecret = process.env.ALPACA_SECRET_KEY;
+  if (alpacaKey && alpacaSecret) {
+    try {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 8000);
+      let pr;
+      try {
+        pr = await fetch(`${ALPACA_BASE}/v2/positions`, {
+          headers: {
+            'APCA-API-KEY-ID': alpacaKey, 'APCA-API-SECRET-KEY': alpacaSecret, Accept: 'application/json',
+          },
+          signal: ctrl.signal,
+        });
+      } finally { clearTimeout(t); }
+      if (pr.ok) openPositions = (await pr.json().catch(() => [])) || [];
+    } catch {}
+  }
+
+  const totalExposure = openPositions.reduce((s, p) => s + Math.abs(parseFloat(p.market_value || 0)), 0);
+
+  // Regime check (shared for all symbols)
+  const regime = await getMarketRegime().catch(() => ({ regime: 'neutral' }));
+  const macroRisk = await getMacroRisk().catch(() => ({ hasHighImpactToday: false }));
+  const threshold = macroRisk.hasHighImpactToday ? 85 : ENTRY_CONFIDENCE_THRESHOLD;
+  const strategyWeights = await getOptimizedStrategyWeights().catch(() => null);
+
+  const results = [];
+  let signalsPassed = 0;
+  let tradesPlaced  = 0;
+
+  // Process in batches of 5
+  const BATCH = 5;
+  for (let i = 0; i < universe.length; i += BATCH) {
+    const batch = universe.slice(i, i + BATCH);
+    const batchResults = await Promise.allSettled(
+      batch.map(async (symbol) => {
+        // Skip if kill switch or weekly halt
+        if (killSwitch || weeklyHalt) return { symbol, skipped: true, reason: killSwitch ? 'kill_switch' : 'weekly_halt' };
+
+        // Skip if already have a position in this symbol
+        const hasPos = openPositions.some(p => sanitizeSymbol(p.symbol) === symbol);
+        if (hasPos) return { symbol, skipped: true, reason: 'position_exists' };
+
+        // Skip if stopped out
+        if (isStoppedOut(symbol)) return { symbol, skipped: true, reason: 'stopped_out' };
+
+        // Fetch indicators
+        const ind = await fetchSymbolIndicators(symbol, key).catch(() => ({ rsi: null, macdHist: null, ema60: null, ema200: null }));
+
+        // Fetch daily trend (uses internal cache)
+        const dailyTrend = await checkDailyTrend(symbol).catch(() => null);
+
+        // Derive signal inputs
+        const rsiVal    = ind.rsi;
+        const macdHist  = ind.macdHist;
+        const ema60v    = ind.ema60;
+        const ema200v   = ind.ema200;
+
+        // Direction from EMA alignment + MACD
+        let direction = null;
+        if (ema60v != null && ema200v != null) {
+          direction = ema60v > ema200v ? 'LONG' : 'SHORT';
+        } else if (macdHist != null) {
+          direction = macdHist > 0 ? 'LONG' : 'SHORT';
+        }
+        if (!direction) return { symbol, skipped: true, reason: 'no_direction' };
+
+        // Block crisis regime
+        if (regime.regime === 'crisis') return { symbol, skipped: true, reason: 'crisis_regime' };
+
+        const macdCross    = macdHist != null ? (direction === 'LONG' ? macdHist > 0 : macdHist < 0) : null;
+        const rsiNotExtreme = rsiVal != null ? (rsiVal >= 30 && rsiVal <= 70) : null;
+        const emaAlignment  = (ema60v != null && ema200v != null) ? (direction === 'LONG' ? ema60v > ema200v : ema60v < ema200v) : null;
+        const dailyTrendAligned = dailyTrend ? (direction === 'LONG' ? dailyTrend.bullish : dailyTrend.bearish) : null;
+
+        const composite = resolveSignalScore(symbol, direction, {
+          macdCross,
+          rsiNotExtreme,
+          emaAlignment,
+          dailyTrendAligned,
+          volumeConfirmed: null,   // fail-open — no live volume in scan
+          regimeOk: regime.regime !== 'crisis',
+          strategyWeights: strategyWeights ? {
+            MACD: strategyWeights.MACD, RSI: strategyWeights.RSI,
+            EMA2050: strategyWeights.EMA2050, EMA60200: strategyWeights.EMA60200,
+            COMBINED: strategyWeights.COMBINED,
+          } : null,
+        }, 'day');
+
+        const passed = !composite.blocked && composite.score >= threshold;
+
+        const entry = {
+          symbol,
+          direction,
+          score:   composite.score,
+          passed,
+          blocked: composite.blocked,
+          reason:  composite.blockReason ?? (passed ? null : `score ${composite.score} < threshold ${threshold}`),
+          rsi:     rsiVal != null ? parseFloat(rsiVal.toFixed(2)) : null,
+          ema60:   ema60v  != null ? parseFloat(ema60v.toFixed(2)) : null,
+          ema200:  ema200v != null ? parseFloat(ema200v.toFixed(2)) : null,
+          executed: false,
+          orderId:  null,
+        };
+
+        if (!passed) return entry;
+
+        // Attempt execution
+        if (!capitalAmount) return { ...entry, reason: 'capital_not_set' };
+
+        // Risk checks: day loss limit, trade count, cooldown
+        if (dayState.pnl <= dayState.maxDailyLoss) return { ...entry, reason: 'daily_loss_limit' };
+        if (dayState.trades >= dayState.maxTradesDay) return { ...entry, reason: 'max_trades' };
+        const cd = checkCooldown(symbol, 'day', dayState.cooldownMin * 60 * 1000);
+        if (!cd.ok) return { ...entry, reason: `cooldown_${cd.remaining}s` };
+        if (currentExposureExceeds(totalExposure, dayState.maxExposure)) return { ...entry, reason: 'max_exposure' };
+
+        // Fetch current price from Polygon snapshot
+        let currentPrice = null;
+        try {
+          const ctrl = new AbortController();
+          const t = setTimeout(() => ctrl.abort(), 6000);
+          let sResp;
+          try {
+            sResp = await fetch(
+              `https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers/${encodeURIComponent(symbol)}?apiKey=${key}`,
+              { signal: ctrl.signal }
+            );
+          } finally { clearTimeout(t); }
+          if (sResp.ok) {
+            const sd = await sResp.json().catch(() => ({}));
+            currentPrice = sd?.ticker?.day?.c ?? sd?.ticker?.prevDay?.c ?? null;
+          }
+        } catch {}
+        if (!currentPrice) return { ...entry, reason: 'price_unavailable' };
+
+        const positionSize = Math.min(dayState.maxPositionSize, dayState.allocation * 0.10);
+        const atrStop = await getATRStop(symbol, 'day', currentPrice, direction).catch(() => null);
+        const fallbackAtr = currentPrice * 0.015;
+        const stopPrice  = atrStop?.stopPrice  ?? roundLimitPrice(direction === 'LONG' ? currentPrice * 0.985 : currentPrice * 1.015);
+        const target1    = atrStop?.target1    ?? roundLimitPrice(direction === 'LONG' ? currentPrice * 1.025 : currentPrice * 0.975);
+        const atr        = atrStop?.atr        ?? fallbackAtr;
+
+        const signal = {
+          symbol, direction, mode: 'day', strategy: 'SCAN',
+          nrzScore: composite.score,
+          entryPrice: parseFloat(currentPrice.toFixed(2)),
+          stopPrice:  parseFloat(stopPrice.toFixed(2)),
+          target1:    parseFloat(target1.toFixed(2)),
+          positionSize,
+          atr,
+        };
+
+        const execResult = await executeSignal(signal).catch(e => ({ executed: false, reason: e.message }));
+
+        if (execResult.executed) {
+          tradesPlaced++;
+          dayState.trades++;
+          writeBotState('day_trades', String(dayState.trades));
+          recentOrders.set(`day:${symbol}`, { timestamp: Date.now() });
+          pushLog(`SCAN_TRADE: ${symbol} ${direction} NZR=${composite.score} executed`, 'pass');
+        }
+
+        return { ...entry, executed: execResult.executed, orderId: execResult.orderId ?? null, reason: execResult.reason ?? null };
+      })
+    );
+
+    for (const r of batchResults) {
+      const val = r.status === 'fulfilled' ? r.value : { symbol: '?', error: r.reason?.message };
+      if (val && !val.skipped) results.push(val);
+      if (val?.passed) signalsPassed++;
+    }
+  }
+
+  const durationMs = Date.now() - startMs;
+  pushLog(`FULL_SCAN: ${universe.length} symbols, ${signalsPassed} signals passed, ${tradesPlaced} trades placed (${durationMs}ms)`, 'info');
+
+  return {
+    scannedAt:      Date.now(),
+    symbolsScanned: universe.length,
+    signalsPassed,
+    tradesPlaced,
+    threshold,
+    regime:         regime.regime,
+    durationMs,
+    signals:        results.sort((a, b) => (b.score ?? 0) - (a.score ?? 0)),
+  };
+}
+
+/** Helper for runFullScan: checks if totalExposure is at or above the max. */
+function currentExposureExceeds(totalExposure, maxExposure) {
+  return isFinite(totalExposure) && isFinite(maxExposure) && totalExposure >= maxExposure;
+}
+
+/**
  * Scans all SCREENER_WATCHLIST symbols for pre-market gaps.
  * Intended for the 8:00–9:30 AM ET pre-market window, but also returns
  * results during the first 2 hours of the session (9:30–11:30 AM ET).
@@ -2805,6 +3073,8 @@ module.exports = async function handler(req, res) {
     const minsToClose = Math.max(0, CLOSE_MIN - etMin);
     return res.status(200).json({
       killSwitch,
+      weeklyHalt,
+      weeklyPnl: parseFloat(weeklyPnl.toFixed(4)),
       capitalAmount,
       day: {
         ...dayState,
@@ -3031,6 +3301,18 @@ module.exports = async function handler(req, res) {
     } catch (err) {
       console.error('[bot/gapscan]', err.message);
       return res.status(500).json({ error: 'Gap scan failed', detail: err.message });
+    }
+  }
+
+  // ── FULL SCAN (manual trigger) ────────────────────────────────────────────
+  // GET /api/bot?type=scan  or  GET /api/bot?action=scan
+  if (req.method === 'GET' && (req.query.type === 'scan' || action === 'scan')) {
+    try {
+      const scanResult = await runFullScan();
+      return res.status(200).json(scanResult);
+    } catch (err) {
+      console.error('[bot/scan]', err.message);
+      return res.status(500).json({ error: 'Scan failed', detail: err.message });
     }
   }
 

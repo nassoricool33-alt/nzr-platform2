@@ -908,6 +908,52 @@ footer{border-top:1px solid var(--border);padding:32px 0;margin-top:80px}
 <div id="page-dashboard" class="page active">
 <div class="wrapper">
 
+  <!-- ── PERFORMANCE SUMMARY BAR ── -->
+  <div id="perf-summary-bar" style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:20px;background:var(--panel,#fff);border:1px solid var(--border);border-radius:10px;padding:16px 20px">
+
+    <!-- Today's P&L -->
+    <div style="display:flex;flex-direction:column;gap:4px;border-right:1px solid var(--border);padding-right:16px">
+      <span style="font-family:var(--font-mono);font-size:9px;letter-spacing:1.2px;text-transform:uppercase;color:var(--text3)">Today's P&amp;L</span>
+      <span id="psb-pnl-dollar" style="font-family:var(--font-display);font-size:20px;font-weight:700;line-height:1.1;color:var(--text)">—</span>
+      <span id="psb-pnl-pct" style="font-family:var(--font-mono);font-size:11px;color:var(--text3)">—</span>
+    </div>
+
+    <!-- Trades today -->
+    <div style="display:flex;flex-direction:column;gap:4px;border-right:1px solid var(--border);padding-right:16px;padding-left:4px">
+      <span style="font-family:var(--font-mono);font-size:9px;letter-spacing:1.2px;text-transform:uppercase;color:var(--text3)">Trades Today</span>
+      <span id="psb-trades" style="font-family:var(--font-display);font-size:20px;font-weight:700;line-height:1.1;color:var(--text)">—</span>
+      <span id="psb-wl" style="font-family:var(--font-mono);font-size:11px;color:var(--text3)">—</span>
+    </div>
+
+    <!-- Win rate -->
+    <div style="display:flex;flex-direction:column;gap:4px;border-right:1px solid var(--border);padding-right:16px;padding-left:4px">
+      <span style="font-family:var(--font-mono);font-size:9px;letter-spacing:1.2px;text-transform:uppercase;color:var(--text3)">Win Rate</span>
+      <span id="psb-winrate" style="font-family:var(--font-display);font-size:20px;font-weight:700;line-height:1.1;color:var(--text)">—</span>
+      <span id="psb-wins-losses" style="font-family:var(--font-mono);font-size:11px;color:var(--text3)">—</span>
+    </div>
+
+    <!-- Open positions -->
+    <div style="display:flex;flex-direction:column;gap:4px;border-right:1px solid var(--border);padding-right:16px;padding-left:4px">
+      <span style="font-family:var(--font-mono);font-size:9px;letter-spacing:1.2px;text-transform:uppercase;color:var(--text3)">Open Positions</span>
+      <span id="psb-open" style="font-family:var(--font-display);font-size:20px;font-weight:700;line-height:1.1;color:var(--text)">—</span>
+      <span id="psb-open-sub" style="font-family:var(--font-mono);font-size:11px;color:var(--text3)">live accounts</span>
+    </div>
+
+    <!-- Bot status + refresh -->
+    <div style="display:flex;flex-direction:column;gap:4px;padding-left:4px">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <span style="font-family:var(--font-mono);font-size:9px;letter-spacing:1.2px;text-transform:uppercase;color:var(--text3)">Bot Status</span>
+        <button onclick="loadPerfSummary()" title="Refresh" style="background:none;border:none;cursor:pointer;font-size:13px;color:var(--text3);padding:0;line-height:1" id="psb-refresh-btn">↻</button>
+      </div>
+      <div style="display:flex;align-items:center;gap:7px">
+        <span id="psb-status-dot" style="width:8px;height:8px;border-radius:50%;background:var(--text3);flex-shrink:0;display:inline-block"></span>
+        <span id="psb-status" style="font-family:var(--font-display);font-size:16px;font-weight:700;line-height:1.2;color:var(--text)">—</span>
+      </div>
+      <span id="psb-updated" style="font-family:var(--font-mono);font-size:9px;color:var(--text3)">—</span>
+    </div>
+
+  </div>
+
   <div id="macro-warning-banner" style="display:none; background:#ff6d00; color:#fff; padding: 8px 16px; border-radius: 6px; margin-bottom: 12px; font-size: 13px; font-weight: 500;">
     High-impact macro event today — position sizes reduced, entry threshold raised
   </div>
@@ -1324,6 +1370,70 @@ footer{border-top:1px solid var(--border);padding:32px 0;margin-top:80px}
       <div style="font-family:var(--font-mono);font-size:11px;color:var(--text3);text-align:center;padding:16px">Loading…</div>
     </div>
     <div id="strategy-weights-meta" style="font-family:var(--font-mono);font-size:10px;color:var(--text3);margin-top:8px;text-align:right"></div>
+  </div>
+
+  <!-- Manual scan trigger -->
+  <div id="manual-scan-panel" style="margin-top:24px;background:var(--panel,#fff);border:1px solid var(--border);border-radius:10px;padding:20px 24px">
+
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+      <div>
+        <div style="font-family:var(--font-display);font-size:14px;font-weight:600;color:var(--text)">Manual Scan</div>
+        <div style="font-family:var(--font-mono);font-size:10px;color:var(--text3);margin-top:3px">Score all symbols now — no need to wait for the 15-min cron</div>
+      </div>
+      <button id="scan-run-btn" onclick="runManualScan()"
+        style="background:var(--gold);color:#fff;border:none;border-radius:6px;padding:9px 20px;font-family:var(--font-display);font-size:12px;font-weight:700;letter-spacing:.5px;cursor:pointer;transition:all .18s;white-space:nowrap">
+        ▶ Run Scan Now
+      </button>
+    </div>
+
+    <!-- Spinner + status line -->
+    <div id="scan-status" style="font-family:var(--font-mono);font-size:11px;color:var(--text3);display:none;margin-bottom:14px">
+      <span id="scan-spinner" style="display:inline-block;animation:spin .8s linear infinite;margin-right:6px">⟳</span>
+      <span id="scan-status-text">Scanning universe…</span>
+    </div>
+
+    <!-- Summary tiles (hidden until result) -->
+    <div id="scan-summary" style="display:none;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px">
+      <div style="background:var(--bg2);border-radius:8px;padding:12px 14px">
+        <div style="font-family:var(--font-mono);font-size:9px;color:var(--text3);letter-spacing:1px;text-transform:uppercase;margin-bottom:4px">Symbols Scanned</div>
+        <div id="scan-r-scanned" style="font-family:var(--font-display);font-size:22px;font-weight:700;color:var(--text)">—</div>
+      </div>
+      <div style="background:var(--bg2);border-radius:8px;padding:12px 14px">
+        <div style="font-family:var(--font-mono);font-size:9px;color:var(--text3);letter-spacing:1px;text-transform:uppercase;margin-bottom:4px">Signals Passed</div>
+        <div id="scan-r-passed" style="font-family:var(--font-display);font-size:22px;font-weight:700;color:var(--text)">—</div>
+      </div>
+      <div style="background:var(--bg2);border-radius:8px;padding:12px 14px">
+        <div style="font-family:var(--font-mono);font-size:9px;color:var(--text3);letter-spacing:1px;text-transform:uppercase;margin-bottom:4px">Trades Placed</div>
+        <div id="scan-r-trades" style="font-family:var(--font-display);font-size:22px;font-weight:700;color:var(--text)">—</div>
+      </div>
+      <div style="background:var(--bg2);border-radius:8px;padding:12px 14px">
+        <div style="font-family:var(--font-mono);font-size:9px;color:var(--text3);letter-spacing:1px;text-transform:uppercase;margin-bottom:4px">Duration</div>
+        <div id="scan-r-duration" style="font-family:var(--font-display);font-size:22px;font-weight:700;color:var(--text)">—</div>
+      </div>
+    </div>
+
+    <!-- Signal table (hidden until result) -->
+    <div id="scan-signals-wrap" style="display:none">
+      <div style="font-family:var(--font-mono);font-size:10px;color:var(--text3);letter-spacing:1px;text-transform:uppercase;margin-bottom:8px">Signal Results</div>
+      <div style="overflow-x:auto;border-radius:6px;border:1px solid var(--border)">
+        <table style="width:100%;border-collapse:collapse;font-family:var(--font-mono);font-size:11px">
+          <thead>
+            <tr style="background:var(--bg2);border-bottom:1px solid var(--border)">
+              <th style="padding:8px 14px;text-align:left;color:var(--text3);font-weight:500;font-size:10px">Symbol</th>
+              <th style="padding:8px 10px;text-align:center;color:var(--text3);font-weight:500;font-size:10px">Dir</th>
+              <th style="padding:8px 10px;text-align:right;color:var(--text3);font-weight:500;font-size:10px">NZR Score</th>
+              <th style="padding:8px 10px;text-align:right;color:var(--text3);font-weight:500;font-size:10px">RSI</th>
+              <th style="padding:8px 10px;text-align:right;color:var(--text3);font-weight:500;font-size:10px">EMA60</th>
+              <th style="padding:8px 14px;text-align:left;color:var(--text3);font-weight:500;font-size:10px">Status</th>
+            </tr>
+          </thead>
+          <tbody id="scan-signals-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Error message -->
+    <div id="scan-error" style="display:none;font-family:var(--font-mono);font-size:11px;color:var(--red);padding:8px 0"></div>
   </div>
 
   <!-- Bot activity log -->
@@ -2018,10 +2128,170 @@ function showPage(id){
   if(id==='watchlist'&&currentUser){ loadWatchlist(currentUser.id); }
   if(id==='portfolio'&&currentUser){ loadPortfolio(currentUser.id); }
   if(id==='journal'&&currentUser){ loadJournal(currentUser.id); }
+  if(id==='dashboard'){ loadPerfSummary(); }
 }
 document.querySelectorAll('.nav-tab').forEach(t=>{
   t.addEventListener('click',()=>showPage(t.dataset.page));
 });
+
+/* ── PERFORMANCE SUMMARY BAR ────────────────────── */
+let _perfSummaryTimer = null;
+
+async function loadPerfSummary() {
+  // Spin the refresh button while loading
+  const btn = document.getElementById('psb-refresh-btn');
+  if (btn) btn.style.opacity = '0.4';
+
+  // Fetch all three sources in parallel; each fails independently
+  const [botRes, posRes] = await Promise.allSettled([
+    fetch('/api/bot?action=status').then(r => r.ok ? r.json() : null),
+    fetch('/api/alpaca?action=positions').then(r => r.ok ? r.json() : null),
+  ]);
+
+  const bot  = botRes.status  === 'fulfilled' ? botRes.value  : null;
+  const posData = posRes.status === 'fulfilled' ? posRes.value : null;
+
+  // ── Today's P&L ($ and %) from bot status ────────────────────────────────
+  const pnlDollarEl = document.getElementById('psb-pnl-dollar');
+  const pnlPctEl    = document.getElementById('psb-pnl-pct');
+  if (bot && bot.day) {
+    const pnlDollar   = typeof bot.day.pnl === 'number' ? bot.day.pnl : null;
+    const capital     = typeof bot.capitalAmount === 'number' && bot.capitalAmount > 0 ? bot.capitalAmount : null;
+    const pnlPct      = (pnlDollar !== null && capital) ? (pnlDollar / capital * 100) : null;
+    const isPos       = pnlDollar !== null && pnlDollar > 0;
+    const isNeg       = pnlDollar !== null && pnlDollar < 0;
+    const pnlColor    = isPos ? 'var(--green)' : isNeg ? 'var(--red)' : 'var(--text)';
+
+    if (pnlDollarEl) {
+      const sign = isPos ? '+' : '';
+      pnlDollarEl.textContent = pnlDollar !== null
+        ? sign + '$' + Math.abs(pnlDollar).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+        : '—';
+      pnlDollarEl.style.color = pnlColor;
+    }
+    if (pnlPctEl) {
+      pnlPctEl.textContent = pnlPct !== null
+        ? (pnlPct >= 0 ? '+' : '') + pnlPct.toFixed(2) + '%'
+        : '—';
+      pnlPctEl.style.color = pnlColor;
+    }
+  } else {
+    if (pnlDollarEl) { pnlDollarEl.textContent = '—'; pnlDollarEl.style.color = 'var(--text)'; }
+    if (pnlPctEl)    pnlPctEl.textContent = '—';
+  }
+
+  // ── Trades today from bot status + win/loss from journal ─────────────────
+  const tradesEl  = document.getElementById('psb-trades');
+  const wlEl      = document.getElementById('psb-wl');
+  const winrateEl = document.getElementById('psb-winrate');
+  const winsLossesEl = document.getElementById('psb-wins-losses');
+
+  const tradesToday = bot?.day?.trades ?? null;
+  if (tradesEl) tradesEl.textContent = tradesToday !== null ? String(tradesToday) : '—';
+
+  // Win/loss: query Supabase journal for today's closed trades (pnl_pct != null)
+  let wins = null, losses = null;
+  if (typeof supabaseClient !== 'undefined' && supabaseClient && typeof currentUser !== 'undefined' && currentUser) {
+    try {
+      const today = new Date();
+      const offset = (function() {
+        // Approximate ET offset (DST: -4, Standard: -5)
+        const y = today.getUTCFullYear();
+        const mar2 = new Date(Date.UTC(y,2,1));
+        const marOff = 8 + (7 - mar2.getUTCDay()) % 7;
+        const dstStart = new Date(Date.UTC(y,2,marOff,7));
+        const nov1  = new Date(Date.UTC(y,10,1));
+        const novOff = (7 - nov1.getUTCDay()) % 7;
+        const dstEnd = new Date(Date.UTC(y,10,1+novOff,6));
+        return today >= dstStart && today < dstEnd ? 4 : 5;
+      })();
+      const etDate = new Date(today.getTime() - offset * 3600000).toISOString().slice(0,10);
+
+      const { data: todayTrades } = await supabaseClient
+        .from('journal')
+        .select('pnl_pct')
+        .eq('user_id', currentUser.id)
+        .eq('trade_date', etDate)
+        .not('pnl_pct', 'is', null);
+
+      if (Array.isArray(todayTrades)) {
+        wins   = todayTrades.filter(r => Number(r.pnl_pct) >= 0).length;
+        losses = todayTrades.filter(r => Number(r.pnl_pct) < 0).length;
+      }
+    } catch(e) { /* silent fail */ }
+  }
+
+  if (wins !== null) {
+    const total = wins + losses;
+    const wr    = total > 0 ? (wins / total * 100).toFixed(0) + '%' : '—';
+    if (winrateEl) {
+      winrateEl.textContent = wr;
+      winrateEl.style.color = wins > losses ? 'var(--green)' : losses > wins ? 'var(--red)' : 'var(--text)';
+    }
+    if (winsLossesEl) winsLossesEl.textContent = `${wins}W / ${losses}L`;
+    if (wlEl) wlEl.textContent = total > 0 ? `${wins}W / ${losses}L` : 'no closed trades';
+  } else {
+    if (winrateEl)    { winrateEl.textContent = '—'; winrateEl.style.color = 'var(--text)'; }
+    if (winsLossesEl) winsLossesEl.textContent = currentUser ? 'loading…' : 'sign in to see';
+    if (wlEl)         wlEl.textContent = currentUser ? 'loading…' : 'sign in to see';
+  }
+
+  // ── Open positions ────────────────────────────────────────────────────────
+  const openEl    = document.getElementById('psb-open');
+  const openSubEl = document.getElementById('psb-open-sub');
+  if (posData && Array.isArray(posData)) {
+    if (openEl) { openEl.textContent = String(posData.length); openEl.style.color = 'var(--text)'; }
+    if (openSubEl) openSubEl.textContent = posData.length === 1 ? 'live position' : 'live positions';
+  } else if (posData && typeof posData === 'object' && Array.isArray(posData.positions)) {
+    const n = posData.positions.length;
+    if (openEl) { openEl.textContent = String(n); openEl.style.color = 'var(--text)'; }
+    if (openSubEl) openSubEl.textContent = n === 1 ? 'live position' : 'live positions';
+  } else {
+    if (openEl)    { openEl.textContent = '—'; openEl.style.color = 'var(--text3)'; }
+    if (openSubEl) openSubEl.textContent = 'Alpaca not configured';
+  }
+
+  // ── Bot status ────────────────────────────────────────────────────────────
+  const statusEl  = document.getElementById('psb-status');
+  const dotEl     = document.getElementById('psb-status-dot');
+  let statusLabel = '—', dotColor = 'var(--text3)';
+  if (bot) {
+    if (bot.killSwitch) {
+      statusLabel = 'Halted';
+      dotColor    = 'var(--red)';
+      if (statusEl) statusEl.style.color = 'var(--red)';
+    } else if (bot.weeklyHalt) {
+      statusLabel = 'Circuit Breaker';
+      dotColor    = 'var(--gold)';
+      if (statusEl) statusEl.style.color = 'var(--gold)';
+    } else if (bot.day && bot.day.active === false) {
+      statusLabel = 'Day Halted';
+      dotColor    = 'var(--gold)';
+      if (statusEl) statusEl.style.color = 'var(--gold)';
+    } else {
+      statusLabel = 'Running';
+      dotColor    = 'var(--green)';
+      if (statusEl) statusEl.style.color = 'var(--green)';
+    }
+  } else {
+    if (statusEl) statusEl.style.color = 'var(--text3)';
+  }
+  if (statusEl) statusEl.textContent = statusLabel;
+  if (dotEl)    dotEl.style.background = dotColor;
+
+  // ── Updated timestamp ─────────────────────────────────────────────────────
+  const updatedEl = document.getElementById('psb-updated');
+  if (updatedEl) {
+    const now = new Date();
+    updatedEl.textContent = 'Updated ' + now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  }
+
+  if (btn) btn.style.opacity = '1';
+
+  // Schedule next auto-refresh (60s)
+  clearTimeout(_perfSummaryTimer);
+  _perfSummaryTimer = setTimeout(loadPerfSummary, 60000);
+}
 
 /* ── CENTRAL DATA LAYER ─────────────────────────── */
 // All live quote data is stored here after fetching
@@ -2112,6 +2382,7 @@ async function initAllData(){
   loadMacroBanner();
   setInterval(buildNewsTicker, 5 * 60 * 1000);
   setInterval(renderFearGreedLive, 5 * 60 * 1000);
+  loadPerfSummary(); // initial load for default dashboard tab
 }
 
 /* ── MARKET INDICES BAR ─────────────────────────── */
@@ -5570,6 +5841,117 @@ function startBotLogPolling() {
   _botLogPolling = true;
   pollBotLog();
   setInterval(pollBotLog, 10000);
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// MANUAL SCAN
+// ══════════════════════════════════════════════════════════════════════════════
+
+let _scanRunning = false;
+
+async function runManualScan() {
+  if (_scanRunning) return;
+  _scanRunning = true;
+
+  const btn       = document.getElementById('scan-run-btn');
+  const statusEl  = document.getElementById('scan-status');
+  const statusTxt = document.getElementById('scan-status-text');
+  const errorEl   = document.getElementById('scan-error');
+  const summaryEl = document.getElementById('scan-summary');
+  const signalsEl = document.getElementById('scan-signals-wrap');
+
+  // Reset UI
+  if (btn)      { btn.disabled = true; btn.style.opacity = '0.55'; }
+  if (statusEl) { statusEl.style.display = 'block'; }
+  if (errorEl)  { errorEl.style.display = 'none'; errorEl.textContent = ''; }
+  if (summaryEl){ summaryEl.style.display = 'none'; }
+  if (signalsEl){ signalsEl.style.display = 'none'; }
+
+  // Animated status message progression
+  const msgs = [
+    'Fetching universe…',
+    'Loading indicators…',
+    'Scoring signals…',
+    'Evaluating risk filters…',
+    'Finalizing results…',
+  ];
+  let msgIdx = 0;
+  const msgTimer = setInterval(() => {
+    msgIdx = (msgIdx + 1) % msgs.length;
+    if (statusTxt) statusTxt.textContent = msgs[msgIdx];
+  }, 3000);
+
+  try {
+    const resp = await fetch('/api/bot?type=scan&manual=true');
+    clearInterval(msgTimer);
+
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      throw new Error(err.error || err.detail || `HTTP ${resp.status}`);
+    }
+
+    const d = await resp.json();
+
+    // ── Summary tiles ──────────────────────────────────────────────────────
+    const setTile = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+    setTile('scan-r-scanned',  d.symbolsScanned ?? '—');
+    setTile('scan-r-passed',   d.signalsPassed  ?? '0');
+    setTile('scan-r-trades',   d.tradesPlaced   ?? '0');
+    setTile('scan-r-duration', d.durationMs != null ? (d.durationMs / 1000).toFixed(1) + 's' : '—');
+
+    const passedEl = document.getElementById('scan-r-passed');
+    if (passedEl) passedEl.style.color = (d.signalsPassed > 0) ? 'var(--gold)' : 'var(--text)';
+    const tradesEl = document.getElementById('scan-r-trades');
+    if (tradesEl) tradesEl.style.color = (d.tradesPlaced > 0) ? 'var(--green)' : 'var(--text)';
+
+    if (summaryEl) summaryEl.style.display = 'grid';
+
+    // ── Signal table ───────────────────────────────────────────────────────
+    const tbody = document.getElementById('scan-signals-tbody');
+    if (tbody && Array.isArray(d.signals) && d.signals.length > 0) {
+      tbody.innerHTML = d.signals.map(s => {
+        const scoreColor = s.score >= 85 ? 'var(--green)' : s.score >= 70 ? 'var(--gold)' : 'var(--text2)';
+        const dirColor   = s.direction === 'LONG' ? 'var(--green)' : s.direction === 'SHORT' ? 'var(--red)' : 'var(--text3)';
+        const dirLabel   = s.direction === 'LONG' ? '▲ LONG' : s.direction === 'SHORT' ? '▼ SHORT' : '—';
+
+        let statusBadge;
+        if (s.executed) {
+          statusBadge = `<span style="background:rgba(26,122,64,.15);color:var(--green);border:1px solid rgba(26,122,64,.3);border-radius:4px;padding:2px 8px;font-size:10px">✓ Executed</span>`;
+        } else if (s.passed) {
+          statusBadge = `<span style="background:rgba(200,150,12,.12);color:var(--gold);border:1px solid rgba(200,150,12,.3);border-radius:4px;padding:2px 8px;font-size:10px">✓ Passed</span>`;
+        } else {
+          const reason = (s.reason || 'filtered').replace(/^score \d+ < threshold \d+/, 'score too low');
+          statusBadge = `<span style="background:var(--bg2);color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 8px;font-size:10px" title="${reason}">✗ ${reason.length > 22 ? reason.slice(0,22)+'…' : reason}</span>`;
+        }
+
+        return `<tr style="border-bottom:1px solid var(--border)">
+          <td style="padding:9px 14px;font-weight:700;color:var(--text)">${s.symbol}</td>
+          <td style="padding:9px 10px;text-align:center;font-size:10px;font-weight:600;color:${dirColor}">${dirLabel}</td>
+          <td style="padding:9px 10px;text-align:right;font-weight:700;color:${scoreColor}">${s.score ?? '—'}</td>
+          <td style="padding:9px 10px;text-align:right;color:var(--text2)">${s.rsi != null ? s.rsi.toFixed(1) : '—'}</td>
+          <td style="padding:9px 10px;text-align:right;color:var(--text2)">${s.ema60 != null ? '$'+s.ema60.toFixed(2) : '—'}</td>
+          <td style="padding:9px 14px">${statusBadge}</td>
+        </tr>`;
+      }).join('');
+      if (signalsEl) signalsEl.style.display = 'block';
+    } else if (tbody) {
+      tbody.innerHTML = `<tr><td colspan="6" style="padding:18px 14px;text-align:center;color:var(--text3)">No scorable signals found</td></tr>`;
+      if (signalsEl) signalsEl.style.display = 'block';
+    }
+
+    if (statusTxt) statusTxt.textContent = `Scan complete — ${d.symbolsScanned} symbols, ${d.signalsPassed} passed`;
+
+    // also refresh the bot log so new SCAN_TRADE entries appear
+    if (typeof pollBotLog === 'function') pollBotLog();
+
+  } catch (err) {
+    clearInterval(msgTimer);
+    if (statusEl) statusEl.style.display = 'none';
+    if (errorEl)  { errorEl.textContent = '✗ Scan failed: ' + err.message; errorEl.style.display = 'block'; }
+  } finally {
+    if (btn) { btn.disabled = false; btn.style.opacity = '1'; }
+    _scanRunning = false;
+  }
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
