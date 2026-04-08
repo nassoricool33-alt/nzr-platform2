@@ -103,6 +103,8 @@ const recentOrders = new Map();
 // Supabase bot_state table on every mutation and restored on cold start.
 let consecutiveLosses  = 0;
 let stoppedOutSymbols  = []; // [{ symbol: 'AAPL', expiresAt: <ms timestamp> }]
+let weeklyPnl          = 0;  // week-to-date P&L as % of capital; stored under getWeeklyPnlKey()
+let weeklyHalt         = false; // true once weeklyPnl hits -3%
 let _stateLoaded       = false;
 
 // ─── MULTI-TIMEFRAME TREND CACHE ─────────────────────────────────────────────
@@ -337,7 +339,19 @@ async function loadStateFromSupabase() {
       } catch {}
     }
 
-    console.log(`[bot] State restored — killSwitch=${killSwitch} capital=${capitalAmount} dayTrades=${dayState.trades} consecutiveLosses=${consecutiveLosses} stoppedOut=${stoppedOutSymbols.length}`);
+    // Weekly P&L and halt flag (keyed by current Monday)
+    const wpKey = getWeeklyPnlKey();
+    const wpRaw = s[wpKey];
+    if (wpRaw) {
+      try {
+        const parsed = JSON.parse(wpRaw);
+        const wp = parseFloat(parsed.pct);
+        if (isFinite(wp)) weeklyPnl = wp;
+        if (parsed.halt === true) weeklyHalt = true;
+      } catch {}
+    }
+
+    console.log(`[bot] State restored — killSwitch=${killSwitch} capital=${capitalAmount} dayTrades=${dayState.trades} consecutiveLosses=${consecutiveLosses} stoppedOut=${stoppedOutSymbols.length} weeklyPnl=${weeklyPnl.toFixed(2)}% weeklyHalt=${weeklyHalt}`);
   } catch (err) {
     console.warn('[bot] loadStateFromSupabase error:', err.message);
   }
@@ -411,6 +425,11 @@ function getMondayET(d = new Date()) {
   const diff = day === 0 ? -6 : 1 - day;            // shift to Monday
   et.setUTCDate(et.getUTCDate() + diff);
   return et.toISOString().slice(0, 10);
+}
+
+/** Returns the Supabase bot_state key for the current week's P&L tracking. */
+function getWeeklyPnlKey() {
+  return `weekly_pnl_${getMondayET()}`;
 }
 
 /**
@@ -506,10 +525,13 @@ function resetSwingIfNeeded() {
     swingState.trades    = 0;
     swingState.pnl       = 0;
     swingState.weekStart = monday;
+    weeklyPnl  = 0;
+    weeklyHalt = false;
     writeManyBotState([
       ['swing_pnl',        '0'],
       ['swing_trades',     '0'],
       ['swing_week_start', monday],
+      [getWeeklyPnlKey(),  JSON.stringify({ pct: 0, halt: false })],
     ]);
   }
 }
@@ -2304,7 +2326,30 @@ async function executeSignal(signal) {
     console.warn(`[bot] executeSignal: position check for ${signal.symbol}:`, err.message);
   }
 
-  // 3. Submit bracket limit order
+  // 3. Buying power check
+  try {
+    const ctrl  = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 8000);
+    let acctResp;
+    try {
+      acctResp = await fetch(`${ALPACA_BASE}/v2/account`, { headers: alpacaHeaders, signal: ctrl.signal });
+    } finally { clearTimeout(timer); }
+
+    if (acctResp.ok) {
+      const acct = await acctResp.json().catch(() => ({}));
+      const buyingPower  = parseFloat(acct.buying_power ?? acct.cash ?? '0');
+      const orderValue   = qty * signal.entryPrice;
+      if (isFinite(buyingPower) && buyingPower > 0 && orderValue > buyingPower * 0.95) {
+        pushLog(`BUYING_POWER_SKIP: ${signal.symbol} order $${orderValue.toFixed(2)} > 95% of buying power $${buyingPower.toFixed(2)}`, 'warn');
+        return { executed: false, reason: 'insufficient_buying_power', orderValue, buyingPower };
+      }
+    }
+  } catch (err) {
+    console.warn(`[bot] executeSignal: buying power check for ${signal.symbol}:`, err.message);
+    // fail-open: proceed if account check errors
+  }
+
+  // 4. Submit bracket limit order
   const side          = signal.direction === 'LONG' ? 'buy' : 'sell';
   const clientOrderId = `NZR-${signal.mode.toUpperCase()}-${signal.strategy}-${signal.symbol}-${Date.now()}`
     .slice(0, 48);
@@ -2337,7 +2382,7 @@ async function executeSignal(signal) {
 
     const orderData = await orderResp.json().catch(() => ({}));
 
-    // 4. Handle success
+    // 5. Handle success
     if (orderResp.status === 200 || orderResp.status === 201) {
       const orderId = orderData.id ?? 'unknown';
       pushLog(
@@ -2349,7 +2394,7 @@ async function executeSignal(signal) {
       return { executed: true, orderId, qty };
     }
 
-    // 5. Handle failure — log, no retry
+    // 6. Handle failure — log, no retry
     const errMsg = orderData?.message || orderData?.code || `HTTP ${orderResp.status}`;
     pushLog(`ORDER_FAILED: ${signal.symbol} — ${errMsg}`, 'block');
     return { executed: false, reason: 'order_rejected', detail: errMsg };
@@ -2456,6 +2501,136 @@ async function closeExpiredDayTrades() {
       pushLog(`AUTO_CLOSE_FAIL: ${pos.symbol} — ${err.message}`, 'warn');
     }
   }
+}
+
+// ─── PRE-MARKET GAP PROTECTION ────────────────────────────────────────────────
+/**
+ * Scans all open NZR swing positions and submits market sells for any that have
+ * gapped down past their trailing stop in pre-market.
+ * Called at 9:23–9:27 AM ET window in the cron handler.
+ *
+ * Logic:
+ *  1. Fetch open Alpaca positions — filter to those tracked in trailingStops as "swing:*"
+ *  2. For each, fetch Polygon snapshot preMarketPrice
+ *  3. If preMarketPrice < stopPrice × 0.97 → submit market sell (or buy-to-cover for shorts)
+ */
+async function runPreMarketGapProtection() {
+  if (!BOT_LIVE_TRADING) return;
+
+  const alpacaKey    = process.env.ALPACA_API_KEY;
+  const alpacaSecret = process.env.ALPACA_SECRET_KEY;
+  const polygonKey   = process.env.POLYGON_API_KEY;
+  if (!alpacaKey || !alpacaSecret || !polygonKey) return;
+
+  const headers = {
+    'APCA-API-KEY-ID':     alpacaKey,
+    'APCA-API-SECRET-KEY': alpacaSecret,
+    'Content-Type':        'application/json',
+    'Accept':              'application/json',
+  };
+
+  // 1. Fetch all open Alpaca positions
+  let positions = [];
+  try {
+    const ctrl  = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 10000);
+    let resp;
+    try { resp = await fetch(`${ALPACA_BASE}/v2/positions`, { headers, signal: ctrl.signal }); }
+    finally { clearTimeout(timer); }
+    if (!resp.ok) { console.warn('[bot] gapProtection: positions fetch failed', resp.status); return; }
+    positions = await resp.json().catch(() => []);
+    if (!Array.isArray(positions)) positions = [];
+  } catch (err) {
+    console.warn('[bot] gapProtection: fetch error', err.message);
+    return;
+  }
+
+  // 2. Filter to swing positions tracked by our trailing stop state
+  const swingKeys = [...trailingStops.keys()].filter(k => k.startsWith('swing:'));
+  const trackedSymbols = new Set(swingKeys.map(k => k.slice(6)));
+  const swingPositions = positions.filter(p => trackedSymbols.has(p.symbol));
+
+  if (swingPositions.length === 0) return;
+
+  let protected_ = 0;
+  for (const pos of swingPositions) {
+    const sym    = pos.symbol;
+    const tsKey  = `swing:${sym}`;
+    const ts     = trailingStops.get(tsKey);
+    if (!ts) continue;
+
+    // 3. Fetch Polygon snapshot for pre-market price
+    let preMarketPrice = null;
+    try {
+      const ctrl  = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 8000);
+      let resp;
+      try {
+        resp = await fetch(
+          `https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers/${encodeURIComponent(sym)}?apiKey=${polygonKey}`,
+          { signal: ctrl.signal }
+        );
+      } finally { clearTimeout(timer); }
+      if (resp.ok) {
+        const data = await resp.json().catch(() => ({}));
+        preMarketPrice = data?.ticker?.prevDay?.c    // fallback to prev-day close
+          ?? data?.ticker?.lastTrade?.p
+          ?? null;
+        // Prefer day open or pre-market if available
+        const snap = data?.ticker;
+        if (snap?.day?.open)         preMarketPrice = snap.day.open;
+        if (snap?.lastQuote?.P)      preMarketPrice = snap.lastQuote.P;
+      }
+    } catch (err) {
+      console.warn(`[bot] gapProtection: snapshot fetch error for ${sym}:`, err.message);
+      continue;
+    }
+
+    if (preMarketPrice == null) continue;
+
+    const stopPrice  = ts.stopPrice;
+    const threshold  = stopPrice * 0.97;
+
+    if (preMarketPrice >= threshold) continue; // gap not severe enough
+
+    pushLog(`GAP_PROTECTION: ${sym} preMarket $${preMarketPrice.toFixed(2)} < stop×0.97 $${threshold.toFixed(2)} — submitting market ${ts.direction === 'SHORT' ? 'buy' : 'sell'}`, 'warn');
+
+    // 4. Submit market order to exit
+    const closeSide = ts.direction === 'SHORT' ? 'buy' : 'sell';
+    const closeBody = {
+      symbol:          sym,
+      qty:             pos.qty,
+      side:            closeSide,
+      type:            'market',
+      time_in_force:   'day',
+      client_order_id: `NZR-GAPPROT-${sym}-${Math.floor(Date.now() / 1000)}`.slice(0, 48),
+    };
+    try {
+      const ctrl  = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 10000);
+      let resp;
+      try {
+        resp = await fetch(`${ALPACA_BASE}/v2/orders`, {
+          method: 'POST', headers, body: JSON.stringify(closeBody), signal: ctrl.signal,
+        });
+      } finally { clearTimeout(timer); }
+
+      if (resp.ok) {
+        protected_++;
+        pushLog(`GAP_PROTECTION_FILL: ${sym} market ${closeSide} submitted`, 'pass');
+        trailingStops.delete(tsKey);
+        writeBotState('trailing_stops', JSON.stringify(Object.fromEntries(trailingStops)));
+      } else {
+        const errData = await resp.json().catch(() => ({}));
+        pushLog(`GAP_PROTECTION_FAIL: ${sym} — ${errData.message || resp.status}`, 'warn');
+      }
+    } catch (err) {
+      pushLog(`GAP_PROTECTION_FAIL: ${sym} — ${err.message}`, 'warn');
+    }
+  }
+
+  if (protected_ > 0)
+    console.log(`[bot] gapProtection: protected ${protected_} swing positions from overnight gap`);
 }
 
 // ─── MAIN HANDLER ────────────────────────────────────────────────────────────
@@ -2673,11 +2848,22 @@ module.exports = async function handler(req, res) {
       consecutiveLosses = 0;
       writeBotState('consecutive_losses', '0');
     }
+
+    // Update weekly P&L as % of total capital
+    if (capitalAmount && capitalAmount > 0 && delta !== 0) {
+      weeklyPnl += (delta / capitalAmount) * 100;
+      if (!weeklyHalt && weeklyPnl <= -3) {
+        weeklyHalt = true;
+        pushLog(`WEEKLY_HALT: weekly P&L hit ${weeklyPnl.toFixed(2)}% — halting new entries this week`, 'warn');
+      }
+      writeBotState(getWeeklyPnlKey(), JSON.stringify({ pct: parseFloat(weeklyPnl.toFixed(4)), halt: weeklyHalt }));
+    }
+
     writeManyBotState([
       ['day_pnl',   String(dayState.pnl)],
       ['swing_pnl', String(swingState.pnl)],
     ]);
-    return res.status(200).json({ dayPnl: dayState.pnl, swingPnl: swingState.pnl, consecutiveLosses });
+    return res.status(200).json({ dayPnl: dayState.pnl, swingPnl: swingState.pnl, consecutiveLosses, weeklyPnl: parseFloat(weeklyPnl.toFixed(4)), weeklyHalt });
   }
 
   // ── UPDATE TRAILING STOP ────────────────────────────────────────────────────
@@ -2754,13 +2940,69 @@ module.exports = async function handler(req, res) {
 
   // ── CRON ─────────────────────────────────────────────────────────────────────
   // Called by a Vercel cron job or external scheduler on a regular interval.
-  // Handles: EOD day-trade auto-close (3:40–3:50 PM ET).
+  // Sequence:
+  //   1. 9:23–9:27 AM ET — pre-market gap protection (runs before market-status gate)
+  //   2. Market status check — return early if Polygon says market is not 'open'
+  //   3. 3:40–3:50 PM ET — EOD day-trade auto-close
   if (action === 'cron') {
-    const etMin = getETMinuteOfDay();
-    const CLOSE_START = 15 * 60 + 40; // 3:40 PM ET
-    const CLOSE_END   = 15 * 60 + 50; // 3:50 PM ET
-    const results = { closedTrades: false, etMinute: etMin };
+    const etMin  = getETMinuteOfDay();
+    const results = { etMinute: etMin, gapProtection: false, closedTrades: false, marketOpen: null };
 
+    // ── Step 1: pre-market gap protection (9:23–9:27 AM ET) ──────────────────
+    const GAP_START = 9 * 60 + 23;
+    const GAP_END   = 9 * 60 + 27;
+    if (etMin >= GAP_START && etMin <= GAP_END) {
+      try {
+        await runPreMarketGapProtection();
+        results.gapProtection = true;
+        console.log('[bot/cron] pre-market gap protection ran at ET minute', etMin);
+      } catch (err) {
+        console.error('[bot/cron] runPreMarketGapProtection error:', err.message);
+        results.gapProtectionError = err.message;
+      }
+    }
+
+    // ── Step 2: Polygon market status check ───────────────────────────────────
+    const polygonKey = process.env.POLYGON_API_KEY;
+    if (polygonKey) {
+      try {
+        const ctrl  = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 6000);
+        let mResp;
+        try {
+          mResp = await fetch(
+            `https://api.polygon.io/v1/marketstatus/now?apiKey=${polygonKey}`,
+            { signal: ctrl.signal }
+          );
+        } finally { clearTimeout(timer); }
+
+        if (mResp.ok) {
+          const mData = await mResp.json().catch(() => ({}));
+          results.marketOpen = mData.market === 'open';
+          if (mData.market !== 'open') {
+            console.log(`[bot/cron] market is "${mData.market}" — skipping trading checks`);
+            const heartbeatTs = new Date().toISOString();
+            writeBotState('last_heartbeat', heartbeatTs);
+            results.heartbeat = heartbeatTs;
+            return res.status(200).json({ ...results, message: 'market closed' });
+          }
+        }
+      } catch (err) {
+        console.warn('[bot/cron] market status check failed:', err.message);
+        // fail-open: continue if status check errors
+      }
+    }
+
+    // ── Step 3: weekly halt status sync ──────────────────────────────────────
+    if (!weeklyHalt && weeklyPnl <= -3) {
+      weeklyHalt = true;
+      writeBotState(getWeeklyPnlKey(), JSON.stringify({ pct: parseFloat(weeklyPnl.toFixed(4)), halt: true }));
+      pushLog(`WEEKLY_HALT: cron detected weekly P&L at ${weeklyPnl.toFixed(2)}% — halting new entries`, 'warn');
+    }
+
+    // ── Step 4: EOD day-trade auto-close (3:40–3:50 PM ET) ───────────────────
+    const CLOSE_START = 15 * 60 + 40;
+    const CLOSE_END   = 15 * 60 + 50;
     if (etMin >= CLOSE_START && etMin <= CLOSE_END) {
       try {
         await closeExpiredDayTrades();
@@ -2770,8 +3012,6 @@ module.exports = async function handler(req, res) {
         console.error('[bot/cron] closeExpiredDayTrades error:', err.message);
         results.error = err.message;
       }
-    } else {
-      console.log('[bot/cron] outside close window (ET minute', etMin, '— window is', CLOSE_START, '–', CLOSE_END, ')');
     }
 
     // Heartbeat: record last successful cron execution
@@ -2834,6 +3074,12 @@ module.exports = async function handler(req, res) {
   // 1. KILL SWITCH
   if (killSwitch) return reject('Kill switch active — all trading halted');
   if (!bucket.active) return reject(`${mode} trading mode is halted`);
+
+  // 1a. WEEKLY HALT CHECK
+  if (weeklyHalt) {
+    pushLog(`WEEKLY_HALT_BLOCK: weekly P&L at ${weeklyPnl.toFixed(2)}% — no new entries until Monday`, 'block');
+    return reject(`WEEKLY_HALT: portfolio down ${weeklyPnl.toFixed(2)}% this week — new entries halted until Monday`);
+  }
 
   // 1b. MARKET REGIME CHECK
   const regime = await getMarketRegime().catch(() => ({ regime: 'neutral', adx: null, vix: null }));
