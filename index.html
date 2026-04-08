@@ -5924,33 +5924,20 @@ async function runManualScan() {
   if (errorEl)  { errorEl.style.display = 'none'; errorEl.textContent = ''; }
   if (summaryEl){ summaryEl.style.display = 'none'; }
   if (signalsEl){ signalsEl.style.display = 'none'; }
+  if (statusTxt) statusTxt.textContent = 'Submitting scan request…';
 
-  // Animated status message progression
   const msgs = [
-    'Fetching universe…',
-    'Loading indicators…',
+    'Scan running…',
+    'Fetching indicators…',
     'Scoring signals…',
     'Evaluating risk filters…',
-    'Finalizing results…',
+    'Waiting for results…',
   ];
   let msgIdx = 0;
-  const msgTimer = setInterval(() => {
-    msgIdx = (msgIdx + 1) % msgs.length;
-    if (statusTxt) statusTxt.textContent = msgs[msgIdx];
-  }, 3000);
+  let msgTimer = null;
 
-  try {
-    const resp = await fetch('/api/bot?type=scan&manual=true');
-    clearInterval(msgTimer);
-
-    if (!resp.ok) {
-      const err = await resp.json().catch(() => ({}));
-      throw new Error(err.error || err.detail || `HTTP ${resp.status}`);
-    }
-
-    const d = await resp.json();
-
-    // ── Summary tiles ──────────────────────────────────────────────────────
+  // Helper: render scan results into the UI
+  function renderScanResults(d) {
     const safeNum = (v) => (typeof v === 'number' && !isNaN(v)) ? v : 0;
     const setTile = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
     const scanned = safeNum(d.symbolsScanned);
@@ -5969,15 +5956,14 @@ async function runManualScan() {
 
     if (summaryEl) summaryEl.style.display = 'grid';
 
-    // ── Signal table ───────────────────────────────────────────────────────
     const tbody = document.getElementById('scan-signals-tbody');
-    const signalRows = Array.isArray(d.results) && d.results.length ? d.results : (Array.isArray(d.signals) ? d.signals : []);
+    const signalRows = Array.isArray(d.results) && d.results.length ? d.results
+      : (Array.isArray(d.signals) ? d.signals : []);
     if (tbody && signalRows.length > 0) {
       tbody.innerHTML = signalRows.map(s => {
         const scoreColor = s.score >= 85 ? 'var(--green)' : s.score >= 70 ? 'var(--gold)' : 'var(--text2)';
         const dirColor   = s.direction === 'LONG' ? 'var(--green)' : s.direction === 'SHORT' ? 'var(--red)' : 'var(--text3)';
         const dirLabel   = s.direction === 'LONG' ? '▲ LONG' : s.direction === 'SHORT' ? '▼ SHORT' : '—';
-
         let statusBadge;
         if (s.executed) {
           statusBadge = `<span style="background:rgba(26,122,64,.15);color:var(--green);border:1px solid rgba(26,122,64,.3);border-radius:4px;padding:2px 8px;font-size:10px">✓ Executed</span>`;
@@ -5987,7 +5973,6 @@ async function runManualScan() {
           const reason = (s.reason || 'filtered').replace(/^score \d+ < threshold \d+/, 'score too low');
           statusBadge = `<span style="background:var(--bg2);color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 8px;font-size:10px" title="${reason}">✗ ${reason.length > 22 ? reason.slice(0,22)+'…' : reason}</span>`;
         }
-
         return `<tr style="border-bottom:1px solid var(--border)">
           <td style="padding:9px 14px;font-weight:700;color:var(--text)">${s.symbol}</td>
           <td style="padding:9px 10px;text-align:center;font-size:10px;font-weight:600;color:${dirColor}">${dirLabel}</td>
@@ -6003,10 +5988,49 @@ async function runManualScan() {
       if (signalsEl) signalsEl.style.display = 'block';
     }
 
-    if (statusTxt) statusTxt.textContent = `Scan complete — ${scanned} symbols, ${passed} passed${d.testMode ? ' (test mode)' : ''}`;
-
-    // also refresh the bot log so new SCAN_TRADE entries appear
+    if (statusTxt) statusTxt.textContent =
+      `Scan complete — ${scanned} symbols, ${passed} passed${d.testMode ? ' (test mode)' : ''}`;
     if (typeof pollBotLog === 'function') pollBotLog();
+  }
+
+  try {
+    // ── Step 1: Submit scan request (returns immediately) ─────────────────
+    const startResp = await fetch('/api/bot?type=scan&manual=true');
+    if (!startResp.ok) throw new Error(`HTTP ${startResp.status}`);
+    const startData = await startResp.json();
+    if (!startData.success) throw new Error(startData.error || 'Scan failed to start');
+
+    if (statusTxt) statusTxt.textContent = msgs[0];
+    msgTimer = setInterval(() => {
+      msgIdx = (msgIdx + 1) % msgs.length;
+      if (statusTxt) statusTxt.textContent = msgs[msgIdx];
+    }, 3000);
+
+    // ── Step 2: Poll ?type=scanresult every 3 s for up to 30 s ───────────
+    const POLL_TIMEOUT  = 30000;
+    const POLL_INTERVAL = 3000;
+    const pollStart = Date.now();
+    let result = null;
+
+    while (Date.now() - pollStart < POLL_TIMEOUT) {
+      await new Promise(r => setTimeout(r, POLL_INTERVAL));
+      try {
+        const pollResp = await fetch('/api/bot?type=scanresult');
+        if (pollResp.ok) {
+          const pollData = await pollResp.json();
+          if (pollData.ready) { result = pollData; break; }
+        }
+      } catch { /* keep polling */ }
+    }
+
+    clearInterval(msgTimer);
+
+    if (!result) {
+      if (statusTxt) statusTxt.textContent = 'Scan timed out — results may still be processing';
+      return;
+    }
+
+    renderScanResults(result);
 
   } catch (err) {
     clearInterval(msgTimer);
