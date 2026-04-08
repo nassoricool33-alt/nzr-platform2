@@ -187,8 +187,8 @@ const BOT_LOG_MAX  = 200;
  * type: 'pass' | 'block' | 'warn' | 'info'
  */
 function pushLog(message, type = 'info') {
-  botLogBuffer.push({ timestamp: new Date().toISOString(), message, type });
-  if (botLogBuffer.length > BOT_LOG_MAX) botLogBuffer.shift();
+  botLogBuffer.unshift({ timestamp: new Date().toISOString(), message, type });
+  if (botLogBuffer.length > BOT_LOG_MAX) botLogBuffer.pop();
   console.log(`[bot/${type}] ${message}`);
 }
 
@@ -1513,6 +1513,7 @@ async function runFullScan() {
     const batch = universe.slice(i, i + BATCH);
     const batchResults = await Promise.allSettled(
       batch.map(async (symbol) => {
+        try {
         // Hard guards — skip immediately
         if (killSwitch || weeklyHalt)
           return { symbol, skipped: true, reason: killSwitch ? 'kill_switch' : 'weekly_halt' };
@@ -1701,6 +1702,10 @@ async function runFullScan() {
         }
 
         return { ...entry, executed: execResult.executed, orderId: execResult.orderId ?? null, reason: execResult.reason ?? null };
+        } catch (e) {
+          pushLog(`SCAN_ERROR: ${symbol} — ${e.message}`, 'warn');
+          return { symbol, skipped: true, reason: `error: ${e.message}` };
+        }
       })
     );
 
@@ -3731,10 +3736,26 @@ module.exports = async function handler(req, res) {
   if (req.method === 'GET' && (req.query.type === 'scan' || action === 'scan')) {
     try {
       const scanResult = await runFullScan();
-      return res.status(200).json(scanResult);
+      return res.status(200).json({
+        success:        true,
+        symbolsScanned: scanResult.symbolsScanned  ?? SCAN_UNIVERSE.length,
+        signalsPassed:  scanResult.signalsPassed   ?? 0,
+        tradesPlaced:   scanResult.tradesPlaced    ?? 0,
+        duration:       scanResult.durationMs != null ? `${scanResult.durationMs}ms` : null,
+        results:        scanResult.signals         ?? [],
+        ...scanResult,
+      });
     } catch (err) {
       console.error('[bot/scan]', err.message);
-      return res.status(500).json({ error: 'Scan failed', detail: err.message });
+      return res.status(200).json({
+        success:        false,
+        symbolsScanned: SCAN_UNIVERSE.length,
+        signalsPassed:  0,
+        tradesPlaced:   0,
+        duration:       null,
+        results:        [],
+        error:          err.message,
+      });
     }
   }
 
