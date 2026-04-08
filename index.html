@@ -4860,7 +4860,10 @@ function addNotif(type, message){
   renderNotifList();
   updateNotifBadge();
   if(_supabase){
-    _supabase.from('notifications').insert([{ type, message, read: false }]).then(()=>{}).catch(()=>{});
+    _supabase.auth.getSession().then(({data:{session}})=>{
+      if(!session) return;
+      _supabase.from('notifications').insert([{ user_id: session.user.id, type, message, read: false }]).then(()=>{}).catch(()=>{});
+    }).catch(()=>{});
   }
 }
 
@@ -4902,7 +4905,7 @@ function markNotifRead(id, el){
 function clearAllNotifs(){
   _notifs = [];
   saveNotifsToStorage();
-  if(_supabase){ _supabase.from('notifications').delete().neq('id',0).then(()=>{}).catch(()=>{}); }
+  if(_supabase){ _supabase.auth.getSession().then(({data:{session}})=>{ if(session) _supabase.from('notifications').delete().eq('user_id',session.user.id).then(()=>{}).catch(()=>{}); }).catch(()=>{}); }
   renderNotifList();
   updateNotifBadge();
 }

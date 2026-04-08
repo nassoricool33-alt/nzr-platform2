@@ -198,6 +198,34 @@ function pushLog(message, type = 'info') {
   console.log(`[bot/${type}] ${message}`);
 }
 
+// ─── SAFE NOTIFICATION INSERT ────────────────────────────────────────────────
+// Uses service role key to bypass RLS. Never crashes the caller.
+async function safeNotify(message, type = 'info') {
+  try {
+    const url = process.env.SUPABASE_URL;
+    const key = process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_ANON_KEY;
+    if (!url || !key) return;
+    fetch(`${url}/rest/v1/notifications`, {
+      method: 'POST',
+      headers: {
+        'Content-Type':  'application/json',
+        'apikey':        key,
+        'Authorization': `Bearer ${key}`,
+        'Prefer':        'return=minimal',
+      },
+      body: JSON.stringify({
+        user_id: '00000000-0000-0000-0000-000000000000',
+        message,
+        type,
+        read: false,
+        created_at: new Date().toISOString(),
+      }),
+    }).catch(() => {});
+  } catch(e) {
+    console.log('NOTIFY_SKIP:', e.message);
+  }
+}
+
 // ─── MACRO RISK CACHE ────────────────────────────────────────────────────────
 let macroRiskCache = null;
 const MACRO_RISK_CACHE_TTL = 15 * 60 * 1000; // 15 minutes
@@ -1420,16 +1448,7 @@ async function runFullScan(testMode = false) {
       newsHalt = true;
       newsPauseReason = breakingNews.pauseReason ?? 'Breaking news';
       pushLog(`NEWS_HALT: trading paused — ${newsPauseReason}`, 'block');
-      // Write notification to Supabase
-      const sbUrl  = process.env.SUPABASE_URL;
-      const sbHdrs = _sbHeaders();
-      if (sbUrl && sbHdrs) {
-        fetch(`${sbUrl}/rest/v1/notifications`, {
-          method: 'POST',
-          headers: { ...sbHdrs, 'Prefer': 'return=minimal' },
-          body: JSON.stringify({ message: `BREAKING NEWS HALT: ${newsPauseReason}`, type: 'alert' }),
-        }).catch(() => {});
-      }
+      safeNotify(`BREAKING NEWS HALT: ${newsPauseReason}`, 'alert');
     }
 
     if (breakingNews.highImpactCount >= 3) {
@@ -1454,15 +1473,7 @@ async function runFullScan(testMode = false) {
       writeBotState('flash_news_halt', String(haltUntil));
       newsHalt = true;
       pushLog(`FLASH_HALT: ${flash.title} — trading paused 20 minutes`, 'block');
-      const sbUrl  = process.env.SUPABASE_URL;
-      const sbHdrs = _sbHeaders();
-      if (sbUrl && sbHdrs) {
-        fetch(`${sbUrl}/rest/v1/notifications`, {
-          method: 'POST',
-          headers: { ...sbHdrs, 'Prefer': 'return=minimal' },
-          body: JSON.stringify({ message: `FLASH NEWS: ${flash.title} — trading paused 20 minutes`, type: 'alert' }),
-        }).catch(() => {});
-      }
+      safeNotify(`FLASH NEWS: ${flash.title} — trading paused 20 minutes`, 'alert');
     } else if (flashHaltExpiry > Date.now()) {
       newsHalt = true;
       const minsLeft = Math.ceil((flashHaltExpiry - Date.now()) / 60000);
@@ -2997,13 +3008,10 @@ async function writeSupabaseRecord(signal, qty, newsContext = null) {
       method: 'POST', headers,
       body: JSON.stringify(journalRow),
     }),
-    fetch(`${supabaseUrl}/rest/v1/notifications`, {
-      method: 'POST', headers,
-      body: JSON.stringify({
-        message: `Bot opened ${signal.direction.toLowerCase()} on ${signal.symbol} @ $${signal.entryPrice.toFixed(2)} (NZR ${signal.nrzScore})`,
-        type: 'trade',
-      }),
-    }),
+    safeNotify(
+      `Bot opened ${signal.direction.toLowerCase()} on ${signal.symbol} @ $${signal.entryPrice.toFixed(2)} (NZR ${signal.nrzScore})`,
+      'trade'
+    ),
   ]);
 }
 
@@ -3386,6 +3394,120 @@ async function runPreMarketGapProtection() {
 
   if (protected_ > 0)
     console.log(`[bot] gapProtection: protected ${protected_} swing positions from overnight gap`);
+}
+
+// ─── STANDALONE SCAN FUNCTION ─────────────────────────────────────────────────
+// Runs entirely outside the HTTP handler so it can never crash the response.
+async function runScanAsync() {
+  const startTime = Date.now();
+  let symbolsScanned = 0;
+  let signalsFound = 0;
+  let tradesPlaced = 0;
+  let signalResults = [];
+
+  try {
+    pushLog('SCAN_STARTED', 'info');
+    pushLog('SCAN_CAPITAL: ' + (capitalAmount || 'NOT SET, using $' + getEffectiveCapital()), 'info');
+
+    // Ensure allocations are computed
+    if (dayState.allocation <= 0 || swingState.allocation <= 0) {
+      pushLog('SCAN_FIX: allocations were zero, computing with $' + getEffectiveCapital(), 'warn');
+      computeAllocations();
+    }
+
+    try { await ensureStateLoaded(); } catch(e) { pushLog('STATE_LOAD_ERROR: ' + e.message, 'warn'); }
+    try { resetDayIfNeeded(); } catch(e) { pushLog('RESET_DAY_ERROR: ' + e.message, 'warn'); }
+    try { resetSwingIfNeeded(); } catch(e) { pushLog('RESET_SWING_ERROR: ' + e.message, 'warn'); }
+
+    // Check market hours
+    const now = new Date();
+    const etOffset = -4;
+    const etHour = (now.getUTCHours() + etOffset + 24) % 24;
+    const etMinute = now.getUTCMinutes();
+    const etTime = etHour + etMinute / 60;
+    const marketOpen = etTime >= 9.5 && etTime <= 15.75;
+    const liveTrading = process.env.BOT_LIVE_TRADING === 'true';
+
+    if (!marketOpen) {
+      pushLog('SCAN_TEST_MODE: market closed (' + etHour + ':' + String(etMinute).padStart(2,'0') + ' ET) — signals evaluated, no orders placed', 'info');
+    }
+
+    pushLog('SCAN_UNIVERSE: ' + SCAN_UNIVERSE.length + ' symbols', 'info');
+
+    // Scan each symbol
+    for (const symbol of SCAN_UNIVERSE) {
+      try {
+        symbolsScanned++;
+
+        // Fetch price via Polygon snapshot (faster + more reliable than last trade)
+        const quoteUrl = `https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers/${symbol}?apiKey=${process.env.POLYGON_API_KEY}`;
+        let price = null;
+        try {
+          const quoteRes = await Promise.race([
+            fetch(quoteUrl).then(r => r.json()),
+            new Promise(resolve => setTimeout(() => resolve(null), 3000))
+          ]);
+          price = quoteRes?.ticker?.day?.c || quoteRes?.ticker?.lastTrade?.p || quoteRes?.ticker?.prevDay?.c || null;
+        } catch(e) {
+          pushLog('QUOTE_ERROR ' + symbol + ': ' + e.message, 'warn');
+        }
+
+        if (!price) {
+          pushLog('SKIP ' + symbol + ': no price available', 'warn');
+          continue;
+        }
+
+        pushLog(symbol + ' $' + price, 'info');
+
+        // Basic NZR score — will be enhanced by filters
+        let nrzScore = 50;
+
+        if (nrzScore >= 70 && marketOpen && liveTrading) {
+          pushLog('SIGNAL ' + symbol + ' score=' + nrzScore + ' — would execute', 'pass');
+          signalsFound++;
+        } else if (nrzScore >= 70) {
+          pushLog('SIGNAL ' + symbol + ' score=' + nrzScore + ' — test mode, no order', 'info');
+          signalsFound++;
+        } else {
+          pushLog('FILTERED ' + symbol + ' score=' + nrzScore + ' below threshold', 'info');
+        }
+
+        signalResults.push({ symbol, price, nrzScore });
+
+      } catch(symbolErr) {
+        pushLog('SYMBOL_ERROR ' + symbol + ': ' + symbolErr.message, 'warn');
+        continue;
+      }
+    }
+
+    const duration = Date.now() - startTime;
+    pushLog('SCAN_DONE: ' + symbolsScanned + ' scanned, ' + signalsFound + ' signals, ' + tradesPlaced + ' trades, ' + duration + 'ms', 'info');
+
+    // Save result to Supabase bot_state
+    try {
+      writeBotState('last_scan_result', JSON.stringify({
+        symbolsScanned, signalsFound, tradesPlaced, duration,
+        signalsPassed: signalsFound,
+        results: signalResults, timestamp: new Date().toISOString()
+      }));
+    } catch(dbErr) {
+      pushLog('DB_ERROR saving scan result: ' + dbErr.message, 'warn');
+    }
+
+  } catch(err) {
+    pushLog('SCAN_FATAL: ' + err.message, 'warn');
+    console.error('SCAN_FATAL:', err);
+    // Save error result so frontend poll gets something
+    try {
+      writeBotState('last_scan_result', JSON.stringify({
+        symbolsScanned, signalsFound, tradesPlaced,
+        signalsPassed: signalsFound,
+        duration: Date.now() - startTime,
+        error: err.message,
+        results: signalResults, timestamp: new Date().toISOString()
+      }));
+    } catch(_) {}
+  }
 }
 
 // ─── MAIN HANDLER ────────────────────────────────────────────────────────────
@@ -3844,131 +3966,16 @@ module.exports = async function handler(req, res) {
   }
 
   // ── FULL SCAN (manual trigger — non-blocking) ────────────────────────────
-  // REQUIRED SUPABASE TABLE: bot_state (key text PRIMARY KEY, value text, updated_at timestamptz)
-  if (req.method === 'GET' && req.query.type === 'scan') {
-    const startTime = Date.now();
-    let symbolsScanned = 0;
-    let signalsFound = 0;
-    let tradesPlaced = 0;
-    let signalResults = [];
+  // Responds immediately — scan runs via runScanAsync() outside the handler.
+  if (req.query.type === 'scan') {
+    // Respond immediately — never timeout
+    res.status(200).json({ success: true, message: 'Scan initiated', symbolsScanned: SCAN_UNIVERSE.length });
 
-    pushLog('SCAN_HANDLER_ENTERED: capital=' + (capitalAmount || 'NOT SET'), 'info');
-    const effectiveCapital = capitalAmount && capitalAmount > 0 ? capitalAmount : parseFloat(process.env.DEFAULT_CAPITAL || '10000');
-    const dayAlloc = effectiveCapital * 0.4;
-    const swingAlloc = effectiveCapital * 0.6;
-    pushLog('SCAN_ALLOCATIONS: day=$' + dayAlloc + ' swing=$' + swingAlloc, 'info');
-
-    // Ensure allocations are computed before scan runs
-    if (dayState.allocation <= 0 || swingState.allocation <= 0) {
-      pushLog('SCAN_FIX: allocations were zero, recomputing with $' + effectiveCapital, 'warn');
-      computeAllocations();
-    }
-
-    // Immediately respond so Vercel does not timeout
-    res.status(200).json({
-      success: true,
-      message: 'Scan started',
-      symbolsScanned: 0,
-      signalsPassed: 0,
-      tradesPlaced: 0,
-      duration: '0ms'
+    // All work happens after response
+    runScanAsync().catch(err => {
+      pushLog('SCAN_FATAL: ' + err.message, 'warn');
+      console.error('SCAN_FATAL:', err);
     });
-
-    // Run scan asynchronously after response
-    setImmediate(async () => {
-      try {
-        pushLog('SCAN_ASYNC_STARTED', 'info');
-
-        const scanList = [
-          'AAPL','MSFT','NVDA','AMD','TSLA',
-          'META','GOOGL','AMZN','SPY','QQQ',
-          'PLTR','COIN','NFLX','JPM','ARM'
-        ];
-
-        pushLog('SCAN_UNIVERSE: ' + scanList.length + ' symbols', 'info');
-
-        // Check market hours
-        const now = new Date();
-        const etOffset = -4;
-        const etHour = (now.getUTCHours() + etOffset + 24) % 24;
-        const etMinute = now.getUTCMinutes();
-        const etTime = etHour + etMinute / 60;
-        const marketOpen = etTime >= 9.5 && etTime <= 15.75;
-
-        if (!marketOpen) {
-          pushLog('SCAN_TEST_MODE: market closed (' + etHour + ':' + String(etMinute).padStart(2,'0') + ' ET) — signals evaluated, no orders placed', 'info');
-        }
-
-        // Scan each symbol
-        for (const symbol of scanList) {
-          try {
-            pushLog('Evaluating ' + symbol + '...', 'info');
-            symbolsScanned++;
-
-            // Fetch basic quote from Polygon
-            const quoteUrl = 'https://api.polygon.io/v2/last/trade/' + symbol + '?apiKey=' + process.env.POLYGON_API_KEY;
-            let price = null;
-            try {
-              const quoteRes = await Promise.race([
-                fetch(quoteUrl).then(r => r.json()),
-                new Promise(resolve => setTimeout(() => resolve(null), 3000))
-              ]);
-              if (quoteRes && quoteRes.results) {
-                price = quoteRes.results.p;
-              }
-            } catch(e) {
-              pushLog('QUOTE_ERROR ' + symbol + ': ' + e.message, 'warn');
-            }
-
-            if (!price) {
-              pushLog('SKIP ' + symbol + ': no price data', 'warn');
-              continue;
-            }
-
-            pushLog(symbol + ' price=$' + price, 'info');
-
-            // Basic NZR score — will be enhanced by filters
-            let nrzScore = 50;
-
-            // Check if BOT_LIVE_TRADING is enabled
-            const liveTrading = process.env.BOT_LIVE_TRADING === 'true';
-
-            if (nrzScore >= 70 && marketOpen && liveTrading) {
-              pushLog('SIGNAL ' + symbol + ' score=' + nrzScore + ' — would execute', 'pass');
-              signalsFound++;
-            } else if (nrzScore >= 70) {
-              pushLog('SIGNAL ' + symbol + ' score=' + nrzScore + ' — test mode, no order', 'info');
-              signalsFound++;
-            } else {
-              pushLog('FILTERED ' + symbol + ' score=' + nrzScore + ' below threshold', 'info');
-            }
-
-            signalResults.push({ symbol, price, nrzScore });
-
-          } catch(symbolErr) {
-            pushLog('SYMBOL_ERROR ' + symbol + ': ' + symbolErr.message, 'warn');
-            continue;
-          }
-        }
-
-        const duration = Date.now() - startTime;
-        pushLog('SCAN_COMPLETE: ' + symbolsScanned + ' scanned, ' + signalsFound + ' signals, ' + tradesPlaced + ' trades, ' + duration + 'ms', 'info');
-
-        // Save result to Supabase bot_state
-        try {
-          writeBotState('last_scan_result', JSON.stringify({
-            symbolsScanned, signalsFound, tradesPlaced, duration,
-            results: signalResults, timestamp: new Date().toISOString()
-          }));
-        } catch(dbErr) {
-          pushLog('DB_ERROR saving scan result: ' + dbErr.message, 'warn');
-        }
-
-      } catch(scanErr) {
-        pushLog('SCAN_ASYNC_ERROR: ' + scanErr.message, 'warn');
-      }
-    });
-
     return;
   }
 
