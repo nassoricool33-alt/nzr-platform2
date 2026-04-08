@@ -5951,23 +5951,29 @@ async function runManualScan() {
     const d = await resp.json();
 
     // ── Summary tiles ──────────────────────────────────────────────────────
+    const safeNum = (v) => (typeof v === 'number' && !isNaN(v)) ? v : 0;
     const setTile = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
-    setTile('scan-r-scanned',  d.symbolsScanned ?? '—');
-    setTile('scan-r-passed',   d.signalsPassed  ?? '0');
-    setTile('scan-r-trades',   d.tradesPlaced   ?? '0');
-    setTile('scan-r-duration', d.durationMs != null ? (d.durationMs / 1000).toFixed(1) + 's' : '—');
+    const scanned = safeNum(d.symbolsScanned);
+    const passed  = safeNum(d.signalsPassed);
+    const trades  = safeNum(d.tradesPlaced);
+    const durMs   = safeNum(d.durationMs);
+    setTile('scan-r-scanned',  scanned + ' symbols scanned');
+    setTile('scan-r-passed',   passed);
+    setTile('scan-r-trades',   trades);
+    setTile('scan-r-duration', durMs > 0 ? (durMs / 1000).toFixed(1) + 's' : '—');
 
     const passedEl = document.getElementById('scan-r-passed');
-    if (passedEl) passedEl.style.color = (d.signalsPassed > 0) ? 'var(--gold)' : 'var(--text)';
+    if (passedEl) passedEl.style.color = (passed > 0) ? 'var(--gold)' : 'var(--text)';
     const tradesEl = document.getElementById('scan-r-trades');
-    if (tradesEl) tradesEl.style.color = (d.tradesPlaced > 0) ? 'var(--green)' : 'var(--text)';
+    if (tradesEl) tradesEl.style.color = (trades > 0) ? 'var(--green)' : 'var(--text)';
 
     if (summaryEl) summaryEl.style.display = 'grid';
 
     // ── Signal table ───────────────────────────────────────────────────────
     const tbody = document.getElementById('scan-signals-tbody');
-    if (tbody && Array.isArray(d.signals) && d.signals.length > 0) {
-      tbody.innerHTML = d.signals.map(s => {
+    const signalRows = Array.isArray(d.results) && d.results.length ? d.results : (Array.isArray(d.signals) ? d.signals : []);
+    if (tbody && signalRows.length > 0) {
+      tbody.innerHTML = signalRows.map(s => {
         const scoreColor = s.score >= 85 ? 'var(--green)' : s.score >= 70 ? 'var(--gold)' : 'var(--text2)';
         const dirColor   = s.direction === 'LONG' ? 'var(--green)' : s.direction === 'SHORT' ? 'var(--red)' : 'var(--text3)';
         const dirLabel   = s.direction === 'LONG' ? '▲ LONG' : s.direction === 'SHORT' ? '▼ SHORT' : '—';
@@ -5997,7 +6003,7 @@ async function runManualScan() {
       if (signalsEl) signalsEl.style.display = 'block';
     }
 
-    if (statusTxt) statusTxt.textContent = `Scan complete — ${d.symbolsScanned} symbols, ${d.signalsPassed} passed`;
+    if (statusTxt) statusTxt.textContent = `Scan complete — ${scanned} symbols, ${passed} passed${d.testMode ? ' (test mode)' : ''}`;
 
     // also refresh the bot log so new SCAN_TRADE entries appear
     if (typeof pollBotLog === 'function') pollBotLog();

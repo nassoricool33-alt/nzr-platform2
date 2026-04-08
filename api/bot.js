@@ -1327,7 +1327,7 @@ async function fetchSymbolIndicators(symbol, key) {
  * Processes in batches of 5 to avoid burst rate limits on Polygon.
  * Returns { symbolsScanned, signalsPassed, tradesPlaced, signals, durationMs }
  */
-async function runFullScan() {
+async function runFullScan(testMode = false) {
   const startMs = Date.now();
   const key = process.env.POLYGON_API_KEY;
   if (!key) throw new Error('POLYGON_API_KEY not configured');
@@ -1360,6 +1360,13 @@ async function runFullScan() {
   }
 
   pushLog(`SCAN_START: ${universe.length} symbols (${SCAN_UNIVERSE.length} base + ${universe.length - SCAN_UNIVERSE.length} watchlist)`, 'info');
+
+  // ── Pre-scan diagnostics ──────────────────────────────────────────────────
+  pushLog(`PRE_SCAN: BOT_LIVE_TRADING=${process.env.BOT_LIVE_TRADING === 'true'}`, 'info');
+  pushLog(`PRE_SCAN: symbols to scan=${universe.length}`, 'info');
+  pushLog(`PRE_SCAN: market status=checking...`, 'info');
+  pushLog(`PRE_SCAN: Alpaca connected=${process.env.ALPACA_API_KEY ? 'yes' : 'NO KEY FOUND'}`, 'info');
+  if (testMode) pushLog('SCAN_TEST_MODE: market closed, signals evaluated but no orders placed', 'warn');
 
   // ── 2. News intelligence — Steps A, B, D (fetched once before any symbol eval) ─
 
@@ -1690,8 +1697,14 @@ async function runFullScan() {
           atr,
         };
 
-        const execResult = await executeSignal(signal, newsContext)
-          .catch(e => ({ executed: false, reason: e.message }));
+        let execResult;
+        if (testMode) {
+          pushLog(`SCAN_TEST_MODE: ${symbol} signal evaluated (NZR=${composite.score}) — no order placed (market closed)`, 'info');
+          execResult = { executed: false, reason: 'test_mode' };
+        } else {
+          execResult = await executeSignal(signal, newsContext)
+            .catch(e => ({ executed: false, reason: e.message }));
+        }
 
         if (execResult.executed) {
           tradesPlaced++;
@@ -3734,16 +3747,39 @@ module.exports = async function handler(req, res) {
   // ── FULL SCAN (manual trigger) ────────────────────────────────────────────
   // GET /api/bot?type=scan  or  GET /api/bot?action=scan
   if (req.method === 'GET' && (req.query.type === 'scan' || action === 'scan')) {
+    // Market hours gate: before 9 AM or at/after 4 PM ET → test mode (no orders)
+    const etMinScan = getETMinuteOfDay();
+    const etHourScan = Math.floor(etMinScan / 60);
+    const testMode = etHourScan < 9 || etHourScan >= 16;
+    if (testMode) {
+      pushLog('SCAN_TEST_MODE: market closed, signals evaluated but no orders placed', 'warn');
+    }
+
     try {
-      const scanResult = await runFullScan();
+      const scanResult = await runFullScan(testMode);
+      const symbolsScanned = typeof scanResult.symbolsScanned === 'number' ? scanResult.symbolsScanned : SCAN_UNIVERSE.length;
+      const signalsPassed  = typeof scanResult.signalsPassed  === 'number' ? scanResult.signalsPassed  : 0;
+      const tradesPlaced   = typeof scanResult.tradesPlaced   === 'number' ? scanResult.tradesPlaced   : 0;
+      const durationMs     = typeof scanResult.durationMs     === 'number' ? scanResult.durationMs     : 0;
+      const duration       = durationMs > 0 ? `${durationMs}ms` : '0ms';
+      const results        = Array.isArray(scanResult.signals) ? scanResult.signals : [];
+
       return res.status(200).json({
-        success:        true,
-        symbolsScanned: scanResult.symbolsScanned  ?? SCAN_UNIVERSE.length,
-        signalsPassed:  scanResult.signalsPassed   ?? 0,
-        tradesPlaced:   scanResult.tradesPlaced    ?? 0,
-        duration:       scanResult.durationMs != null ? `${scanResult.durationMs}ms` : null,
-        results:        scanResult.signals         ?? [],
-        ...scanResult,
+        success: true,
+        symbolsScanned,
+        signalsPassed,
+        tradesPlaced,
+        duration,
+        durationMs,
+        results,
+        signals:   results,          // keep both keys so older frontend code works
+        testMode,
+        threshold: scanResult.threshold ?? null,
+        regime:    scanResult.regime    ?? null,
+        session:   scanResult.session   ?? null,
+        geoRisk:   scanResult.geoRisk   ?? null,
+        newsHalt:  scanResult.newsHalt  ?? false,
+        scannedAt: scanResult.scannedAt ?? Date.now(),
       });
     } catch (err) {
       console.error('[bot/scan]', err.message);
@@ -3752,8 +3788,11 @@ module.exports = async function handler(req, res) {
         symbolsScanned: SCAN_UNIVERSE.length,
         signalsPassed:  0,
         tradesPlaced:   0,
-        duration:       null,
+        duration:       '0ms',
+        durationMs:     0,
         results:        [],
+        signals:        [],
+        testMode,
         error:          err.message,
       });
     }
