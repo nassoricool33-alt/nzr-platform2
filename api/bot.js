@@ -63,6 +63,12 @@ const sectorMap = {
 
 let killSwitch    = false;
 let capitalAmount = null;   // Must be set via setcapital before trading
+const DEFAULT_CAPITAL = 10000;
+
+/** Returns capitalAmount if set, otherwise DEFAULT_CAPITAL. Never returns null/0. */
+function getEffectiveCapital() {
+  return (capitalAmount && capitalAmount > 0) ? capitalAmount : parseFloat(process.env.DEFAULT_CAPITAL || String(DEFAULT_CAPITAL));
+}
 
 // Day trading bucket (40% of capital)
 const dayState = {
@@ -506,16 +512,19 @@ function checkCorrelationGuard(symbol, openPositions) {
 
 /** Recalculate all allocation-derived limits whenever capital changes */
 function computeAllocations() {
-  if (!capitalAmount || capitalAmount <= 0) return;
-  dayState.allocation      = capitalAmount * 0.40;
+  const cap = getEffectiveCapital();
+  if (!capitalAmount || capitalAmount <= 0) {
+    pushLog('CAPITAL_WARNING: no capital set, using default $' + cap, 'warn');
+  }
+  dayState.allocation      = cap * 0.40;
   dayState.maxPositionSize = dayState.allocation * 0.10;
   dayState.maxExposure     = dayState.allocation * 0.80;
-  dayState.maxDailyLoss    = -(capitalAmount * 0.02);
+  dayState.maxDailyLoss    = -(cap * 0.02);
 
-  swingState.allocation      = capitalAmount * 0.60;
+  swingState.allocation      = cap * 0.60;
   swingState.maxPositionSize = swingState.allocation * 0.15;
   swingState.maxExposure     = swingState.allocation * 0.70;
-  swingState.maxWeeklyLoss   = -(capitalAmount * 0.03);
+  swingState.maxWeeklyLoss   = -(cap * 0.03);
 }
 
 /** Reset day counters when ET date changes; write-through to Supabase. */
@@ -1345,6 +1354,12 @@ async function runFullScan(testMode = false) {
   try { resetDayIfNeeded(); } catch(e) { pushLog('RESET_DAY_ERROR: ' + e.message, 'warn'); }
   try { resetSwingIfNeeded(); } catch(e) { pushLog('RESET_SWING_ERROR: ' + e.message, 'warn'); }
 
+  // Ensure allocations are computed — uses fallback capital if not set
+  if (dayState.allocation <= 0 || swingState.allocation <= 0) {
+    pushLog('SCAN_FIX: allocations were zero, computing with $' + getEffectiveCapital(), 'warn');
+    computeAllocations();
+  }
+
   // ── 1. Build scan universe: SCAN_UNIVERSE + Supabase watchlist ──────────────
   let universe = [...SCAN_UNIVERSE];
   const sbUrl  = process.env.SUPABASE_URL;
@@ -1703,7 +1718,8 @@ async function runFullScan(testMode = false) {
         if (!passed) return entry;
 
         // ── 3g. Pre-execution risk checks (unchanged) ─────────────────────────
-        if (!capitalAmount)                           return { ...entry, reason: 'capital_not_set' };
+        // Ensure allocations are computed (uses fallback capital if not set)
+        if (dayState.allocation <= 0 || dayState.maxPositionSize <= 0) computeAllocations();
         if (dayState.pnl <= dayState.maxDailyLoss)    return { ...entry, reason: 'daily_loss_limit' };
         if (dayState.trades >= dayState.maxTradesDay) return { ...entry, reason: 'max_trades' };
         const cd = checkCooldown(symbol, 'day', dayState.cooldownMin * 60 * 1000);
@@ -1712,7 +1728,9 @@ async function runFullScan(testMode = false) {
                                                       return { ...entry, reason: 'max_exposure' };
 
         // ── 3h. executeSignal ─────────────────────────────────────────────────
-        const positionSize = Math.min(dayState.maxPositionSize, dayState.allocation * 0.10) * geoSizeMultiplier;
+        const effectiveDayAlloc = dayState.allocation > 0 ? dayState.allocation : getEffectiveCapital() * 0.4;
+        const effectiveDayMaxPos = dayState.maxPositionSize > 0 ? dayState.maxPositionSize : effectiveDayAlloc * 0.10;
+        const positionSize = Math.min(effectiveDayMaxPos, effectiveDayAlloc * 0.10) * geoSizeMultiplier;
         const atrStop      = await getATRStop(symbol, 'day', currentPrice, direction).catch(() => null);
         const stopPrice    = atrStop?.stopPrice
           ?? roundLimitPrice(direction === 'LONG' ? currentPrice * 0.985 : currentPrice * 1.015);
@@ -3449,6 +3467,22 @@ module.exports = async function handler(req, res) {
     });
   }
 
+  // ── SET CAPITAL (GET — for frontend convenience) ────────────────────────────
+  if (req.method === 'GET' && req.query.type === 'setcapital') {
+    const cap = safeNum(req.query.amount);
+    if (!cap || cap <= 0) return res.status(400).json({ error: 'amount query param must be a positive number' });
+    capitalAmount = cap;
+    computeAllocations();
+    writeBotState('capital_amount', String(capitalAmount));
+    pushLog('CAPITAL_SET: $' + capitalAmount + ' (day=$' + dayState.allocation + ' swing=$' + swingState.allocation + ')', 'info');
+    return res.status(200).json({
+      ok: true,
+      capitalAmount,
+      day:   { allocation: dayState.allocation, maxPositionSize: dayState.maxPositionSize, maxExposure: dayState.maxExposure, maxDailyLoss: dayState.maxDailyLoss },
+      swing: { allocation: swingState.allocation, maxPositionSize: swingState.maxPositionSize, maxExposure: swingState.maxExposure, maxWeeklyLoss: swingState.maxWeeklyLoss },
+    });
+  }
+
   // ── SET RULES ────────────────────────────────────────────────────────────────
   if (action === 'setrules') {
     if (req.method !== 'POST') return res.status(405).json({ error: 'POST required' });
@@ -3599,8 +3633,9 @@ module.exports = async function handler(req, res) {
     }
 
     // Update weekly P&L as % of total capital
-    if (capitalAmount && capitalAmount > 0 && delta !== 0) {
-      weeklyPnl += (delta / capitalAmount) * 100;
+    if (delta !== 0) {
+      const capForPnl = getEffectiveCapital();
+      weeklyPnl += (delta / capForPnl) * 100;
       if (!weeklyHalt && weeklyPnl <= -3) {
         weeklyHalt = true;
         pushLog(`WEEKLY_HALT: weekly P&L hit ${weeklyPnl.toFixed(2)}% — halting new entries this week`, 'warn');
@@ -3817,7 +3852,17 @@ module.exports = async function handler(req, res) {
     let tradesPlaced = 0;
     let signalResults = [];
 
-    pushLog('SCAN_HANDLER_ENTERED', 'info');
+    pushLog('SCAN_HANDLER_ENTERED: capital=' + (capitalAmount || 'NOT SET'), 'info');
+    const effectiveCapital = capitalAmount && capitalAmount > 0 ? capitalAmount : parseFloat(process.env.DEFAULT_CAPITAL || '10000');
+    const dayAlloc = effectiveCapital * 0.4;
+    const swingAlloc = effectiveCapital * 0.6;
+    pushLog('SCAN_ALLOCATIONS: day=$' + dayAlloc + ' swing=$' + swingAlloc, 'info');
+
+    // Ensure allocations are computed before scan runs
+    if (dayState.allocation <= 0 || swingState.allocation <= 0) {
+      pushLog('SCAN_FIX: allocations were zero, recomputing with $' + effectiveCapital, 'warn');
+      computeAllocations();
+    }
 
     // Immediately respond so Vercel does not timeout
     res.status(200).json({
@@ -3941,8 +3986,9 @@ module.exports = async function handler(req, res) {
     return res.status(400).json({ rejected: true, reason: 'mode must be "day" or "swing"' });
   }
 
-  if (!capitalAmount) {
-    return res.status(400).json({ rejected: true, reason: 'Capital not set — call POST /api/bot?action=setcapital first' });
+  if (!capitalAmount || capitalAmount <= 0) {
+    pushLog('CAPITAL_WARNING: no capital set for order validation, using default $' + getEffectiveCapital(), 'warn');
+    computeAllocations();
   }
 
   await ensureStateLoaded(); // restore state from Supabase on cold start

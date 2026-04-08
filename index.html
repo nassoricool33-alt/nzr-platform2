@@ -4983,14 +4983,27 @@ async function sbSetCapital(){
   const cap   = parseFloat(input?.value);
   if (!cap || cap < 100) { alert('Enter a valid capital amount (min $100)'); return; }
   try {
+    // Save via POST action endpoint
     const r = await fetch('/api/bot?action=setcapital', {
       method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ capital: cap }),
     });
     const d = await r.json();
-    if (d.ok || d.capitalAmount) {
+    if (d.capital || d.capitalAmount || d.ok) {
       addNotif('price_alert', `Trading capital set to $${cap.toLocaleString()}. Day: $${(cap*0.4).toLocaleString()} / Swing: $${(cap*0.6).toLocaleString()}`);
       input.style.borderColor = 'var(--green)';
       setTimeout(() => { if(input) input.style.borderColor = ''; }, 2000);
+      // Also save directly to Supabase bot_state for persistence across cold starts
+      try {
+        const sbUrl = window._sbUrl || '';
+        const sbKey = window._sbKey || '';
+        if (sbUrl && sbKey) {
+          fetch(sbUrl + '/rest/v1/bot_state', {
+            method: 'POST',
+            headers: { 'apikey': sbKey, 'Authorization': 'Bearer ' + sbKey, 'Content-Type': 'application/json', 'Prefer': 'resolution=merge-duplicates' },
+            body: JSON.stringify({ key: 'capital_amount', value: String(cap), updated_at: new Date().toISOString() }),
+          }).catch(() => {});
+        }
+      } catch(_) {}
     } else {
       alert(d.error || 'Failed to set capital');
     }
