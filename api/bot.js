@@ -3046,6 +3046,27 @@ async function writeSupabaseRecord(signal, qty, newsContext = null) {
  * @returns {{ executed: boolean, orderId?: string, qty?: number, reason?: string }}
  */
 async function executeSignal(signal, newsContext = null) {
+  try {
+  // ── Parse and guard all price values ──────────────────────────────────────
+  const entryPrice  = parseFloat(signal.entryPrice) || 0;
+  const positionSize = parseFloat(signal.positionSize) || 0;
+  const atr         = parseFloat(signal.atr) || entryPrice * 0.015;
+
+  if (!entryPrice || entryPrice <= 0) {
+    pushLog('EXEC_SKIP: ' + signal.symbol + ' — invalid entry price: ' + signal.entryPrice, 'warn');
+    return { executed: false, reason: 'invalid_entry_price' };
+  }
+  if (!positionSize || positionSize <= 0) {
+    pushLog('EXEC_SKIP: ' + signal.symbol + ' — invalid position size: ' + signal.positionSize, 'warn');
+    return { executed: false, reason: 'invalid_position_size' };
+  }
+
+  // Calculate stop and target if not provided
+  const stopPrice = (parseFloat(signal.stopPrice) || 0) > 0 ? parseFloat(signal.stopPrice)
+    : signal.direction === 'LONG' ? entryPrice - (1.5 * atr) : entryPrice + (1.5 * atr);
+  const target1 = (parseFloat(signal.target1) || 0) > 0 ? parseFloat(signal.target1)
+    : signal.direction === 'LONG' ? entryPrice + (2 * atr) : entryPrice - (2 * atr);
+
   // Gate: paper-mode when BOT_LIVE_TRADING is not explicitly enabled
   if (!BOT_LIVE_TRADING) {
     pushLog(`PAPER_MODE: live trading disabled, signal logged only — ${signal.symbol}`, 'info');
@@ -3081,9 +3102,9 @@ async function executeSignal(signal, newsContext = null) {
   };
 
   // 1. Calculate share quantity
-  const qty = Math.floor(signal.positionSize / signal.entryPrice);
+  const qty = Math.floor(positionSize / entryPrice);
   if (qty < 1) {
-    pushLog(`EXEC_SKIP: ${signal.symbol} qty < 1, position too small ($${signal.positionSize.toFixed(2)} / $${signal.entryPrice.toFixed(2)})`, 'warn');
+    pushLog(`EXEC_SKIP: ${signal.symbol} qty=${qty} too small (posSize=${positionSize} price=${entryPrice})`, 'warn');
     return { executed: false, reason: 'qty_too_small' };
   }
 
@@ -3124,7 +3145,7 @@ async function executeSignal(signal, newsContext = null) {
     if (acctResp.ok) {
       const acct = await acctResp.json().catch(() => ({}));
       const buyingPower  = parseFloat(acct.buying_power ?? acct.cash ?? '0');
-      const orderValue   = qty * signal.entryPrice;
+      const orderValue   = qty * entryPrice;
       if (isFinite(buyingPower) && buyingPower > 0 && orderValue > buyingPower * 0.95) {
         pushLog(`BUYING_POWER_SKIP: ${signal.symbol} order $${orderValue.toFixed(2)} > 95% of buying power $${buyingPower.toFixed(2)}`, 'warn');
         return { executed: false, reason: 'insufficient_buying_power', orderValue, buyingPower };
@@ -3137,7 +3158,7 @@ async function executeSignal(signal, newsContext = null) {
 
   // 4. Submit bracket limit order
   const side          = signal.direction === 'LONG' ? 'buy' : 'sell';
-  const clientOrderId = `NZR-${signal.mode.toUpperCase()}-${signal.strategy}-${signal.symbol}-${Date.now()}`
+  const clientOrderId = `NZR-${(signal.mode || 'day').toUpperCase()}-${signal.strategy || 'SCAN'}-${signal.symbol}-${Date.now()}`
     .slice(0, 48);
 
   const orderBody = {
@@ -3146,10 +3167,10 @@ async function executeSignal(signal, newsContext = null) {
     side,
     type:            'limit',
     time_in_force:   signal.mode === 'day' ? 'day' : 'gtc',
-    limit_price:     signal.entryPrice.toFixed(2),
+    limit_price:     entryPrice.toFixed(2),
     order_class:     'bracket',
-    stop_loss:       { stop_price:    signal.stopPrice.toFixed(2) },
-    take_profit:     { limit_price:   signal.target1.toFixed(2) },
+    stop_loss:       { stop_price:    stopPrice.toFixed(2) },
+    take_profit:     { limit_price:   target1.toFixed(2) },
     client_order_id: clientOrderId,
   };
 
@@ -3172,8 +3193,8 @@ async function executeSignal(signal, newsContext = null) {
     if (orderResp.status === 200 || orderResp.status === 201) {
       const orderId = orderData.id ?? 'unknown';
       pushLog(
-        `ORDER_PLACED: ${signal.symbol} ${signal.direction} ${qty} shares @ ${signal.entryPrice.toFixed(2)}` +
-        ` stop=${signal.stopPrice.toFixed(2)} target=${signal.target1.toFixed(2)} id=${orderId}`,
+        `ORDER_PLACED: ${signal.symbol} ${signal.direction} ${qty} shares @ ${entryPrice.toFixed(2)}` +
+        ` stop=${stopPrice.toFixed(2)} target=${target1.toFixed(2)} id=${orderId}`,
         'pass'
       );
       writeSupabaseRecord(signal, qty, newsContext).catch(e => console.warn('[bot] Supabase write error:', e.message));
@@ -3188,6 +3209,11 @@ async function executeSignal(signal, newsContext = null) {
   } catch (err) {
     pushLog(`ORDER_FAILED: ${signal.symbol} — ${err.message}`, 'block');
     return { executed: false, reason: 'request_error', detail: err.message };
+  }
+
+  } catch(err) {
+    pushLog('EXEC_ERROR: ' + (signal?.symbol || 'unknown') + ' — ' + err.message, 'warn');
+    return { executed: false, reason: 'exec_crash', detail: err.message };
   }
 }
 
@@ -3564,7 +3590,8 @@ module.exports = async function handler(req, res) {
           try {
             const execResult = await executeSignal({
               symbol, direction, mode: 'day', strategy: 'COMBINED',
-              nrzScore, entryPrice: price, positionSize: dayAlloc * 0.10,
+              nrzScore, entryPrice: price, atr: price * 0.015,
+              positionSize: dayAlloc * 0.10,
             });
             if (execResult.executed) {
               tradesPlaced++;
