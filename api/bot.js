@@ -10,6 +10,11 @@
 
 const ALLOWED_ORIGINS = ['https://nzr-platform2.vercel.app', 'http://localhost:3000'];
 
+// ── Live-trading gate — set BOT_LIVE_TRADING=true in Vercel env to enable ────
+const BOT_LIVE_TRADING = process.env.BOT_LIVE_TRADING === 'true';
+
+const ALPACA_BASE = 'https://paper-api.alpaca.markets';
+
 // ─── SECTOR MAP ───────────────────────────────────────────────────────────────
 // Maps individual symbols to their SPDR sector ETF. Used by the correlation
 // guard to prevent over-concentration in correlated positions.
@@ -1804,6 +1809,266 @@ function recommendDirection(ind) {
   return { direction, leverage: Math.min(leverage, 3), confidence, reasoning };
 }
 
+// ─── ALPACA ORDER EXECUTION ───────────────────────────────────────────────────
+
+/**
+ * Writes a journal row and a notification row to Supabase after a successful
+ * order placement.  Fail-silent: any error is caught and warned.
+ */
+async function writeSupabaseRecord(signal, qty) {
+  const supabaseUrl = process.env.SUPABASE_URL || 'https://chfdvmtnditebmlmyihr.supabase.co';
+  const supabaseKey = process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_ANON_KEY;
+  if (!supabaseUrl || !supabaseKey) return;
+
+  const headers = {
+    'Content-Type':  'application/json',
+    'apikey':        supabaseKey,
+    'Authorization': `Bearer ${supabaseKey}`,
+    'Prefer':        'return=minimal',
+  };
+
+  await Promise.allSettled([
+    fetch(`${supabaseUrl}/rest/v1/journal`, {
+      method: 'POST', headers,
+      body: JSON.stringify({
+        symbol:      signal.symbol,
+        entry_price: signal.entryPrice,
+        avg_cost:    signal.entryPrice,
+        trade_date:  toETDate(),
+        pnl_pct:     0,
+        notes:       `Bot: ${signal.strategy} NZR=${signal.nrzScore}`,
+      }),
+    }),
+    fetch(`${supabaseUrl}/rest/v1/notifications`, {
+      method: 'POST', headers,
+      body: JSON.stringify({
+        message: `Bot opened ${signal.direction.toLowerCase()} on ${signal.symbol} @ $${signal.entryPrice.toFixed(2)} (NZR ${signal.nrzScore})`,
+        type: 'trade',
+      }),
+    }),
+  ]);
+}
+
+/**
+ * Submits a bracket limit order to Alpaca Paper Trading for an approved signal.
+ *
+ * @param {object} signal  — { symbol, direction, mode, strategy, nrzScore,
+ *                            entryPrice, stopPrice, target1, positionSize, atr }
+ * @returns {{ executed: boolean, orderId?: string, qty?: number, reason?: string }}
+ */
+async function executeSignal(signal) {
+  // Gate: paper-mode when BOT_LIVE_TRADING is not explicitly enabled
+  if (!BOT_LIVE_TRADING) {
+    pushLog(`PAPER_MODE: live trading disabled, signal logged only — ${signal.symbol}`, 'info');
+    return { executed: false, reason: 'paper_mode' };
+  }
+
+  // Respect kill switch
+  if (killSwitch) {
+    pushLog(`EXEC_SKIP: ${signal.symbol} kill switch active`, 'warn');
+    return { executed: false, reason: 'kill_switch' };
+  }
+
+  const alpacaKey    = process.env.ALPACA_API_KEY;
+  const alpacaSecret = process.env.ALPACA_SECRET_KEY;
+  if (!alpacaKey || !alpacaSecret) {
+    pushLog(`EXEC_SKIP: ${signal.symbol} Alpaca keys not configured`, 'warn');
+    return { executed: false, reason: 'no_credentials' };
+  }
+
+  const alpacaHeaders = {
+    'APCA-API-KEY-ID':     alpacaKey,
+    'APCA-API-SECRET-KEY': alpacaSecret,
+    'Content-Type':        'application/json',
+    'Accept':              'application/json',
+  };
+
+  // 1. Calculate share quantity
+  const qty = Math.floor(signal.positionSize / signal.entryPrice);
+  if (qty < 1) {
+    pushLog(`EXEC_SKIP: ${signal.symbol} qty < 1, position too small ($${signal.positionSize.toFixed(2)} / $${signal.entryPrice.toFixed(2)})`, 'warn');
+    return { executed: false, reason: 'qty_too_small' };
+  }
+
+  // 2. Check for an existing open Alpaca position in the same direction
+  try {
+    const ctrl  = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 8000);
+    let posResp;
+    try {
+      posResp = await fetch(
+        `${ALPACA_BASE}/v2/positions/${encodeURIComponent(signal.symbol)}`,
+        { headers: alpacaHeaders, signal: ctrl.signal }
+      );
+    } finally { clearTimeout(timer); }
+
+    if (posResp.status === 200) {
+      const pos = await posResp.json();
+      const existingDir = pos.side === 'long' ? 'LONG' : 'SHORT';
+      if (existingDir === signal.direction) {
+        pushLog(`EXEC_SKIP: ${signal.symbol} position already open (${pos.side})`, 'warn');
+        return { executed: false, reason: 'position_exists' };
+      }
+    }
+    // 404 → no position, continue; other non-2xx → log and continue (fail-open)
+  } catch (err) {
+    console.warn(`[bot] executeSignal: position check for ${signal.symbol}:`, err.message);
+  }
+
+  // 3. Submit bracket limit order
+  const side          = signal.direction === 'LONG' ? 'buy' : 'sell';
+  const clientOrderId = `NZR-${signal.mode.toUpperCase()}-${signal.strategy}-${signal.symbol}-${Date.now()}`
+    .slice(0, 48);
+
+  const orderBody = {
+    symbol:          signal.symbol,
+    qty:             qty.toString(),
+    side,
+    type:            'limit',
+    time_in_force:   signal.mode === 'day' ? 'day' : 'gtc',
+    limit_price:     signal.entryPrice.toFixed(2),
+    order_class:     'bracket',
+    stop_loss:       { stop_price:    signal.stopPrice.toFixed(2) },
+    take_profit:     { limit_price:   signal.target1.toFixed(2) },
+    client_order_id: clientOrderId,
+  };
+
+  try {
+    const ctrl  = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 12000);
+    let orderResp;
+    try {
+      orderResp = await fetch(`${ALPACA_BASE}/v2/orders`, {
+        method:  'POST',
+        headers: alpacaHeaders,
+        body:    JSON.stringify(orderBody),
+        signal:  ctrl.signal,
+      });
+    } finally { clearTimeout(timer); }
+
+    const orderData = await orderResp.json().catch(() => ({}));
+
+    // 4. Handle success
+    if (orderResp.status === 200 || orderResp.status === 201) {
+      const orderId = orderData.id ?? 'unknown';
+      pushLog(
+        `ORDER_PLACED: ${signal.symbol} ${signal.direction} ${qty} shares @ ${signal.entryPrice.toFixed(2)}` +
+        ` stop=${signal.stopPrice.toFixed(2)} target=${signal.target1.toFixed(2)} id=${orderId}`,
+        'pass'
+      );
+      writeSupabaseRecord(signal, qty).catch(e => console.warn('[bot] Supabase write error:', e.message));
+      return { executed: true, orderId, qty };
+    }
+
+    // 5. Handle failure — log, no retry
+    const errMsg = orderData?.message || orderData?.code || `HTTP ${orderResp.status}`;
+    pushLog(`ORDER_FAILED: ${signal.symbol} — ${errMsg}`, 'block');
+    return { executed: false, reason: 'order_rejected', detail: errMsg };
+
+  } catch (err) {
+    pushLog(`ORDER_FAILED: ${signal.symbol} — ${err.message}`, 'block');
+    return { executed: false, reason: 'request_error', detail: err.message };
+  }
+}
+
+// ─── AUTO-CLOSE DAY TRADES ────────────────────────────────────────────────────
+
+/**
+ * Closes all NZR day-trade positions at market.  Called by the cron handler
+ * when ET time is 3:40–3:50 PM.
+ *
+ * Strategy: cross-reference open Alpaca positions against the in-memory
+ * trailingStops tracker (keyed "day:{symbol}") AND any open NZR-DAY- orders,
+ * then market-sell/buy-to-cover each one.
+ */
+async function closeExpiredDayTrades() {
+  if (!BOT_LIVE_TRADING) return;
+
+  const alpacaKey    = process.env.ALPACA_API_KEY;
+  const alpacaSecret = process.env.ALPACA_SECRET_KEY;
+  if (!alpacaKey || !alpacaSecret) return;
+
+  const headers = {
+    'APCA-API-KEY-ID':     alpacaKey,
+    'APCA-API-SECRET-KEY': alpacaSecret,
+    'Content-Type':        'application/json',
+    'Accept':              'application/json',
+  };
+
+  // Fetch all open Alpaca positions
+  let positions = [];
+  try {
+    const ctrl  = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 10000);
+    let resp;
+    try { resp = await fetch(`${ALPACA_BASE}/v2/positions`, { headers, signal: ctrl.signal }); }
+    finally { clearTimeout(timer); }
+    if (!resp.ok) { console.warn('[bot] closeExpiredDayTrades: positions fetch failed', resp.status); return; }
+    positions = await resp.json().catch(() => []);
+    if (!Array.isArray(positions)) positions = [];
+  } catch (err) {
+    console.warn('[bot] closeExpiredDayTrades: fetch error', err.message);
+    return;
+  }
+
+  // Build set of day-trade symbols from our in-memory tracker
+  const trackedDaySymbols = new Set(
+    [...trailingStops.keys()].filter(k => k.startsWith('day:')).map(k => k.slice(4))
+  );
+
+  // Also find symbols from any still-open NZR-DAY- orders (best-effort)
+  try {
+    const ctrl  = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 8000);
+    let resp;
+    try { resp = await fetch(`${ALPACA_BASE}/v2/orders?status=open&limit=200`, { headers, signal: ctrl.signal }); }
+    finally { clearTimeout(timer); }
+    if (resp.ok) {
+      const orders = await resp.json().catch(() => []);
+      if (Array.isArray(orders)) {
+        orders
+          .filter(o => (o.client_order_id || '').startsWith('NZR-DAY-'))
+          .forEach(o => trackedDaySymbols.add(o.symbol));
+      }
+    }
+  } catch {}
+
+  for (const pos of positions) {
+    if (!trackedDaySymbols.has(pos.symbol)) continue;
+
+    const closeSide = pos.side === 'long' ? 'sell' : 'buy';
+    const closeBody = {
+      symbol:          pos.symbol,
+      qty:             pos.qty,
+      side:            closeSide,
+      type:            'market',
+      time_in_force:   'day',
+      client_order_id: `NZR-AUTOCLOSE-${pos.symbol}-${Math.floor(Date.now() / 1000)}`.slice(0, 48),
+    };
+
+    try {
+      const ctrl  = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 10000);
+      let resp;
+      try {
+        resp = await fetch(`${ALPACA_BASE}/v2/orders`, {
+          method: 'POST', headers, body: JSON.stringify(closeBody), signal: ctrl.signal,
+        });
+      } finally { clearTimeout(timer); }
+
+      if (resp.ok) {
+        pushLog(`AUTO_CLOSE: ${pos.symbol} day trade closed at market`, 'pass');
+        trailingStops.delete(`day:${pos.symbol}`);
+      } else {
+        const errData = await resp.json().catch(() => ({}));
+        pushLog(`AUTO_CLOSE_FAIL: ${pos.symbol} — ${errData.message || resp.status}`, 'warn');
+      }
+    } catch (err) {
+      pushLog(`AUTO_CLOSE_FAIL: ${pos.symbol} — ${err.message}`, 'warn');
+    }
+  }
+}
+
 // ─── MAIN HANDLER ────────────────────────────────────────────────────────────
 
 module.exports = async function handler(req, res) {
@@ -2023,6 +2288,31 @@ module.exports = async function handler(req, res) {
     const updatedAt = Date.now();
     trailingStops.set(key, { ...state, stage, stopPrice, highestPrice, lowestPrice, updatedAt });
     return res.status(200).json({ symbol: sym, mode: md, stage, stopPrice, target1, target2, highestPrice, lowestPrice, moved, updatedAt });
+  }
+
+  // ── CRON ─────────────────────────────────────────────────────────────────────
+  // Called by a Vercel cron job or external scheduler on a regular interval.
+  // Handles: EOD day-trade auto-close (3:40–3:50 PM ET).
+  if (action === 'cron') {
+    const etMin = getETMinuteOfDay();
+    const CLOSE_START = 15 * 60 + 40; // 3:40 PM ET
+    const CLOSE_END   = 15 * 60 + 50; // 3:50 PM ET
+    const results = { closedTrades: false, etMinute: etMin };
+
+    if (etMin >= CLOSE_START && etMin <= CLOSE_END) {
+      try {
+        await closeExpiredDayTrades();
+        results.closedTrades = true;
+        console.log('[bot/cron] day-trade auto-close triggered at ET minute', etMin);
+      } catch (err) {
+        console.error('[bot/cron] closeExpiredDayTrades error:', err.message);
+        results.error = err.message;
+      }
+    } else {
+      console.log('[bot/cron] outside close window (ET minute', etMin, '— window is', CLOSE_START, '–', CLOSE_END, ')');
+    }
+
+    return res.status(200).json(results);
   }
 
   // ── GAP SCAN ─────────────────────────────────────────────────────────────────
@@ -2544,7 +2834,22 @@ module.exports = async function handler(req, res) {
   const tsSeconds = Math.floor(ts / 1000);
   const clientOrderId = `NZR-${mode.toUpperCase()}-${strategyTag}-${signalTag}-${symbol}-${tsSeconds}`.slice(0, 48);
 
-  console.log(`[bot] ${mode.toUpperCase()} order approved: ${direction} ${quantity}x ${symbol} @ $${limitPrice} | stop $${stopLoss} | T1 $${target}${target2 ? ` | T2 $${target2}` : ''}`);
+  pushLog(`SIGNAL_PASS: ${mode.toUpperCase()} ${direction} ${symbol} score=${composite.score} entry=${limitPrice} stop=${stopLoss} T1=${target}`, 'pass');
+
+  // ── Fire-and-forget: submit order to Alpaca (non-blocking, errors caught inside)
+  executeSignal({
+    symbol,
+    direction,
+    mode,
+    strategy:     strategyTag,
+    nrzScore:     composite.score,
+    entryPrice:   limitPrice,
+    stopPrice:    stopLoss,
+    target1:      target,
+    target2:      target2 ?? null,
+    positionSize: adaptiveMax,
+    atr:          atrValue,
+  }).catch(err => console.error('[bot] executeSignal unexpected error:', err.message));
 
   return res.status(200).json({
     approved: true,
