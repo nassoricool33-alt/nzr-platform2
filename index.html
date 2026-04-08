@@ -1165,11 +1165,31 @@ footer{border-top:1px solid var(--border);padding:32px 0;margin-top:80px}
     <div class="section-eyebrow">My trading</div>
     <div class="section-title">My <span>Watchlist</span></div>
   </div>
-  <div class="auth-prompt sec-fade" style="animation-delay:100ms">
+
+  <!-- signed-out prompt -->
+  <div id="wl-signin-prompt" class="auth-prompt sec-fade" style="animation-delay:100ms">
     <div class="auth-prompt-icon">🔒</div>
     <div class="auth-prompt-title">Sign in to use your watchlist</div>
     <div class="auth-prompt-desc">Save and track your favorite tickers across devices. Sign in to sync your watchlist, set price alerts, and get personalized AI signals.</div>
     <button class="auth-prompt-btn" onclick="openAuthModal()">Sign in to continue</button>
+  </div>
+
+  <!-- signed-in content -->
+  <div id="wl-content" style="display:none">
+    <div class="stat-card sec-fade" style="padding:20px 24px;margin-bottom:16px">
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <input id="wl-input" type="text" class="ticker-input" placeholder="Symbol e.g. AAPL" maxlength="10"
+          style="flex:1;min-width:120px;max-width:200px"
+          onkeydown="if(event.key==='Enter')addToWatchlist()"/>
+        <button class="btn-primary" style="padding:10px 20px;font-size:13px" onclick="addToWatchlist()">Add</button>
+        <span id="wl-add-error" style="font-size:12px;color:var(--red);display:none"></span>
+      </div>
+    </div>
+    <div class="stat-card sec-fade" style="padding:0;animation-delay:100ms">
+      <div id="wl-list">
+        <div style="padding:28px;text-align:center;font-family:var(--font-mono);font-size:11px;color:var(--text3)">Loading…</div>
+      </div>
+    </div>
   </div>
 </div>
 </div>
@@ -1310,11 +1330,41 @@ footer{border-top:1px solid var(--border);padding:32px 0;margin-top:80px}
     <div class="section-eyebrow">My trading</div>
     <div class="section-title">My <span>Portfolio</span></div>
   </div>
-  <div class="auth-prompt sec-fade" style="animation-delay:100ms">
+
+  <!-- signed-out prompt -->
+  <div id="pf-signin-prompt" class="auth-prompt sec-fade" style="animation-delay:100ms">
     <div class="auth-prompt-icon">🔒</div>
     <div class="auth-prompt-title">Sign in to track your portfolio</div>
     <div class="auth-prompt-desc">Log your positions and track performance over time. Sign in to save your portfolio, view P&amp;L, and get AI insights on your holdings.</div>
     <button class="auth-prompt-btn" onclick="openAuthModal()">Sign in to continue</button>
+  </div>
+
+  <!-- signed-in content -->
+  <div id="pf-content" style="display:none">
+    <div class="stat-card sec-fade" style="padding:20px 24px;margin-bottom:16px">
+      <div style="font-family:var(--font-mono);font-size:10px;color:var(--text3);letter-spacing:1px;text-transform:uppercase;margin-bottom:14px">Add Position</div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
+        <div>
+          <div class="input-label" style="margin-bottom:4px">Symbol</div>
+          <input id="pf-symbol" type="text" class="ticker-input" placeholder="AAPL" maxlength="10" style="width:110px"/>
+        </div>
+        <div>
+          <div class="input-label" style="margin-bottom:4px">Shares</div>
+          <input id="pf-shares" type="number" class="ticker-input" placeholder="10" min="0.001" step="any" style="width:100px"/>
+        </div>
+        <div>
+          <div class="input-label" style="margin-bottom:4px">Avg Cost ($)</div>
+          <input id="pf-avgcost" type="number" class="ticker-input" placeholder="150.00" min="0.01" step="any" style="width:120px"/>
+        </div>
+        <button class="btn-primary" style="padding:10px 20px;font-size:13px" onclick="addPosition()">Add Position</button>
+        <span id="pf-add-error" style="font-size:12px;color:var(--red);display:none"></span>
+      </div>
+    </div>
+    <div class="stat-card sec-fade" style="padding:0;animation-delay:100ms;overflow-x:auto">
+      <div id="pf-table-wrap">
+        <div style="padding:28px;text-align:center;font-family:var(--font-mono);font-size:11px;color:var(--text3)">Loading…</div>
+      </div>
+    </div>
   </div>
 </div>
 </div>
@@ -1326,11 +1376,55 @@ footer{border-top:1px solid var(--border);padding:32px 0;margin-top:80px}
     <div class="section-eyebrow">My trading</div>
     <div class="section-title">Trade <span>Journal</span></div>
   </div>
-  <div class="auth-prompt sec-fade" style="animation-delay:100ms">
+
+  <!-- signed-out prompt -->
+  <div id="jn-signin-prompt" class="auth-prompt sec-fade" style="animation-delay:100ms">
     <div class="auth-prompt-icon">🔒</div>
     <div class="auth-prompt-title">Sign in to use your journal</div>
     <div class="auth-prompt-desc">Document every trade with entry, exit, setup type, and emotional state. Sign in to start building a data-driven record of your trading decisions.</div>
     <button class="auth-prompt-btn" onclick="openAuthModal()">Sign in to continue</button>
+  </div>
+
+  <!-- signed-in content -->
+  <div id="jn-content" style="display:none">
+    <div class="stat-card sec-fade" style="padding:20px 24px;margin-bottom:16px">
+      <div style="font-family:var(--font-mono);font-size:10px;color:var(--text3);letter-spacing:1px;text-transform:uppercase;margin-bottom:14px">Log Trade</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:12px;margin-bottom:14px">
+        <div>
+          <div class="input-label" style="margin-bottom:4px">Symbol</div>
+          <input id="jn-symbol" type="text" class="ticker-input" placeholder="AAPL" maxlength="10"/>
+        </div>
+        <div>
+          <div class="input-label" style="margin-bottom:4px">Entry Price ($)</div>
+          <input id="jn-entry" type="number" class="ticker-input" placeholder="150.00" step="any"/>
+        </div>
+        <div>
+          <div class="input-label" style="margin-bottom:4px">Exit Price ($)</div>
+          <input id="jn-exit" type="number" class="ticker-input" placeholder="158.00" step="any"/>
+        </div>
+        <div>
+          <div class="input-label" style="margin-bottom:4px">P&amp;L %</div>
+          <input id="jn-pnl" type="number" class="ticker-input" placeholder="5.3" step="any"/>
+        </div>
+        <div>
+          <div class="input-label" style="margin-bottom:4px">Trade Date</div>
+          <input id="jn-date" type="date" class="ticker-input"/>
+        </div>
+      </div>
+      <div style="margin-bottom:14px">
+        <div class="input-label" style="margin-bottom:4px">Notes</div>
+        <input id="jn-notes" type="text" class="ticker-input" style="width:100%" placeholder="Setup, reason, lessons learned…" maxlength="300"/>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px">
+        <button class="btn-primary" style="padding:10px 20px;font-size:13px" onclick="addJournalEntry()">Log Trade</button>
+        <span id="jn-add-error" style="font-size:12px;color:var(--red);display:none"></span>
+      </div>
+    </div>
+    <div class="stat-card sec-fade" style="padding:0;animation-delay:100ms;overflow-x:auto">
+      <div id="jn-table-wrap">
+        <div style="padding:28px;text-align:center;font-family:var(--font-mono);font-size:11px;color:var(--text3)">Loading…</div>
+      </div>
+    </div>
   </div>
 </div>
 </div>
@@ -1906,6 +2000,9 @@ function showPage(id){
   if(id==='bot'&&!_attrLoaded){ loadAttribution(); }
   if(id==='bot'){ startBotLogPolling(); }
   if(id==='markets'){ buildSectorRotation(); }
+  if(id==='watchlist'&&currentUser){ loadWatchlist(currentUser.id); }
+  if(id==='portfolio'&&currentUser){ loadPortfolio(currentUser.id); }
+  if(id==='journal'&&currentUser){ loadJournal(currentUser.id); }
 }
 document.querySelectorAll('.nav-tab').forEach(t=>{
   t.addEventListener('click',()=>showPage(t.dataset.page));
@@ -3052,6 +3149,233 @@ Respond concisely and professionally. Focus on actionable market insights, strat
   chatMessages.scrollTop=chatMessages.scrollHeight;
 }
 
+/* ── WATCHLIST ──────────────────────────────────── */
+
+async function loadWatchlist(userId){
+  const el=document.getElementById('wl-list');
+  if(!el||!supabaseClient)return;
+  el.innerHTML='<div style="padding:20px;text-align:center;font-family:var(--font-mono);font-size:11px;color:var(--text3)">Loading…</div>';
+  try{
+    const{data,error}=await supabaseClient
+      .from('watchlist').select('*').eq('user_id',userId).order('created_at',{ascending:false});
+    if(error)throw error;
+    if(!data||data.length===0){
+      el.innerHTML='<div style="padding:28px;text-align:center;font-family:var(--font-mono);font-size:11px;color:var(--text3)">Your watchlist is empty — add a symbol above</div>';
+      return;
+    }
+    el.innerHTML=`<table style="width:100%;border-collapse:collapse;font-family:var(--font-mono);font-size:12px">
+      <thead><tr style="border-bottom:1px solid var(--border)">
+        <th style="padding:10px 16px;text-align:left;color:var(--text3);font-weight:500;font-size:10px;text-transform:uppercase">Symbol</th>
+        <th style="padding:10px 16px;text-align:right;color:var(--text3);font-weight:500;font-size:10px;text-transform:uppercase">Alert Price</th>
+        <th style="padding:10px 16px;text-align:right;color:var(--text3);font-weight:500;font-size:10px;text-transform:uppercase">Added</th>
+        <th style="padding:10px 16px;text-align:right;font-size:10px"></th>
+      </tr></thead>
+      <tbody>${data.map(row=>`<tr style="border-bottom:1px solid var(--border)">
+        <td style="padding:11px 16px;font-weight:700;color:var(--text)">${row.symbol}</td>
+        <td style="padding:11px 16px;text-align:right;color:var(--text2)">${row.alert_price!=null?'$'+Number(row.alert_price).toFixed(2):'—'}</td>
+        <td style="padding:11px 16px;text-align:right;color:var(--text3);font-size:10px">${row.created_at?row.created_at.slice(0,10):'—'}</td>
+        <td style="padding:11px 16px;text-align:right">
+          <button onclick="removeFromWatchlist('${row.id}','${userId}')"
+            style="font-size:11px;padding:3px 10px;background:var(--red-dim);color:var(--red);border:1px solid rgba(255,68,102,.25);border-radius:4px;cursor:pointer">Remove</button>
+        </td>
+      </tr>`).join('')}</tbody>
+    </table>`;
+  }catch(err){
+    el.innerHTML=`<div style="padding:20px;text-align:center;font-size:12px;color:var(--red)">Error loading watchlist: ${err.message}</div>`;
+  }
+}
+
+async function addToWatchlist(){
+  if(!currentUser||!supabaseClient)return;
+  const input=document.getElementById('wl-input');
+  const errEl=document.getElementById('wl-add-error');
+  const symbol=(input?.value||'').trim().toUpperCase().replace(/[^A-Z0-9.\-]/g,'').slice(0,10);
+  if(!symbol){if(errEl){errEl.textContent='Enter a symbol';errEl.style.display='inline';}return;}
+  if(errEl)errEl.style.display='none';
+  try{
+    const{error}=await supabaseClient.from('watchlist').insert({user_id:currentUser.id,symbol});
+    if(error)throw error;
+    if(input)input.value='';
+    loadWatchlist(currentUser.id);
+  }catch(err){
+    if(errEl){errEl.textContent=err.message||'Failed to add';errEl.style.display='inline';}
+  }
+}
+
+async function removeFromWatchlist(id,userId){
+  if(!supabaseClient)return;
+  try{
+    const{error}=await supabaseClient.from('watchlist').delete().eq('id',id).eq('user_id',userId);
+    if(error)throw error;
+    loadWatchlist(userId);
+  }catch(err){console.error('[watchlist] remove error:',err.message);}
+}
+
+/* ── PORTFOLIO ──────────────────────────────────── */
+
+async function loadPortfolio(userId){
+  const wrap=document.getElementById('pf-table-wrap');
+  if(!wrap||!supabaseClient)return;
+  wrap.innerHTML='<div style="padding:20px;text-align:center;font-family:var(--font-mono);font-size:11px;color:var(--text3)">Loading…</div>';
+  try{
+    const{data,error}=await supabaseClient
+      .from('portfolio').select('*').eq('user_id',userId).order('created_at',{ascending:false});
+    if(error)throw error;
+    if(!data||data.length===0){
+      wrap.innerHTML='<div style="padding:28px;text-align:center;font-family:var(--font-mono);font-size:11px;color:var(--text3)">No positions yet — add one above</div>';
+      return;
+    }
+    wrap.innerHTML=`<table style="width:100%;border-collapse:collapse;font-family:var(--font-mono);font-size:12px">
+      <thead><tr style="border-bottom:1px solid var(--border)">
+        <th style="padding:10px 16px;text-align:left;color:var(--text3);font-weight:500;font-size:10px;text-transform:uppercase">Symbol</th>
+        <th style="padding:10px 16px;text-align:right;color:var(--text3);font-weight:500;font-size:10px;text-transform:uppercase">Shares</th>
+        <th style="padding:10px 16px;text-align:right;color:var(--text3);font-weight:500;font-size:10px;text-transform:uppercase">Avg Cost</th>
+        <th style="padding:10px 16px;text-align:right;color:var(--text3);font-weight:500;font-size:10px;text-transform:uppercase">Book Value</th>
+        <th style="padding:10px 16px;text-align:right;font-size:10px"></th>
+      </tr></thead>
+      <tbody>${data.map(row=>{
+        const shares=Number(row.shares)||0;
+        const cost=Number(row.avg_cost)||0;
+        const bookVal=(shares*cost).toFixed(2);
+        return`<tr style="border-bottom:1px solid var(--border)">
+          <td style="padding:11px 16px;font-weight:700;color:var(--text)">${row.symbol}</td>
+          <td style="padding:11px 16px;text-align:right;color:var(--text2)">${shares}</td>
+          <td style="padding:11px 16px;text-align:right;color:var(--text2)">$${cost.toFixed(2)}</td>
+          <td style="padding:11px 16px;text-align:right;color:var(--text2)">$${bookVal}</td>
+          <td style="padding:11px 16px;text-align:right">
+            <button onclick="removePosition('${row.id}','${userId}')"
+              style="font-size:11px;padding:3px 10px;background:var(--red-dim);color:var(--red);border:1px solid rgba(255,68,102,.25);border-radius:4px;cursor:pointer">Remove</button>
+          </td>
+        </tr>`;
+      }).join('')}</tbody>
+    </table>`;
+  }catch(err){
+    wrap.innerHTML=`<div style="padding:20px;text-align:center;font-size:12px;color:var(--red)">Error loading portfolio: ${err.message}</div>`;
+  }
+}
+
+async function addPosition(){
+  if(!currentUser||!supabaseClient)return;
+  const errEl=document.getElementById('pf-add-error');
+  const symbol=(document.getElementById('pf-symbol')?.value||'').trim().toUpperCase().replace(/[^A-Z0-9.\-]/g,'').slice(0,10);
+  const shares=parseFloat(document.getElementById('pf-shares')?.value||'');
+  const avgCost=parseFloat(document.getElementById('pf-avgcost')?.value||'');
+  if(!symbol||isNaN(shares)||shares<=0||isNaN(avgCost)||avgCost<=0){
+    if(errEl){errEl.textContent='All fields required and must be positive';errEl.style.display='inline';}
+    return;
+  }
+  if(errEl)errEl.style.display='none';
+  try{
+    const{error}=await supabaseClient.from('portfolio').insert({user_id:currentUser.id,symbol,shares,avg_cost:avgCost});
+    if(error)throw error;
+    document.getElementById('pf-symbol').value='';
+    document.getElementById('pf-shares').value='';
+    document.getElementById('pf-avgcost').value='';
+    loadPortfolio(currentUser.id);
+  }catch(err){
+    if(errEl){errEl.textContent=err.message||'Failed to add';errEl.style.display='inline';}
+  }
+}
+
+async function removePosition(id,userId){
+  if(!supabaseClient)return;
+  try{
+    const{error}=await supabaseClient.from('portfolio').delete().eq('id',id).eq('user_id',userId);
+    if(error)throw error;
+    loadPortfolio(userId);
+  }catch(err){console.error('[portfolio] remove error:',err.message);}
+}
+
+/* ── JOURNAL ────────────────────────────────────── */
+
+async function loadJournal(userId){
+  const wrap=document.getElementById('jn-table-wrap');
+  if(!wrap||!supabaseClient)return;
+  wrap.innerHTML='<div style="padding:20px;text-align:center;font-family:var(--font-mono);font-size:11px;color:var(--text3)">Loading…</div>';
+  try{
+    const{data,error}=await supabaseClient
+      .from('journal').select('*').eq('user_id',userId).order('trade_date',{ascending:false});
+    if(error)throw error;
+    if(!data||data.length===0){
+      wrap.innerHTML='<div style="padding:28px;text-align:center;font-family:var(--font-mono);font-size:11px;color:var(--text3)">No trades logged yet</div>';
+      return;
+    }
+    wrap.innerHTML=`<table style="width:100%;border-collapse:collapse;font-family:var(--font-mono);font-size:12px">
+      <thead><tr style="border-bottom:1px solid var(--border)">
+        <th style="padding:10px 16px;text-align:left;color:var(--text3);font-weight:500;font-size:10px;text-transform:uppercase">Date</th>
+        <th style="padding:10px 16px;text-align:left;color:var(--text3);font-weight:500;font-size:10px;text-transform:uppercase">Symbol</th>
+        <th style="padding:10px 16px;text-align:right;color:var(--text3);font-weight:500;font-size:10px;text-transform:uppercase">Entry</th>
+        <th style="padding:10px 16px;text-align:right;color:var(--text3);font-weight:500;font-size:10px;text-transform:uppercase">Exit</th>
+        <th style="padding:10px 16px;text-align:right;color:var(--text3);font-weight:500;font-size:10px;text-transform:uppercase">P&amp;L%</th>
+        <th style="padding:10px 16px;text-align:left;color:var(--text3);font-weight:500;font-size:10px;text-transform:uppercase">Notes</th>
+        <th style="padding:10px 16px;text-align:right;font-size:10px"></th>
+      </tr></thead>
+      <tbody>${data.map(row=>{
+        const pnl=row.pnl_pct!=null?Number(row.pnl_pct):null;
+        const pnlColor=pnl==null?'var(--text3)':pnl>=0?'var(--green)':'var(--red)';
+        const pnlStr=pnl==null?'—':(pnl>=0?'+':'')+pnl.toFixed(2)+'%';
+        return`<tr style="border-bottom:1px solid var(--border)">
+          <td style="padding:11px 16px;color:var(--text3);font-size:11px;white-space:nowrap">${row.trade_date||'—'}</td>
+          <td style="padding:11px 16px;font-weight:700;color:var(--text)">${row.symbol}</td>
+          <td style="padding:11px 16px;text-align:right;color:var(--text2)">${row.entry_price!=null?'$'+Number(row.entry_price).toFixed(2):'—'}</td>
+          <td style="padding:11px 16px;text-align:right;color:var(--text2)">${row.exit_price!=null?'$'+Number(row.exit_price).toFixed(2):'—'}</td>
+          <td style="padding:11px 16px;text-align:right;font-weight:600;color:${pnlColor}">${pnlStr}</td>
+          <td style="padding:11px 16px;color:var(--text3);font-size:11px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${row.notes||''}</td>
+          <td style="padding:11px 16px;text-align:right">
+            <button onclick="removeJournalEntry('${row.id}','${userId}')"
+              style="font-size:11px;padding:3px 10px;background:var(--red-dim);color:var(--red);border:1px solid rgba(255,68,102,.25);border-radius:4px;cursor:pointer">Delete</button>
+          </td>
+        </tr>`;
+      }).join('')}</tbody>
+    </table>`;
+  }catch(err){
+    wrap.innerHTML=`<div style="padding:20px;text-align:center;font-size:12px;color:var(--red)">Error loading journal: ${err.message}</div>`;
+  }
+}
+
+async function addJournalEntry(){
+  if(!currentUser||!supabaseClient)return;
+  const errEl=document.getElementById('jn-add-error');
+  const symbol=(document.getElementById('jn-symbol')?.value||'').trim().toUpperCase().replace(/[^A-Z0-9.\-]/g,'').slice(0,10);
+  const entry_price=parseFloat(document.getElementById('jn-entry')?.value||'');
+  const exit_price=parseFloat(document.getElementById('jn-exit')?.value||'');
+  const pnl_pct=parseFloat(document.getElementById('jn-pnl')?.value||'');
+  const trade_date=document.getElementById('jn-date')?.value||'';
+  const notes=(document.getElementById('jn-notes')?.value||'').trim().slice(0,300);
+  if(!symbol||isNaN(entry_price)){
+    if(errEl){errEl.textContent='Symbol and entry price are required';errEl.style.display='inline';}
+    return;
+  }
+  if(errEl)errEl.style.display='none';
+  try{
+    const{error}=await supabaseClient.from('journal').insert({
+      user_id:currentUser.id,
+      symbol,
+      entry_price:isNaN(entry_price)?null:entry_price,
+      exit_price:isNaN(exit_price)?null:exit_price,
+      pnl_pct:isNaN(pnl_pct)?null:pnl_pct,
+      trade_date:trade_date||null,
+      notes:notes||null,
+    });
+    if(error)throw error;
+    ['jn-symbol','jn-entry','jn-exit','jn-pnl','jn-date','jn-notes'].forEach(id=>{
+      const el=document.getElementById(id);if(el)el.value='';
+    });
+    loadJournal(currentUser.id);
+  }catch(err){
+    if(errEl){errEl.textContent=err.message||'Failed to log';errEl.style.display='inline';}
+  }
+}
+
+async function removeJournalEntry(id,userId){
+  if(!supabaseClient)return;
+  try{
+    const{error}=await supabaseClient.from('journal').delete().eq('id',id).eq('user_id',userId);
+    if(error)throw error;
+    loadJournal(userId);
+  }catch(err){console.error('[journal] remove error:',err.message);}
+}
+
 /* ── SUPABASE AUTH ──────────────────────────────── */
 // Replace SUPABASE_ANON_KEY with your project's anon/publishable key from
 // https://supabase.com/dashboard/project/chfdvmtnditebmlmyihr/settings/api
@@ -3060,39 +3384,73 @@ const SUPABASE_ANON_KEY='sb_publishable_javjCOOGKWg5T8zoS3BWWQ_LHf_vHCW';
 
 let supabaseClient=null;
 let _supabase=null; // alias used by notifications
+let currentUser=null;
 
 function initSupabase(){
   try{
     if(typeof window.supabase==='undefined'){console.warn('[auth] Supabase SDK not loaded');return;}
     supabaseClient=window.supabase.createClient(SUPABASE_URL,SUPABASE_ANON_KEY);
-    _supabase=supabaseClient; // make available to fetchNotifsFromSupabase
+    _supabase=supabaseClient;
+
+    // Restore existing session immediately (handles page refresh while logged in)
+    supabaseClient.auth.getSession().then(({data:{session}})=>{
+      if(session&&session.user){
+        currentUser=session.user;
+        updateUIForSignedInUser(session.user);
+        loadWatchlist(session.user.id);
+        loadPortfolio(session.user.id);
+        loadJournal(session.user.id);
+      }
+    });
+
     supabaseClient.auth.onAuthStateChange((event,session)=>{
-      if((event==='SIGNED_IN'||event==='INITIAL_SESSION')&&session){
+      if(session&&session.user){
+        currentUser=session.user;
         closeAuthModal();
-        onAuthSignedIn(session.user);
-      }else if(event==='SIGNED_OUT'){
-        onAuthSignedOut();
+        updateUIForSignedInUser(session.user);
+        loadWatchlist(session.user.id);
+        loadPortfolio(session.user.id);
+        loadJournal(session.user.id);
+      }else{
+        currentUser=null;
+        updateUIForSignedOutUser();
       }
     });
   }catch(err){console.error('[auth] Init failed:',err);}
 }
 
-function onAuthSignedIn(user){
-  // Update all "Sign in to continue" prompts to show signed-in state
+function updateUIForSignedInUser(user){
+  // Show content panels, hide sign-in prompts for the three data tabs
+  const show=id=>{const el=document.getElementById(id);if(el)el.style.display='block';};
+  const hide=id=>{const el=document.getElementById(id);if(el)el.style.display='none';};
+  hide('wl-signin-prompt'); show('wl-content');
+  hide('pf-signin-prompt'); show('pf-content');
+  hide('jn-signin-prompt'); show('jn-content');
+  // Keep legacy auth-prompt-btn text updated for any remaining prompts
   document.querySelectorAll('.auth-prompt-btn').forEach(b=>{
+    if(b.closest('#wl-signin-prompt')||b.closest('#pf-signin-prompt')||b.closest('#jn-signin-prompt'))return;
     b.textContent='Signed in as '+user.email;
     b.style.background='var(--green)';
     b.onclick=null;
   });
 }
 
-function onAuthSignedOut(){
+function updateUIForSignedOutUser(){
+  const show=id=>{const el=document.getElementById(id);if(el)el.style.display='';};
+  const hide=id=>{const el=document.getElementById(id);if(el)el.style.display='none';};
+  show('wl-signin-prompt'); hide('wl-content');
+  show('pf-signin-prompt'); hide('pf-content');
+  show('jn-signin-prompt'); hide('jn-content');
   document.querySelectorAll('.auth-prompt-btn').forEach(b=>{
     b.textContent='Sign in to continue';
     b.style.background='';
     b.onclick=()=>openAuthModal();
   });
 }
+
+// Legacy aliases kept for backwards-compat with any call sites
+function onAuthSignedIn(user){ updateUIForSignedInUser(user); }
+function onAuthSignedOut(){ updateUIForSignedOutUser(); }
 
 function openAuthModal(){
   const m=document.getElementById('auth-modal');
