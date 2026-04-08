@@ -6064,42 +6064,21 @@ async function runManualScan() {
   }
 
   try {
-    // ── Step 1: Submit scan request (returns immediately) ─────────────────
-    const startResp = await fetch('/api/bot?type=scan&manual=true');
-    const startData = await startResp.json().catch(() => ({ success: false, error: 'Invalid response', symbolsScanned: 0, signalsPassed: 0, tradesPlaced: 0 }));
-    if (!startData.success) throw new Error(startData.error || 'Scan failed to start');
-
+    // ── Scan request — now returns results synchronously ─────────────────
     if (statusTxt) statusTxt.textContent = msgs[0];
     msgTimer = setInterval(() => {
       msgIdx = (msgIdx + 1) % msgs.length;
       if (statusTxt) statusTxt.textContent = msgs[msgIdx];
     }, 3000);
 
-    // ── Step 2: Poll ?type=scanresult every 3 s for up to 30 s ───────────
-    const POLL_TIMEOUT  = 30000;
-    const POLL_INTERVAL = 3000;
-    const pollStart = Date.now();
-    let result = null;
-
-    while (Date.now() - pollStart < POLL_TIMEOUT) {
-      await new Promise(r => setTimeout(r, POLL_INTERVAL));
-      try {
-        const pollResp = await fetch('/api/bot?type=scanresult');
-        if (pollResp.ok) {
-          const pollData = await pollResp.json();
-          if (pollData.ready) { result = pollData; break; }
-        }
-      } catch { /* keep polling */ }
-    }
+    const startResp = await fetch('/api/bot?type=scan&manual=true');
+    const startData = await startResp.json().catch(() => ({ success: false, error: 'Invalid response', symbolsScanned: 0, signalsPassed: 0, tradesPlaced: 0 }));
 
     clearInterval(msgTimer);
 
-    if (!result) {
-      if (statusTxt) statusTxt.textContent = 'Scan timed out — results may still be processing';
-      return;
-    }
+    if (!startData.success) throw new Error(startData.error || 'Scan failed to start');
 
-    renderScanResults(result);
+    renderScanResults(startData);
 
   } catch (err) {
     clearInterval(msgTimer);

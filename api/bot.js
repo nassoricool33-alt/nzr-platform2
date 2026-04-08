@@ -283,6 +283,29 @@ function _sbHeaders() {
   } : null;
 }
 
+/** Reads capital_amount from Supabase bot_state. Returns 10000 as fallback. */
+async function getCapital() {
+  try {
+    const url  = process.env.SUPABASE_URL;
+    const hdrs = _sbHeaders();
+    if (!url || !hdrs) return 10000;
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 3000);
+    let r;
+    try { r = await fetch(`${url}/rest/v1/bot_state?key=eq.capital_amount&select=value`, { headers: hdrs, signal: ctrl.signal }); }
+    finally { clearTimeout(t); }
+    if (!r.ok) return 10000;
+    const rows = await r.json().catch(() => []);
+    if (Array.isArray(rows) && rows.length && rows[0].value) {
+      const v = parseFloat(rows[0].value);
+      return (isFinite(v) && v > 0) ? v : 10000;
+    }
+    return 10000;
+  } catch(e) {
+    return 10000;
+  }
+}
+
 /** Fire-and-forget upsert of a single key into bot_state. Never awaited. */
 function writeBotState(key, value) {
   const url  = process.env.SUPABASE_URL;
@@ -3396,120 +3419,6 @@ async function runPreMarketGapProtection() {
     console.log(`[bot] gapProtection: protected ${protected_} swing positions from overnight gap`);
 }
 
-// ─── STANDALONE SCAN FUNCTION ─────────────────────────────────────────────────
-// Runs entirely outside the HTTP handler so it can never crash the response.
-async function runScanAsync() {
-  const startTime = Date.now();
-  let symbolsScanned = 0;
-  let signalsFound = 0;
-  let tradesPlaced = 0;
-  let signalResults = [];
-
-  try {
-    pushLog('SCAN_STARTED', 'info');
-    pushLog('SCAN_CAPITAL: ' + (capitalAmount || 'NOT SET, using $' + getEffectiveCapital()), 'info');
-
-    // Ensure allocations are computed
-    if (dayState.allocation <= 0 || swingState.allocation <= 0) {
-      pushLog('SCAN_FIX: allocations were zero, computing with $' + getEffectiveCapital(), 'warn');
-      computeAllocations();
-    }
-
-    try { await ensureStateLoaded(); } catch(e) { pushLog('STATE_LOAD_ERROR: ' + e.message, 'warn'); }
-    try { resetDayIfNeeded(); } catch(e) { pushLog('RESET_DAY_ERROR: ' + e.message, 'warn'); }
-    try { resetSwingIfNeeded(); } catch(e) { pushLog('RESET_SWING_ERROR: ' + e.message, 'warn'); }
-
-    // Check market hours
-    const now = new Date();
-    const etOffset = -4;
-    const etHour = (now.getUTCHours() + etOffset + 24) % 24;
-    const etMinute = now.getUTCMinutes();
-    const etTime = etHour + etMinute / 60;
-    const marketOpen = etTime >= 9.5 && etTime <= 15.75;
-    const liveTrading = process.env.BOT_LIVE_TRADING === 'true';
-
-    if (!marketOpen) {
-      pushLog('SCAN_TEST_MODE: market closed (' + etHour + ':' + String(etMinute).padStart(2,'0') + ' ET) — signals evaluated, no orders placed', 'info');
-    }
-
-    pushLog('SCAN_UNIVERSE: ' + SCAN_UNIVERSE.length + ' symbols', 'info');
-
-    // Scan each symbol
-    for (const symbol of SCAN_UNIVERSE) {
-      try {
-        symbolsScanned++;
-
-        // Fetch price via Polygon snapshot (faster + more reliable than last trade)
-        const quoteUrl = `https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers/${symbol}?apiKey=${process.env.POLYGON_API_KEY}`;
-        let price = null;
-        try {
-          const quoteRes = await Promise.race([
-            fetch(quoteUrl).then(r => r.json()),
-            new Promise(resolve => setTimeout(() => resolve(null), 3000))
-          ]);
-          price = quoteRes?.ticker?.day?.c || quoteRes?.ticker?.lastTrade?.p || quoteRes?.ticker?.prevDay?.c || null;
-        } catch(e) {
-          pushLog('QUOTE_ERROR ' + symbol + ': ' + e.message, 'warn');
-        }
-
-        if (!price) {
-          pushLog('SKIP ' + symbol + ': no price available', 'warn');
-          continue;
-        }
-
-        pushLog(symbol + ' $' + price, 'info');
-
-        // Basic NZR score — will be enhanced by filters
-        let nrzScore = 50;
-
-        if (nrzScore >= 70 && marketOpen && liveTrading) {
-          pushLog('SIGNAL ' + symbol + ' score=' + nrzScore + ' — would execute', 'pass');
-          signalsFound++;
-        } else if (nrzScore >= 70) {
-          pushLog('SIGNAL ' + symbol + ' score=' + nrzScore + ' — test mode, no order', 'info');
-          signalsFound++;
-        } else {
-          pushLog('FILTERED ' + symbol + ' score=' + nrzScore + ' below threshold', 'info');
-        }
-
-        signalResults.push({ symbol, price, nrzScore });
-
-      } catch(symbolErr) {
-        pushLog('SYMBOL_ERROR ' + symbol + ': ' + symbolErr.message, 'warn');
-        continue;
-      }
-    }
-
-    const duration = Date.now() - startTime;
-    pushLog('SCAN_DONE: ' + symbolsScanned + ' scanned, ' + signalsFound + ' signals, ' + tradesPlaced + ' trades, ' + duration + 'ms', 'info');
-
-    // Save result to Supabase bot_state
-    try {
-      writeBotState('last_scan_result', JSON.stringify({
-        symbolsScanned, signalsFound, tradesPlaced, duration,
-        signalsPassed: signalsFound,
-        results: signalResults, timestamp: new Date().toISOString()
-      }));
-    } catch(dbErr) {
-      pushLog('DB_ERROR saving scan result: ' + dbErr.message, 'warn');
-    }
-
-  } catch(err) {
-    pushLog('SCAN_FATAL: ' + err.message, 'warn');
-    console.error('SCAN_FATAL:', err);
-    // Save error result so frontend poll gets something
-    try {
-      writeBotState('last_scan_result', JSON.stringify({
-        symbolsScanned, signalsFound, tradesPlaced,
-        signalsPassed: signalsFound,
-        duration: Date.now() - startTime,
-        error: err.message,
-        results: signalResults, timestamp: new Date().toISOString()
-      }));
-    } catch(_) {}
-  }
-}
-
 // ─── MAIN HANDLER ────────────────────────────────────────────────────────────
 
 module.exports = async function handler(req, res) {
@@ -3529,6 +3438,20 @@ module.exports = async function handler(req, res) {
   if (!checkRate(ip)) return res.status(429).json({ error: 'Rate limit reached' });
 
   const action = (req.query.action || req.body?.action || '').toLowerCase();
+
+  // ── LOAD CAPITAL FROM SUPABASE ON EVERY REQUEST ─────────────────────────────
+  if (!capitalAmount || capitalAmount <= 0) {
+    try {
+      const cap = await getCapital();
+      if (cap > 0) {
+        capitalAmount = cap;
+        computeAllocations();
+        console.log('[BOT] Capital loaded from Supabase: $' + capitalAmount);
+      }
+    } catch(e) {
+      console.log('[BOT] Capital load failed:', e.message);
+    }
+  }
 
   // ── KILL SWITCH ──────────────────────────────────────────────────────────────
   if (action === 'killswitch') {
@@ -3590,19 +3513,25 @@ module.exports = async function handler(req, res) {
   }
 
   // ── SET CAPITAL (GET — for frontend convenience) ────────────────────────────
-  if (req.method === 'GET' && req.query.type === 'setcapital') {
-    const cap = safeNum(req.query.amount);
-    if (!cap || cap <= 0) return res.status(400).json({ error: 'amount query param must be a positive number' });
-    capitalAmount = cap;
+  if (req.query.type === 'setcapital') {
+    const amount = parseFloat(req.query.amount);
+    if (!amount || amount <= 0) return res.json({ error: 'invalid amount' });
+    capitalAmount = amount;
     computeAllocations();
-    writeBotState('capital_amount', String(capitalAmount));
-    pushLog('CAPITAL_SET: $' + capitalAmount + ' (day=$' + dayState.allocation + ' swing=$' + swingState.allocation + ')', 'info');
-    return res.status(200).json({
-      ok: true,
-      capitalAmount,
-      day:   { allocation: dayState.allocation, maxPositionSize: dayState.maxPositionSize, maxExposure: dayState.maxExposure, maxDailyLoss: dayState.maxDailyLoss },
-      swing: { allocation: swingState.allocation, maxPositionSize: swingState.maxPositionSize, maxExposure: swingState.maxExposure, maxWeeklyLoss: swingState.maxWeeklyLoss },
-    });
+    // Upsert to Supabase via raw fetch (no require)
+    const sbUrl  = process.env.SUPABASE_URL;
+    const sbHdrs = _sbHeaders();
+    if (sbUrl && sbHdrs) {
+      try {
+        await fetch(`${sbUrl}/rest/v1/bot_state`, {
+          method: 'POST',
+          headers: { ...sbHdrs, 'Prefer': 'resolution=merge-duplicates' },
+          body: JSON.stringify({ key: 'capital_amount', value: String(amount), updated_at: new Date().toISOString() }),
+        });
+      } catch(_) {}
+    }
+    pushLog('CAPITAL_SET: $' + amount, 'info');
+    return res.json({ success: true, capital: amount });
   }
 
   // ── SET RULES ────────────────────────────────────────────────────────────────
@@ -3965,18 +3894,86 @@ module.exports = async function handler(req, res) {
     }
   }
 
-  // ── FULL SCAN (manual trigger — non-blocking) ────────────────────────────
-  // Responds immediately — scan runs via runScanAsync() outside the handler.
+  // ── FULL SCAN (synchronous — 8s budget, responds with results) ────────────
   if (req.query.type === 'scan') {
-    // Respond immediately — never timeout
-    res.status(200).json({ success: true, message: 'Scan initiated', symbolsScanned: SCAN_UNIVERSE.length });
+    const startTime = Date.now();
+    const capital = capitalAmount && capitalAmount > 0 ? capitalAmount : await getCapital();
+    if (!capitalAmount || capitalAmount <= 0) {
+      capitalAmount = capital;
+      computeAllocations();
+    }
+    const dayAlloc = capital * 0.4;
+    const swingAlloc = capital * 0.6;
 
-    // All work happens after response
-    runScanAsync().catch(err => {
-      pushLog('SCAN_FATAL: ' + err.message, 'warn');
-      console.error('SCAN_FATAL:', err);
+    pushLog('SCAN_STARTED: capital=$' + capital + ' day=$' + dayAlloc + ' swing=$' + swingAlloc, 'info');
+
+    const scanList = [
+      'AAPL','MSFT','NVDA','AMD','TSLA',
+      'META','GOOGL','AMZN','SPY','QQQ',
+      'PLTR','COIN','NFLX','JPM','ARM'
+    ];
+
+    let symbolsScanned = 0;
+    let signalsFound = 0;
+    let tradesPlaced = 0;
+    let signalResults = [];
+
+    for (const symbol of scanList) {
+      if (Date.now() - startTime > 7500) {
+        pushLog('TIME_BUDGET: stopping early at ' + symbol, 'warn');
+        break;
+      }
+      try {
+        pushLog('Checking ' + symbol, 'info');
+        symbolsScanned++;
+
+        const snapUrl = 'https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers/' + symbol + '?apiKey=' + process.env.POLYGON_API_KEY;
+        const snapRes = await Promise.race([
+          fetch(snapUrl).then(r => r.json()),
+          new Promise(resolve => setTimeout(() => resolve(null), 3000))
+        ]);
+
+        const price = snapRes?.ticker?.day?.c || snapRes?.ticker?.lastTrade?.p || snapRes?.ticker?.prevDay?.c || null;
+
+        if (!price) {
+          pushLog('SKIP ' + symbol + ': no price', 'warn');
+          continue;
+        }
+
+        let nrzScore = 50;
+
+        pushLog(symbol + ' $' + price + ' score=' + nrzScore, 'info');
+        signalResults.push({ symbol, price, nrzScore, status: nrzScore >= 70 ? 'SIGNAL' : 'FILTERED' });
+
+        if (nrzScore >= 70) {
+          signalsFound++;
+          pushLog('SIGNAL: ' + symbol + ' score=' + nrzScore, 'pass');
+        }
+
+      } catch(err) {
+        pushLog('ERROR ' + symbol + ': ' + err.message, 'warn');
+      }
+    }
+
+    const duration = Date.now() - startTime;
+    pushLog('SCAN_DONE: ' + symbolsScanned + ' scanned, ' + signalsFound + ' signals, ' + duration + 'ms', 'info');
+
+    // Save result to Supabase for scanresult poll
+    try {
+      writeBotState('last_scan_result', JSON.stringify({
+        success: true, symbolsScanned, signalsPassed: signalsFound, tradesPlaced,
+        duration, results: signalResults, timestamp: new Date().toISOString()
+      }));
+    } catch(_) {}
+
+    return res.status(200).json({
+      success: true,
+      symbolsScanned,
+      signalsPassed: signalsFound,
+      tradesPlaced,
+      duration: duration + 'ms',
+      results: signalResults
     });
-    return;
   }
 
   // ── ORDER VALIDATION ─────────────────────────────────────────────────────────
