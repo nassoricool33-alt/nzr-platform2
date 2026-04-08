@@ -3373,6 +3373,7 @@ async function runPreMarketGapProtection() {
 // ─── MAIN HANDLER ────────────────────────────────────────────────────────────
 
 module.exports = async function handler(req, res) {
+  console.log('[BOT] Handler called, method=' + req.method + ' type=' + (req.query?.type || 'none') + ' action=' + (req.query?.action || 'none'));
   const SCAN_START_TIME = Date.now(); // soft timeout sentinel — checked inside scan loop
 
   const origin = req.headers.origin || '';
@@ -3786,15 +3787,24 @@ module.exports = async function handler(req, res) {
   // GET /api/bot?type=scanresult — reads the last scan result from Supabase bot_state
   if (req.method === 'GET' && req.query.type === 'scanresult') {
     try {
-      const { createClient } = require('@supabase/supabase-js');
-      const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
-      const { data } = await supabase.from('bot_state').select('value').eq('key', 'last_scan_result').single();
-      if (data) {
-        return res.json(JSON.parse(data.value));
-      }
-      return res.json({ symbolsScanned: 0, signalsFound: 0, tradesPlaced: 0, message: 'No scan run yet' });
+      const sbUrl  = process.env.SUPABASE_URL;
+      const sbHdrs = _sbHeaders();
+      if (!sbUrl || !sbHdrs) return res.status(200).json({ symbolsScanned: 0, signalsFound: 0, tradesPlaced: 0, message: 'Supabase not configured' });
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 5000);
+      let sr;
+      try {
+        sr = await fetch(`${sbUrl}/rest/v1/bot_state?key=eq.last_scan_result&select=value`, {
+          headers: sbHdrs, signal: ctrl.signal,
+        });
+      } finally { clearTimeout(t); }
+      if (!sr.ok) return res.status(200).json({ symbolsScanned: 0, signalsFound: 0, tradesPlaced: 0, message: 'State read failed' });
+      const rows = await sr.json().catch(() => []);
+      if (!Array.isArray(rows) || !rows.length) return res.status(200).json({ symbolsScanned: 0, signalsFound: 0, tradesPlaced: 0, message: 'No scan run yet' });
+      const result = JSON.parse(rows[0].value);
+      return res.status(200).json(result);
     } catch(e) {
-      return res.json({ error: e.message, symbolsScanned: 0 });
+      return res.status(200).json({ error: e.message, symbolsScanned: 0 });
     }
   }
 
@@ -3901,13 +3911,10 @@ module.exports = async function handler(req, res) {
 
         // Save result to Supabase bot_state
         try {
-          const { createClient } = require('@supabase/supabase-js');
-          const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
-          await supabase.from('bot_state').upsert({
-            key: 'last_scan_result',
-            value: JSON.stringify({ symbolsScanned, signalsFound, tradesPlaced, duration, results: signalResults, timestamp: new Date().toISOString() }),
-            updated_at: new Date().toISOString()
-          });
+          writeBotState('last_scan_result', JSON.stringify({
+            symbolsScanned, signalsFound, tradesPlaced, duration,
+            results: signalResults, timestamp: new Date().toISOString()
+          }));
         } catch(dbErr) {
           pushLog('DB_ERROR saving scan result: ' + dbErr.message, 'warn');
         }
@@ -4524,4 +4531,9 @@ module.exports = async function handler(req, res) {
       kellyFraction: adaptiveSizingStats?.kellyFraction ?? null,
     },
   });
+
+  // ── CATCH-ALL — ensure every code path returns a response ─────────────────
+  if (!res.headersSent) {
+    return res.status(200).json({ error: 'unhandled_route', type: req.query.type });
+  }
 };
