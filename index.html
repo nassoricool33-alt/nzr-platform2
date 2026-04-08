@@ -810,6 +810,12 @@ footer{border-top:1px solid var(--border);padding:32px 0;margin-top:80px}
       <span class="status-row-lbl">Alpaca</span>
       <span class="status-row-val" id="st-alpaca"><span class="status-dot-sm loading"></span>—</span>
     </div>
+    <div id="st-alpaca-details" style="display:none;padding-left:10px;margin:-2px 0 4px">
+      <div class="status-row" style="padding:1px 0"><span class="status-row-lbl" style="font-size:9px">Portfolio Value</span><span class="status-row-val" id="st-alpaca-portfolio" style="font-size:9px">—</span></div>
+      <div class="status-row" style="padding:1px 0"><span class="status-row-lbl" style="font-size:9px">Buying Power</span><span class="status-row-val" id="st-alpaca-bp" style="font-size:9px">—</span></div>
+      <div class="status-row" style="padding:1px 0"><span class="status-row-lbl" style="font-size:9px">Cash</span><span class="status-row-val" id="st-alpaca-cash" style="font-size:9px">—</span></div>
+      <div class="status-row" style="padding:1px 0"><span class="status-row-lbl" style="font-size:9px">Account Status</span><span class="status-row-val" id="st-alpaca-acct" style="font-size:9px">—</span></div>
+    </div>
     <div class="status-row">
       <span class="status-row-lbl">Bot</span>
       <span class="status-row-val" id="st-bot"><span class="status-dot-sm loading"></span>—</span>
@@ -2180,7 +2186,7 @@ function showPage(id){
     pharmaLoadShorts();
   }
   if(id==='bot'&&!_attrLoaded){ loadAttribution(); }
-  if(id==='bot'){ startBotLogPolling(); loadStrategyWeights(); }
+  if(id==='bot'){ startBotLogPolling(); loadStrategyWeights(); pollStatus(); }
   if(id==='markets'){ buildSectorRotation(); }
   if(id==='watchlist'&&currentUser){ loadWatchlist(currentUser.id); }
   if(id==='portfolio'&&currentUser){ loadPortfolio(currentUser.id); }
@@ -5083,22 +5089,35 @@ async function pollStatus(){
 
   let alpacaOk = null;
   try {
-    const r = await fetch('/api/alpaca?action=account');
+    const r = await fetch('/api/alpaca?type=ping');
     const d = await r.json();
-    console.log('[alpaca status] response:', d);
+    const fmtUsd = v => { const n = parseFloat(v); return isNaN(n) ? '—' : '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); };
     if (d && d.connected === true) {
       alpacaOk = true;
-      const bal = parseFloat(d.balance);
-      const balStr = isNaN(bal) ? '' : ' · $' + bal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-      setAlpacaStatusRow(true, 'CONNECTED' + balStr);
+      const pv = parseFloat(d.portfolioValue);
+      const pvStr = isNaN(pv) ? '' : ' · $' + pv.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      setAlpacaStatusRow(true, 'CONNECTED' + pvStr);
+      const det = document.getElementById('st-alpaca-details');
+      if (det) {
+        det.style.display = '';
+        const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+        set('st-alpaca-portfolio', fmtUsd(d.portfolioValue));
+        set('st-alpaca-bp',       fmtUsd(d.buyingPower));
+        set('st-alpaca-cash',     fmtUsd(d.cash));
+        set('st-alpaca-acct',     d.accountStatus || d.status || '—');
+      }
     } else {
       alpacaOk = false;
       const reason = d?.error || 'Auth failed';
       setAlpacaStatusRow(false, 'DISCONNECTED · ' + reason);
+      const det = document.getElementById('st-alpaca-details');
+      if (det) det.style.display = 'none';
     }
   } catch(e) {
-    alpacaOk = false;
-    setAlpacaStatusRow(false, 'DISCONNECTED · Cannot reach Alpaca API');
+    alpacaOk = null;
+    setAlpacaStatusRow(null, 'CHECKING...');
+    const det = document.getElementById('st-alpaca-details');
+    if (det) det.style.display = 'none';
   }
 
   let botOk = null, botLabel = '—';
