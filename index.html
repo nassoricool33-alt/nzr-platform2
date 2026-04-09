@@ -6640,6 +6640,24 @@ function render52WeekBlock(ind) {
   </div>`;
 }
 
+/* ── Client-side bot scan trigger (replaces Vercel cron frequency) ── */
+(function(){
+  // Ping bot on page load
+  fetch('/api/bot?type=ping').catch(()=>{});
+
+  // Every 15 minutes, trigger a scan if market is open
+  setInterval(async ()=>{
+    const nowET=new Date(new Date().toLocaleString('en-US',{timeZone:'America/New_York'}));
+    const hour=nowET.getHours();
+    const minute=nowET.getMinutes();
+    const day=nowET.getDay();
+    const isMarketHours=day>=1&&day<=5&&(hour>9||(hour===9&&minute>=30))&&hour<16;
+    if(isMarketHours){
+      try{await fetch('/api/bot?type=scan');}catch(e){console.warn('[nzr] client scan trigger error:',e.message);}
+    }
+  },15*60*1000);
+})();
+
 </script>
 </body>
 </html>

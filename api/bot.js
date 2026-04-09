@@ -3766,6 +3766,11 @@ module.exports = async function handler(req, res) {
       }));
     } catch(_) {}
 
+    // Self-schedule: write next scan time so client-side trigger knows when to fire
+    try {
+      writeBotState('next_scan', new Date(Date.now() + 15 * 60 * 1000).toISOString());
+    } catch(_) {}
+
     return res.status(200).json({
       success: true,
       symbolsScanned,

@@ -13,8 +13,8 @@
   },
   "crons": [
     {
-      "path": "/api/bot?action=cron",
-      "schedule": "*/15 14-21 * * 1-5"
+      "path": "/api/bot?type=scan",
+      "schedule": "0 14 * * 1-5"
     }
   ],
   "headers": [
