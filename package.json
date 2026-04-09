@@ -6,6 +6,6 @@
     "node-fetch": "^2.6.9"
   },
   "engines": {
-    "node": "18.x"
+    "node": "24.x"
   }
 }
