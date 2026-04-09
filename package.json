@@ -1,8 +1,11 @@
 {
   "name": "nzr-platform",
   "version": "1.0.0",
-  "private": true,
   "dependencies": {
-    "@supabase/supabase-js": "^2.0.0"
+    "@supabase/supabase-js": "^2.39.0",
+    "node-fetch": "^2.6.9"
+  },
+  "engines": {
+    "node": "18.x"
   }
 }
