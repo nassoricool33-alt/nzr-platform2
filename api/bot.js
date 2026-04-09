@@ -3271,30 +3271,34 @@ async function executeSignal(signal, newsContext = null) {
         ` stop=${stopPrice.toFixed(2)} target=${target1.toFixed(2)} id=${orderId}`,
         'pass'
       );
-      // Write journal entry via Supabase SDK
-      try {
-        const sb = supabase;
-        await sb.from('journal').insert({
-          symbol: signal.symbol,
-          entry_price: entryPrice,
-          exit_price: null,
-          pnl_pct: null,
-          trade_date: new Date().toISOString().split('T')[0],
-          notes: 'Bot: ' + (signal.strategy || 'COMBINED') +
-                 ' | NZR=' + signal.nrzScore +
-                 ' | Dir=' + signal.direction.toUpperCase() +
-                 ' | RSI=' + (signal.rsi ? Number(signal.rsi).toFixed(1) : 'n/a') +
-                 ' | MACD=' + (signal.macdHist ? Number(signal.macdHist).toFixed(3) : 'n/a') +
-                 ' | EMA=' + (signal.emaTrend || 'n/a') +
-                 ' | Stop=$' + stopPrice.toFixed(2) +
-                 ' | Target=$' + target1.toFixed(2) +
-                 ' | Qty=' + qty +
-                 ' | OrderID=' + orderData.id,
-          user_id: '00000000-0000-0000-0000-000000000000'
-        });
-        pushLog('JOURNAL_WRITTEN: ' + signal.symbol, 'info');
-      } catch(je) {
-        pushLog('JOURNAL_ERROR: ' + je.message, 'warn');
+      // Write to journal
+      const journalEntry = {
+        symbol: signal.symbol,
+        entry_price: entryPrice,
+        exit_price: null,
+        pnl_pct: null,
+        trade_date: new Date().toISOString().split('T')[0],
+        notes: 'Bot: COMBINED | NZR=' + signal.nrzScore +
+               ' | Dir=' + signal.direction.toUpperCase() +
+               ' | RSI=' + (signal.rsi ? Number(signal.rsi).toFixed(1) : 'n/a') +
+               ' | MACD=' + (signal.macdHist ? Number(signal.macdHist).toFixed(3) : 'n/a') +
+               ' | EMA=' + (signal.emaTrend || 'n/a') +
+               ' | Stop=$' + stopPrice.toFixed(2) +
+               ' | Target=$' + target1.toFixed(2) +
+               ' | Qty=' + qty +
+               ' | OrderID=' + orderData.id
+      };
+
+      pushLog('JOURNAL_ATTEMPT: writing trade for ' + signal.symbol, 'info');
+
+      const { data: journalData, error: journalError } = await supabase
+        .from('journal')
+        .insert(journalEntry);
+
+      if (journalError) {
+        pushLog('JOURNAL_ERROR: ' + JSON.stringify(journalError), 'warn');
+      } else {
+        pushLog('JOURNAL_SUCCESS: ' + signal.symbol + ' trade logged', 'pass');
       }
 
       return { executed: true, orderId, qty };
@@ -3564,6 +3568,17 @@ module.exports = async function handler(req, res) {
   const type   = (req.query.type || '').toLowerCase();
   const action = (req.query.action || req.body?.action || '').toLowerCase();
   console.log('[BOT] type=' + (type || 'none') + ' action=' + (action || 'none'));
+
+  // ── TEST JOURNAL INSERT ─────────────────────────────────────────────────────
+  if (type === 'testjournal') {
+    const { data, error } = await supabase.from('journal').insert({
+      symbol: 'TEST',
+      entry_price: 100,
+      trade_date: new Date().toISOString().split('T')[0],
+      notes: 'Test entry from bot'
+    });
+    return res.json({ data, error });
+  }
 
   // ── LOAD CAPITAL FROM SUPABASE ON EVERY REQUEST ─────────────────────────────
   if (!capitalAmount || capitalAmount <= 0) {
