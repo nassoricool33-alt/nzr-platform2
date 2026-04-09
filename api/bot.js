@@ -16,6 +16,9 @@
  *   );
  */
 
+const { createClient } = require('@supabase/supabase-js');
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
+
 const ALLOWED_ORIGINS = ['https://nzr-platform2.vercel.app', 'http://localhost:3000'];
 
 // ─── SCAN UNIVERSE ────────────────────────────────────────────────────────────
@@ -3011,8 +3014,7 @@ function recommendDirection(ind) {
  */
 async function updateClosedTrades() {
   try {
-    const sbKey = process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_ANON_KEY;
-    const sb = require('@supabase/supabase-js').createClient(process.env.SUPABASE_URL, sbKey);
+    const sb = supabase;
     const today = new Date().toISOString().split('T')[0];
     const ordersRes = await fetch('https://paper-api.alpaca.markets/v2/orders?status=closed&limit=50&after=' + today + 'T00:00:00Z', {
       headers: {
@@ -3271,8 +3273,7 @@ async function executeSignal(signal, newsContext = null) {
       );
       // Write journal entry via Supabase SDK
       try {
-        const sbKey = process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_ANON_KEY;
-        const sb = require('@supabase/supabase-js').createClient(process.env.SUPABASE_URL, sbKey);
+        const sb = supabase;
         await sb.from('journal').insert({
           symbol: signal.symbol,
           entry_price: entryPrice,
