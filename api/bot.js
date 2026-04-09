@@ -2999,13 +2999,117 @@ function recommendDirection(ind) {
   return { direction, leverage: Math.min(leverage, 3), confidence, reasoning };
 }
 
+// ─── JOURNAL P&L UPDATE FOR CLOSED TRADES ────────────────────────────────────
+
+/**
+ * Fetches today's closed Alpaca orders and updates matching journal entries
+ * with exit_price and pnl_pct.  Called at the start of every cron scan cycle.
+ */
+async function updateClosedTrades() {
+  const alpacaKey    = process.env.ALPACA_API_KEY;
+  const alpacaSecret = process.env.ALPACA_SECRET_KEY;
+  const supabaseUrl  = process.env.SUPABASE_URL || 'https://chfdvmtnditebmlmyihr.supabase.co';
+  const supabaseKey  = process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_ANON_KEY;
+  if (!alpacaKey || !alpacaSecret || !supabaseUrl || !supabaseKey) return;
+
+  const alpacaHeaders = {
+    'APCA-API-KEY-ID':     alpacaKey,
+    'APCA-API-SECRET-KEY': alpacaSecret,
+    'Accept':              'application/json',
+  };
+  const sbHeaders = {
+    'Content-Type':  'application/json',
+    'apikey':        supabaseKey,
+    'Authorization': `Bearer ${supabaseKey}`,
+    'Prefer':        'return=minimal',
+  };
+
+  try {
+    // 1. Fetch closed orders from Alpaca
+    const ctrl  = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 10000);
+    let resp;
+    try {
+      resp = await fetch(
+        `${ALPACA_BASE}/v2/orders?status=closed&limit=50`,
+        { headers: alpacaHeaders, signal: ctrl.signal }
+      );
+    } finally { clearTimeout(timer); }
+
+    if (!resp.ok) {
+      pushLog('JOURNAL_UPDATE_SKIP: Alpaca closed orders fetch failed HTTP ' + resp.status, 'warn');
+      return;
+    }
+
+    const closedOrders = await resp.json().catch(() => []);
+    if (!Array.isArray(closedOrders) || closedOrders.length === 0) return;
+
+    const today = toETDate();
+
+    // 2. Filter to NZR-tagged filled orders from today
+    for (const order of closedOrders) {
+      if (!order.client_order_id || !order.client_order_id.startsWith('NZR-')) continue;
+      if (order.status !== 'filled' || !order.filled_avg_price) continue;
+
+      const exitPrice = parseFloat(order.filled_avg_price);
+      if (!exitPrice || exitPrice <= 0) continue;
+
+      const symbol = order.symbol;
+
+      // 3. Find matching journal entry (symbol + today's date, exit_price is null)
+      try {
+        const findCtrl  = new AbortController();
+        const findTimer = setTimeout(() => findCtrl.abort(), 8000);
+        let findResp;
+        try {
+          findResp = await fetch(
+            `${supabaseUrl}/rest/v1/journal?symbol=eq.${encodeURIComponent(symbol)}&trade_date=eq.${today}&exit_price=is.null&select=id,entry_price&limit=1`,
+            { headers: { 'apikey': supabaseKey, 'Authorization': `Bearer ${supabaseKey}`, 'Accept': 'application/json' }, signal: findCtrl.signal }
+          );
+        } finally { clearTimeout(findTimer); }
+
+        if (!findResp.ok) continue;
+        const rows = await findResp.json().catch(() => []);
+        if (!Array.isArray(rows) || rows.length === 0) continue;
+
+        const journalRow = rows[0];
+        const entryPrice = parseFloat(journalRow.entry_price);
+        if (!entryPrice || entryPrice <= 0) continue;
+
+        const pnlPct = ((exitPrice - entryPrice) / entryPrice * 100).toFixed(2);
+
+        // 4. Update journal entry with exit_price and pnl_pct
+        const updateCtrl  = new AbortController();
+        const updateTimer = setTimeout(() => updateCtrl.abort(), 8000);
+        try {
+          await fetch(
+            `${supabaseUrl}/rest/v1/journal?id=eq.${journalRow.id}`,
+            {
+              method: 'PATCH',
+              headers: sbHeaders,
+              body: JSON.stringify({ exit_price: exitPrice, pnl_pct: parseFloat(pnlPct) }),
+              signal: updateCtrl.signal,
+            }
+          );
+        } finally { clearTimeout(updateTimer); }
+
+        pushLog('JOURNAL_UPDATED: ' + symbol + ' pnl=' + pnlPct + '%', 'info');
+      } catch (err) {
+        pushLog('JOURNAL_UPDATE_ERR: ' + symbol + ' — ' + err.message, 'warn');
+      }
+    }
+  } catch (err) {
+    pushLog('JOURNAL_UPDATE_FAIL: ' + err.message, 'warn');
+  }
+}
+
 // ─── ALPACA ORDER EXECUTION ───────────────────────────────────────────────────
 
 /**
  * Writes a journal row and a notification row to Supabase after a successful
  * order placement.  Fail-silent: any error is caught and warned.
  */
-async function writeSupabaseRecord(signal, qty, newsContext = null) {
+async function writeSupabaseRecord(signal, qty, newsContext = null, orderData = null, stopPrice = 0, target1 = 0) {
   const supabaseUrl = process.env.SUPABASE_URL || 'https://chfdvmtnditebmlmyihr.supabase.co';
   const supabaseKey = process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_ANON_KEY;
   if (!supabaseUrl || !supabaseKey) return;
@@ -3017,28 +3121,47 @@ async function writeSupabaseRecord(signal, qty, newsContext = null) {
     'Prefer':        'return=minimal',
   };
 
+  const direction = signal.direction || 'LONG';
+  const notes = 'Bot: ' + (signal.strategy || 'COMBINED') +
+    ' | NZR=' + signal.nrzScore +
+    ' | Dir=' + direction.toUpperCase() +
+    ' | RSI=' + (signal.rsi ? signal.rsi.toFixed(1) : 'n/a') +
+    ' | MACD=' + (signal.macdHist ? signal.macdHist.toFixed(3) : 'n/a') +
+    ' | EMA=' + (signal.emaTrend || 'n/a') +
+    ' | Stop=$' + (stopPrice > 0 ? stopPrice.toFixed(2) : 'n/a') +
+    ' | Target=$' + (target1 > 0 ? target1.toFixed(2) : 'n/a') +
+    ' | Qty=' + qty +
+    ' | OrderID=' + (orderData?.id || 'unknown');
+
   const journalRow = {
     symbol:      signal.symbol,
-    entry_price: signal.entryPrice,
-    avg_cost:    signal.entryPrice,
+    entry_price: parseFloat(signal.entryPrice) || 0,
+    exit_price:  null,
+    pnl_pct:     null,
+    avg_cost:    parseFloat(signal.entryPrice) || 0,
     trade_date:  toETDate(),
-    pnl_pct:     0,
-    notes:       `Bot: ${signal.strategy} NZR=${signal.nrzScore}`,
+    notes:       notes,
+    user_id:     '00000000-0000-0000-0000-000000000000',
   };
   if (newsContext) {
     journalRow.news_context = JSON.stringify(newsContext);
   }
 
-  await Promise.allSettled([
-    fetch(`${supabaseUrl}/rest/v1/journal`, {
-      method: 'POST', headers,
-      body: JSON.stringify(journalRow),
-    }),
-    safeNotify(
-      `Bot opened ${signal.direction.toLowerCase()} on ${signal.symbol} @ $${signal.entryPrice.toFixed(2)} (NZR ${signal.nrzScore})`,
-      'trade'
-    ),
-  ]);
+  try {
+    await Promise.allSettled([
+      fetch(`${supabaseUrl}/rest/v1/journal`, {
+        method: 'POST', headers,
+        body: JSON.stringify(journalRow),
+      }),
+      safeNotify(
+        `Bot opened ${direction.toLowerCase()} on ${signal.symbol} @ $${(parseFloat(signal.entryPrice) || 0).toFixed(2)} (NZR ${signal.nrzScore})`,
+        'trade'
+      ),
+    ]);
+    pushLog('JOURNAL_WRITTEN: ' + signal.symbol + ' trade logged', 'info');
+  } catch(journalErr) {
+    pushLog('JOURNAL_ERROR: ' + journalErr.message, 'warn');
+  }
 }
 
 /**
@@ -3200,7 +3323,7 @@ async function executeSignal(signal, newsContext = null) {
         ` stop=${stopPrice.toFixed(2)} target=${target1.toFixed(2)} id=${orderId}`,
         'pass'
       );
-      writeSupabaseRecord(signal, qty, newsContext).catch(e => console.warn('[bot] Supabase write error:', e.message));
+      writeSupabaseRecord(signal, qty, newsContext, orderData, stopPrice, target1).catch(e => console.warn('[bot] Supabase write error:', e.message));
       return { executed: true, orderId, qty };
     }
 
@@ -3597,8 +3720,11 @@ module.exports = async function handler(req, res) {
           try {
             const execResult = await executeSignal({
               symbol, direction, mode: 'day', strategy: 'COMBINED',
-              nrzScore, entryPrice: price, atr: price * 0.015,
+              nrzScore, entryPrice: price, price, atr: price * 0.015,
               positionSize: dayAlloc * 0.10,
+              rsi: rsiValue,
+              macdHist: macdHist,
+              emaTrend: ema50 > ema200 ? 'BULL' : 'BEAR',
             });
             if (execResult.executed) {
               tradesPlaced++;
@@ -4055,6 +4181,15 @@ module.exports = async function handler(req, res) {
         console.warn('[bot/cron] market status check failed:', err.message);
         // fail-open: continue if status check errors
       }
+    }
+
+    // ── Step 2b: Update journal P&L for closed trades ─────────────────────────
+    try {
+      await updateClosedTrades();
+      results.journalUpdated = true;
+    } catch (err) {
+      console.warn('[bot/cron] updateClosedTrades error:', err.message);
+      results.journalUpdateError = err.message;
     }
 
     // ── Step 3: weekly halt status sync ──────────────────────────────────────
