@@ -6641,10 +6641,8 @@ function render52WeekBlock(ind) {
   </div>`;
 }
 
-/* ── Auto-scan every 15 minutes during market hours ── */
-let nextScanTime = Date.now() + 15 * 60 * 1000;
-
-function startAutoScan() {
+// 15-minute auto-scan trigger
+(function startAutoScan() {
   setInterval(async () => {
     try {
       const nowET = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
@@ -6658,31 +6656,14 @@ function startAutoScan() {
         console.log('[AUTO-SCAN] Triggering 15-min scan...');
         const res = await fetch('/api/bot?type=scan');
         const data = await res.json();
-        console.log('[AUTO-SCAN] Done:', data.symbolsScanned, 'scanned,', data.signalsPassed, 'signals,', data.tradesPlaced, 'trades');
-        // Refresh bot log after scan
-        setTimeout(pollBotLog, 3000);
+        console.log('[AUTO-SCAN] Complete:', data.symbolsScanned, 'scanned,', data.signalsPassed, 'signals,', data.tradesPlaced, 'trades');
+        if (typeof fetchBotLog === 'function') setTimeout(fetchBotLog, 3000);
       }
-      nextScanTime = Date.now() + 15 * 60 * 1000;
     } catch(e) {
       console.log('[AUTO-SCAN] Error:', e.message);
     }
   }, 15 * 60 * 1000);
-}
-
-// Countdown timer update
-setInterval(() => {
-  const remaining = nextScanTime - Date.now();
-  if (remaining <= 0) {
-    nextScanTime = Date.now() + 15 * 60 * 1000;
-    return;
-  }
-  const mins = Math.floor(remaining / 60000);
-  const secs = Math.floor((remaining % 60000) / 1000);
-  const el = document.getElementById('next-scan-timer');
-  if (el) el.textContent = 'Next auto-scan in: ' + mins + ':' + String(secs).padStart(2, '0');
-}, 1000);
-
-startAutoScan();
+})();
 
 </script>
 </body>

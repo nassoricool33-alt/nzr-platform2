@@ -30,6 +30,10 @@ const SCAN_UNIVERSE = [
   'MELI','SNOW','CRWD','SQ','PYPL',
 ];
 
+// Auto-scan interval tracker
+let lastScanTime = 0;
+const SCAN_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes
+
 // ── Live-trading gate — set BOT_LIVE_TRADING=true in Vercel env to enable ────
 const BOT_LIVE_TRADING = process.env.BOT_LIVE_TRADING === 'true';
 
