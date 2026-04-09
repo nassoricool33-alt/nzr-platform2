@@ -3006,100 +3006,42 @@ function recommendDirection(ind) {
  * with exit_price and pnl_pct.  Called at the start of every cron scan cycle.
  */
 async function updateClosedTrades() {
-  const alpacaKey    = process.env.ALPACA_API_KEY;
-  const alpacaSecret = process.env.ALPACA_SECRET_KEY;
-  const supabaseUrl  = process.env.SUPABASE_URL || 'https://chfdvmtnditebmlmyihr.supabase.co';
-  const supabaseKey  = process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_ANON_KEY;
-  if (!alpacaKey || !alpacaSecret || !supabaseUrl || !supabaseKey) return;
-
-  const alpacaHeaders = {
-    'APCA-API-KEY-ID':     alpacaKey,
-    'APCA-API-SECRET-KEY': alpacaSecret,
-    'Accept':              'application/json',
-  };
-  const sbHeaders = {
-    'Content-Type':  'application/json',
-    'apikey':        supabaseKey,
-    'Authorization': `Bearer ${supabaseKey}`,
-    'Prefer':        'return=minimal',
-  };
-
   try {
-    // 1. Fetch closed orders from Alpaca
-    const ctrl  = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 10000);
-    let resp;
-    try {
-      resp = await fetch(
-        `${ALPACA_BASE}/v2/orders?status=closed&limit=50`,
-        { headers: alpacaHeaders, signal: ctrl.signal }
-      );
-    } finally { clearTimeout(timer); }
-
-    if (!resp.ok) {
-      pushLog('JOURNAL_UPDATE_SKIP: Alpaca closed orders fetch failed HTTP ' + resp.status, 'warn');
-      return;
-    }
-
-    const closedOrders = await resp.json().catch(() => []);
-    if (!Array.isArray(closedOrders) || closedOrders.length === 0) return;
-
-    const today = toETDate();
-
-    // 2. Filter to NZR-tagged filled orders from today
-    for (const order of closedOrders) {
+    const sbKey = process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_ANON_KEY;
+    const sb = require('@supabase/supabase-js').createClient(process.env.SUPABASE_URL, sbKey);
+    const today = new Date().toISOString().split('T')[0];
+    const ordersRes = await fetch('https://paper-api.alpaca.markets/v2/orders?status=closed&limit=50&after=' + today + 'T00:00:00Z', {
+      headers: {
+        'APCA-API-KEY-ID': process.env.ALPACA_API_KEY,
+        'APCA-API-SECRET-KEY': process.env.ALPACA_SECRET_KEY
+      }
+    });
+    const orders = await ordersRes.json();
+    if (!Array.isArray(orders)) return;
+    for (const order of orders) {
       if (!order.client_order_id || !order.client_order_id.startsWith('NZR-')) continue;
-      if (order.status !== 'filled' || !order.filled_avg_price) continue;
-
-      const exitPrice = parseFloat(order.filled_avg_price);
-      if (!exitPrice || exitPrice <= 0) continue;
-
+      if (!order.filled_avg_price) continue;
       const symbol = order.symbol;
-
-      // 3. Find matching journal entry (symbol + today's date, exit_price is null)
-      try {
-        const findCtrl  = new AbortController();
-        const findTimer = setTimeout(() => findCtrl.abort(), 8000);
-        let findResp;
-        try {
-          findResp = await fetch(
-            `${supabaseUrl}/rest/v1/journal?symbol=eq.${encodeURIComponent(symbol)}&trade_date=eq.${today}&exit_price=is.null&select=id,entry_price&limit=1`,
-            { headers: { 'apikey': supabaseKey, 'Authorization': `Bearer ${supabaseKey}`, 'Accept': 'application/json' }, signal: findCtrl.signal }
-          );
-        } finally { clearTimeout(findTimer); }
-
-        if (!findResp.ok) continue;
-        const rows = await findResp.json().catch(() => []);
-        if (!Array.isArray(rows) || rows.length === 0) continue;
-
-        const journalRow = rows[0];
-        const entryPrice = parseFloat(journalRow.entry_price);
-        if (!entryPrice || entryPrice <= 0) continue;
-
+      const exitPrice = parseFloat(order.filled_avg_price);
+      const { data: journalEntries } = await sb.from('journal')
+        .select('*')
+        .eq('symbol', symbol)
+        .eq('trade_date', today)
+        .is('exit_price', null)
+        .limit(1);
+      if (journalEntries && journalEntries.length > 0) {
+        const entry = journalEntries[0];
+        const entryPrice = parseFloat(entry.entry_price);
         const pnlPct = ((exitPrice - entryPrice) / entryPrice * 100).toFixed(2);
-
-        // 4. Update journal entry with exit_price and pnl_pct
-        const updateCtrl  = new AbortController();
-        const updateTimer = setTimeout(() => updateCtrl.abort(), 8000);
-        try {
-          await fetch(
-            `${supabaseUrl}/rest/v1/journal?id=eq.${journalRow.id}`,
-            {
-              method: 'PATCH',
-              headers: sbHeaders,
-              body: JSON.stringify({ exit_price: exitPrice, pnl_pct: parseFloat(pnlPct) }),
-              signal: updateCtrl.signal,
-            }
-          );
-        } finally { clearTimeout(updateTimer); }
-
+        await sb.from('journal').update({
+          exit_price: exitPrice,
+          pnl_pct: parseFloat(pnlPct)
+        }).eq('id', entry.id);
         pushLog('JOURNAL_UPDATED: ' + symbol + ' pnl=' + pnlPct + '%', 'info');
-      } catch (err) {
-        pushLog('JOURNAL_UPDATE_ERR: ' + symbol + ' — ' + err.message, 'warn');
       }
     }
-  } catch (err) {
-    pushLog('JOURNAL_UPDATE_FAIL: ' + err.message, 'warn');
+  } catch(e) {
+    pushLog('JOURNAL_UPDATE_ERROR: ' + e.message, 'warn');
   }
 }
 
@@ -3323,7 +3265,33 @@ async function executeSignal(signal, newsContext = null) {
         ` stop=${stopPrice.toFixed(2)} target=${target1.toFixed(2)} id=${orderId}`,
         'pass'
       );
-      writeSupabaseRecord(signal, qty, newsContext, orderData, stopPrice, target1).catch(e => console.warn('[bot] Supabase write error:', e.message));
+      // Write journal entry via Supabase SDK
+      try {
+        const sbKey = process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_ANON_KEY;
+        const sb = require('@supabase/supabase-js').createClient(process.env.SUPABASE_URL, sbKey);
+        await sb.from('journal').insert({
+          symbol: signal.symbol,
+          entry_price: entryPrice,
+          exit_price: null,
+          pnl_pct: null,
+          trade_date: new Date().toISOString().split('T')[0],
+          notes: 'Bot: ' + (signal.strategy || 'COMBINED') +
+                 ' | NZR=' + signal.nrzScore +
+                 ' | Dir=' + signal.direction.toUpperCase() +
+                 ' | RSI=' + (signal.rsi ? Number(signal.rsi).toFixed(1) : 'n/a') +
+                 ' | MACD=' + (signal.macdHist ? Number(signal.macdHist).toFixed(3) : 'n/a') +
+                 ' | EMA=' + (signal.emaTrend || 'n/a') +
+                 ' | Stop=$' + stopPrice.toFixed(2) +
+                 ' | Target=$' + target1.toFixed(2) +
+                 ' | Qty=' + qty +
+                 ' | OrderID=' + orderData.id,
+          user_id: '00000000-0000-0000-0000-000000000000'
+        });
+        pushLog('JOURNAL_WRITTEN: ' + signal.symbol, 'info');
+      } catch(je) {
+        pushLog('JOURNAL_ERROR: ' + je.message, 'warn');
+      }
+
       return { executed: true, orderId, qty };
     }
 
@@ -3633,11 +3601,14 @@ module.exports = async function handler(req, res) {
     const isMarketOpen = isWeekday && etTimeDecimal >= 9.5 && etTimeDecimal < 15.75;
 
     if (!isMarketOpen) {
-      pushLog('MARKET_CLOSED: ' + etHour + ':' + String(etMinute).padStart(2,'0') + ' ET (day=' + etDay + ')', 'info');
+      pushLog('MARKET_CLOSED: ' + etHour + ':' + String(etMinute).padStart(2,'0') + ' ET', 'info');
       return res.status(200).json({ success: true, message: 'Market closed', symbolsScanned: 0, signalsPassed: 0, tradesPlaced: 0, duration: '0ms' });
     }
 
     pushLog('SCAN_STARTED: capital=$' + capital + ' day=$' + dayAlloc + ' swing=$' + swingAlloc + ' universe=' + SCAN_UNIVERSE.length + ' ET=' + etHour + ':' + String(etMinute).padStart(2,'0'), 'info');
+
+    // Update P&L for any closed trades before scanning
+    try { await updateClosedTrades(); } catch(e) { pushLog('CLOSED_TRADES_ERR: ' + e.message, 'warn'); }
 
     let symbolsScanned = 0;
     let signalsFound = 0;
