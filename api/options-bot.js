@@ -140,31 +140,50 @@ async function scoreOptionsSignal(symbol) {
 
 async function selectOptionsContract(symbol, direction, daysToPlay, currentPrice) {
   try {
-    const today = new Date();
-    const minExpiry = new Date(today.getTime() + (daysToPlay - 7) * 86400000).toISOString().split('T')[0];
-    const maxExpiry = new Date(today.getTime() + (daysToPlay + 21) * 86400000).toISOString().split('T')[0];
     const contractType = direction === 'calls' ? 'call' : 'put';
-    const minStrike = direction === 'calls' ? currentPrice * 0.97 : currentPrice * 0.93;
-    const maxStrike = direction === 'calls' ? currentPrice * 1.08 : currentPrice * 1.03;
+    const url = 'https://api.polygon.io/v3/snapshot/options/' + symbol + '?contract_type=' + contractType + '&limit=20&apiKey=' + process.env.POLYGON_API_KEY;
+    const data = await fetchWithTimeout(url, {}, 5000);
 
-    const url = 'https://api.polygon.io/v3/reference/options/contracts?underlying_ticker=' + symbol + '&contract_type=' + contractType + '&expiration_date.gte=' + minExpiry + '&expiration_date.lte=' + maxExpiry + '&strike_price.gte=' + minStrike.toFixed(2) + '&strike_price.lte=' + maxStrike.toFixed(2) + '&expired=false&limit=50&apiKey=' + process.env.POLYGON_API_KEY;
-    const data = await fetchWithTimeout(url);
-
-    if (!data?.results?.length) { pushLog('No contracts found for ' + symbol, 'warn'); return null; }
-
-    let bestContract = null, bestScore = -1;
-    for (const contract of data.results) {
-      const strikeDistance = Math.abs(contract.strike_price - currentPrice) / currentPrice;
-      const score = (1 - strikeDistance * 10);
-      if (score > bestScore) { bestScore = score; bestContract = contract; }
+    if (!data?.results?.length) {
+      pushLog('No contracts found for ' + symbol, 'warn');
+      return null;
     }
-    if (!bestContract) return null;
 
-    const quoteData = await fetchWithTimeout('https://api.polygon.io/v2/last/trade/' + bestContract.ticker + '?apiKey=' + process.env.POLYGON_API_KEY);
-    const price = quoteData?.results?.p || 1.0;
+    const today = new Date();
+    const minDays = 14;
+    const maxDays = 90;
 
-    return { ticker: bestContract.ticker, strike: bestContract.strike_price, expiry: bestContract.expiration_date, contractType: bestContract.contract_type, mid: price, ask: price * 1.02 };
-  } catch(e) { pushLog('CONTRACT_ERROR ' + symbol + ': ' + e.message, 'warn'); return null; }
+    const validContracts = data.results.filter(c => {
+      const details = c.details || {};
+      if (!details.expiration_date) return false;
+      const expiry = new Date(details.expiration_date);
+      const daysToExpiry = (expiry - today) / 86400000;
+      return daysToExpiry >= minDays && daysToExpiry <= maxDays;
+    });
+
+    if (!validContracts.length) {
+      pushLog('No valid expiry contracts for ' + symbol, 'warn');
+      return null;
+    }
+
+    const best = validContracts[0];
+    const details = best.details || {};
+    const price = best.day?.close || best.last_quote?.midpoint || best.last_trade?.price || 1.0;
+
+    pushLog('CONTRACT_FOUND: ' + symbol + ' ' + details.ticker + ' strike=' + details.strike_price + ' expiry=' + details.expiration_date + ' price=$' + price, 'pass');
+
+    return {
+      ticker: details.ticker || symbol,
+      strike: details.strike_price || currentPrice,
+      expiry: details.expiration_date || '',
+      contractType: details.contract_type || contractType,
+      mid: price,
+      ask: price * 1.02
+    };
+  } catch(e) {
+    pushLog('CONTRACT_ERROR ' + symbol + ': ' + e.message, 'warn');
+    return null;
+  }
 }
 
 async function executeOptionsOrder(contract, signal, capitalAmount) {
@@ -216,12 +235,12 @@ async function executeOptionsOrder(contract, signal, capitalAmount) {
 async function getPelosiIntelligence() {
   try {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 25000);
+    const timeout = setTimeout(() => controller.abort(), 20000);
     const res = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       signal: controller.signal,
       headers: { 'Content-Type': 'application/json', 'x-api-key': process.env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
-      body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 1000, messages: [{ role: 'user', content: 'You are a political intelligence analyst for options trading. Based on current US legislative activity, government spending, Federal Reserve policy, and geopolitical trends as of April 2026, which sectors and stocks will benefit most in the next 30-90 days? Return ONLY valid JSON: { "topSectors": [{"sector": "string", "thesis": "string", "direction": "bullish or bearish"}], "topStocks": [{"symbol": "string", "thesis": "string", "optionPlay": "string", "confidence": "high or medium"}], "keyThemes": ["string"], "summary": "string" }' }] })
+      body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 1000, messages: [{ role: 'user', content: 'As of April 2026, list the top 5 US stocks most likely to benefit from current legislation and macro trends. Return ONLY JSON: { "topStocks": [{"symbol": "string", "thesis": "string", "optionPlay": "buy calls or buy puts", "confidence": "high or medium"}], "keyThemes": ["string", "string", "string"], "summary": "string" }' }] })
     });
     clearTimeout(timeout);
     const data = await res.json();
