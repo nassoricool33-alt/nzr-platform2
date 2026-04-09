@@ -779,6 +779,7 @@ footer{border-top:1px solid var(--border);padding:32px 0;margin-top:80px}
         <button class="nav-tab" data-page="journal">Journal</button>
         <button class="nav-tab" data-page="leaderboard">Leaderboard</button>
         <button class="nav-tab" data-page="bot">Bot</button>
+        <button class="nav-tab" data-page="options">Options</button>
       </div>
       <!-- Intelligence group -->
       <div class="nav-group">
@@ -1593,6 +1594,97 @@ footer{border-top:1px solid var(--border);padding:32px 0;margin-top:80px}
 </div>
 </div>
 
+<!-- ══════════════════════════════════ OPTIONS ══ -->
+<div id="page-options" class="page">
+<div class="wrapper" style="padding-top:40px;padding-bottom:80px">
+  <div class="section-header sec-fade">
+    <div class="section-eyebrow">My trading</div>
+    <div class="section-title">Political Alpha <span>Engine</span></div>
+    <div style="font-family:var(--font-body);font-size:14px;color:var(--text2);margin-top:6px;max-width:540px">Trades options based on legislation, institutional flow, and AI market intelligence</div>
+  </div>
+
+  <!-- Pelosi Intelligence Panel -->
+  <div id="pelosi-panel" class="stat-card sec-fade" style="padding:24px;margin-top:24px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+      <div>
+        <div style="font-family:var(--font-display);font-size:15px;font-weight:700;color:var(--text)">Political Intelligence</div>
+        <div style="font-family:var(--font-mono);font-size:10px;color:var(--text3);margin-top:2px;letter-spacing:.5px">AI-powered legislative and macro analysis</div>
+      </div>
+      <button onclick="loadPelosiIntel()" style="background:var(--gold);color:#fff;border:none;border-radius:6px;padding:8px 16px;font-family:var(--font-display);font-size:11px;font-weight:700;letter-spacing:.5px;cursor:pointer">Refresh Intel</button>
+    </div>
+    <div id="pelosi-summary" style="font-family:var(--font-body);font-size:13px;color:var(--text2);line-height:1.7;margin-bottom:14px">Loading intelligence...</div>
+    <div id="pelosi-themes" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px"></div>
+    <div id="pelosi-stocks" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px"></div>
+  </div>
+
+  <!-- Options Scanner -->
+  <div class="stat-card sec-fade" style="padding:20px 24px;margin-top:16px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+      <div>
+        <div style="font-family:var(--font-display);font-size:14px;font-weight:600;color:var(--text)">Options Scanner</div>
+        <div style="font-family:var(--font-mono);font-size:10px;color:var(--text3);margin-top:3px">Scan 16 liquid names for options setups</div>
+      </div>
+      <button id="opts-scan-btn" onclick="runOptionsScan()" style="background:var(--gold);color:#fff;border:none;border-radius:6px;padding:9px 20px;font-family:var(--font-display);font-size:12px;font-weight:700;letter-spacing:.5px;cursor:pointer;transition:all .18s">Run Scan</button>
+    </div>
+
+    <div id="opts-scan-status" style="font-family:var(--font-mono);font-size:11px;color:var(--text3);display:none;margin-bottom:14px">
+      <span style="display:inline-block;animation:spin .8s linear infinite;margin-right:6px">&#10227;</span>
+      <span id="opts-scan-status-text">Scanning options universe...</span>
+    </div>
+
+    <div id="opts-scan-summary" style="display:none;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px">
+      <div style="background:var(--bg2);border-radius:8px;padding:12px 14px">
+        <div style="font-family:var(--font-mono);font-size:9px;color:var(--text3);letter-spacing:1px;text-transform:uppercase;margin-bottom:4px">Scanned</div>
+        <div id="opts-r-scanned" style="font-family:var(--font-display);font-size:22px;font-weight:700;color:var(--text)">--</div>
+      </div>
+      <div style="background:var(--bg2);border-radius:8px;padding:12px 14px">
+        <div style="font-family:var(--font-mono);font-size:9px;color:var(--text3);letter-spacing:1px;text-transform:uppercase;margin-bottom:4px">Signals</div>
+        <div id="opts-r-signals" style="font-family:var(--font-display);font-size:22px;font-weight:700;color:var(--text)">--</div>
+      </div>
+      <div style="background:var(--bg2);border-radius:8px;padding:12px 14px">
+        <div style="font-family:var(--font-mono);font-size:9px;color:var(--text3);letter-spacing:1px;text-transform:uppercase;margin-bottom:4px">Orders</div>
+        <div id="opts-r-orders" style="font-family:var(--font-display);font-size:22px;font-weight:700;color:var(--text)">--</div>
+      </div>
+      <div style="background:var(--bg2);border-radius:8px;padding:12px 14px">
+        <div style="font-family:var(--font-mono);font-size:9px;color:var(--text3);letter-spacing:1px;text-transform:uppercase;margin-bottom:4px">Duration</div>
+        <div id="opts-r-duration" style="font-family:var(--font-display);font-size:22px;font-weight:700;color:var(--text)">--</div>
+      </div>
+    </div>
+
+    <div id="opts-signals-wrap" style="display:none;overflow-x:auto;border-radius:6px;border:1px solid var(--border)">
+      <table style="width:100%;border-collapse:collapse;font-family:var(--font-mono);font-size:11px">
+        <thead>
+          <tr style="background:var(--bg2);border-bottom:1px solid var(--border)">
+            <th style="padding:8px 14px;text-align:left;color:var(--text3);font-weight:500;font-size:10px">Symbol</th>
+            <th style="padding:8px 10px;text-align:center;color:var(--text3);font-weight:500;font-size:10px">Direction</th>
+            <th style="padding:8px 10px;text-align:right;color:var(--text3);font-weight:500;font-size:10px">Score</th>
+            <th style="padding:8px 10px;text-align:right;color:var(--text3);font-weight:500;font-size:10px">RSI</th>
+            <th style="padding:8px 10px;text-align:right;color:var(--text3);font-weight:500;font-size:10px">IV</th>
+            <th style="padding:8px 14px;text-align:left;color:var(--text3);font-weight:500;font-size:10px">Catalyst</th>
+            <th style="padding:8px 10px;text-align:center;color:var(--text3);font-weight:500;font-size:10px">Status</th>
+          </tr>
+        </thead>
+        <tbody id="opts-signals-tbody"></tbody>
+      </table>
+    </div>
+
+    <div id="opts-scan-error" style="display:none;font-family:var(--font-mono);font-size:11px;color:var(--red);padding:8px 0"></div>
+  </div>
+
+  <!-- Options Activity Log -->
+  <div class="stat-card sec-fade" style="padding:0;margin-top:16px;animation-delay:100ms">
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--border)">
+      <div style="font-family:var(--font-mono);font-size:10px;color:var(--text3);letter-spacing:1px;text-transform:uppercase">Options Activity Log</div>
+      <button onclick="clearOptionsLog()" style="font-size:10px;padding:3px 10px;background:var(--bg3);color:var(--text3);border:1px solid var(--border);border-radius:4px;cursor:pointer;font-family:var(--font-mono)">Clear</button>
+    </div>
+    <div id="options-log-entries" style="height:240px;overflow-y:auto;padding:12px 16px;background:var(--bg);font-family:var(--font-mono);font-size:11px;line-height:1.8">
+      <div style="color:var(--text3)">Waiting for activity...</div>
+    </div>
+  </div>
+
+</div>
+</div>
+
 <!-- ══════════════════════════════════ JOURNAL ══ -->
 <div id="page-journal" class="page">
 <div class="wrapper" style="padding-top:40px;padding-bottom:80px">
@@ -2229,6 +2321,7 @@ function showPage(id){
   if(id==='portfolio'&&currentUser){ loadPortfolio(currentUser.id); }
   if(id==='journal'&&currentUser){ loadJournal(currentUser.id); }
   if(id==='dashboard'){ loadPerfSummary(); loadMarketIntelligence(); }
+  if(id==='options'){ loadPelosiIntel(); fetchOptionsLog(); }
 }
 document.querySelectorAll('.nav-tab').forEach(t=>{
   t.addEventListener('click',()=>showPage(t.dataset.page));
@@ -6664,6 +6757,123 @@ function render52WeekBlock(ind) {
     }
   }, 15 * 60 * 1000);
 })();
+
+/* ── OPTIONS BOT FUNCTIONS ─────────────────────────── */
+let _optsLogInterval = null;
+
+async function loadPelosiIntel() {
+  const summary = document.getElementById('pelosi-summary');
+  const themes = document.getElementById('pelosi-themes');
+  const stocks = document.getElementById('pelosi-stocks');
+  if (!summary) return;
+  summary.textContent = 'Loading intelligence...';
+  themes.innerHTML = '';
+  stocks.innerHTML = '';
+  try {
+    const res = await fetch('/api/options-bot?type=pelosi');
+    const data = await res.json();
+    summary.textContent = data.summary || 'No summary available';
+    if (data.keyThemes && data.keyThemes.length) {
+      themes.innerHTML = data.keyThemes.map(t =>
+        '<span style="display:inline-block;font-family:var(--font-mono);font-size:10px;font-weight:600;padding:5px 12px;border-radius:99px;background:var(--gold-dim);color:var(--gold);border:1px solid rgba(200,150,12,.3);letter-spacing:.3px">' + t + '</span>'
+      ).join('');
+    }
+    if (data.riskFactors && data.riskFactors.length) {
+      themes.innerHTML += data.riskFactors.map(r =>
+        '<span style="display:inline-block;font-family:var(--font-mono);font-size:10px;font-weight:600;padding:5px 12px;border-radius:99px;background:var(--red-dim);color:var(--red);border:1px solid rgba(192,24,42,.25);letter-spacing:.3px">' + r + '</span>'
+      ).join('');
+    }
+    if (data.topStocks && data.topStocks.length) {
+      stocks.innerHTML = data.topStocks.map(s => {
+        const conf = s.confidence === 'high' ? 'var(--green)' : 'var(--gold)';
+        return '<div style="background:var(--bg2);border-radius:10px;padding:14px 16px;border:1px solid var(--border)">' +
+          '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">' +
+            '<span style="font-family:var(--font-display);font-size:15px;font-weight:700;color:var(--text)">' + (s.symbol || '') + '</span>' +
+            '<span style="font-family:var(--font-mono);font-size:9px;font-weight:700;padding:3px 8px;border-radius:99px;background:' + conf + ';color:#fff;letter-spacing:.5px">' + (s.confidence || '').toUpperCase() + '</span>' +
+          '</div>' +
+          '<div style="font-family:var(--font-body);font-size:12px;color:var(--text2);line-height:1.5;margin-bottom:6px">' + (s.thesis || '') + '</div>' +
+          '<div style="font-family:var(--font-mono);font-size:10px;color:var(--gold)">' + (s.optionPlay || '') + '</div>' +
+          '<div style="font-family:var(--font-mono);font-size:9px;color:var(--text3);margin-top:4px">' + (s.timeframe || '') + '</div>' +
+        '</div>';
+      }).join('');
+    }
+  } catch(e) {
+    summary.textContent = 'Error loading intelligence: ' + e.message;
+  }
+}
+
+async function runOptionsScan() {
+  const btn = document.getElementById('opts-scan-btn');
+  const status = document.getElementById('opts-scan-status');
+  const summary = document.getElementById('opts-scan-summary');
+  const wrap = document.getElementById('opts-signals-wrap');
+  const errEl = document.getElementById('opts-scan-error');
+  if (btn) btn.disabled = true;
+  if (status) status.style.display = 'block';
+  if (summary) summary.style.display = 'none';
+  if (wrap) wrap.style.display = 'none';
+  if (errEl) errEl.style.display = 'none';
+  try {
+    const res = await fetch('/api/options-bot?type=scan');
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    if (status) status.style.display = 'none';
+    if (summary) {
+      summary.style.display = 'grid';
+      document.getElementById('opts-r-scanned').textContent = data.symbolsScanned || 0;
+      document.getElementById('opts-r-signals').textContent = data.signalsFound || 0;
+      document.getElementById('opts-r-orders').textContent = data.ordersPlaced || 0;
+      document.getElementById('opts-r-duration').textContent = data.duration || '--';
+    }
+    if (data.results && data.results.length && wrap) {
+      const tbody = document.getElementById('opts-signals-tbody');
+      tbody.innerHTML = data.results.sort((a, b) => (b.optionsScore || 0) - (a.optionsScore || 0)).map(r => {
+        const scoreColor = r.optionsScore >= 80 ? 'var(--green)' : r.optionsScore >= 65 ? 'var(--gold)' : 'var(--text3)';
+        const dirColor = r.direction === 'calls' ? 'var(--green)' : 'var(--red)';
+        const statusBg = r.recommendation === 'strong_buy' ? 'var(--green)' : r.recommendation === 'buy' ? 'var(--gold)' : 'var(--bg3)';
+        const statusColor = r.recommendation === 'strong_buy' || r.recommendation === 'buy' ? '#fff' : 'var(--text3)';
+        return '<tr style="border-bottom:1px solid var(--border)">' +
+          '<td style="padding:9px 14px;font-weight:700;color:var(--text)">' + r.symbol + '</td>' +
+          '<td style="padding:9px 10px;text-align:center;font-weight:600;color:' + dirColor + '">' + (r.direction === 'calls' ? '&#9650; CALLS' : '&#9660; PUTS') + '</td>' +
+          '<td style="padding:9px 10px;text-align:right;font-weight:700;color:' + scoreColor + '">' + (r.optionsScore || 0) + '</td>' +
+          '<td style="padding:9px 10px;text-align:right;color:var(--text2)">' + (r.rsi || '--') + '</td>' +
+          '<td style="padding:9px 10px;text-align:right;color:var(--text2)">' + (r.avgIV || '--') + (r.ivCrushRisk ? ' &#9888;' : '') + '</td>' +
+          '<td style="padding:9px 14px;color:var(--text2);font-size:10px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + (r.catalyst || '--') + '</td>' +
+          '<td style="padding:9px 10px;text-align:center"><span style="font-size:9px;font-weight:700;padding:3px 8px;border-radius:99px;background:' + statusBg + ';color:' + statusColor + ';letter-spacing:.3px">' + (r.recommendation || 'skip').toUpperCase().replace('_', ' ') + '</span></td>' +
+        '</tr>';
+      }).join('');
+      wrap.style.display = 'block';
+    }
+    setTimeout(fetchOptionsLog, 2000);
+  } catch(e) {
+    if (status) status.style.display = 'none';
+    if (errEl) { errEl.textContent = 'Scan error: ' + e.message; errEl.style.display = 'block'; }
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function fetchOptionsLog() {
+  const el = document.getElementById('options-log-entries');
+  if (!el) return;
+  try {
+    const res = await fetch('/api/options-bot?type=log');
+    const data = await res.json();
+    if (!data.logs || !data.logs.length) return;
+    el.innerHTML = data.logs.map(l => {
+      const c = l.type === 'pass' ? 'var(--green)' : l.type === 'warn' ? 'var(--red)' : l.type === 'block' ? 'var(--red)' : 'var(--text3)';
+      const ts = l.timestamp ? l.timestamp.slice(11, 19) : '';
+      return '<div style="color:' + c + '"><span style="color:var(--text3);opacity:.5">' + ts + '</span> ' + l.message + '</div>';
+    }).join('');
+  } catch(e) {}
+}
+
+function clearOptionsLog() {
+  const el = document.getElementById('options-log-entries');
+  if (el) el.innerHTML = '<div style="color:var(--text3)">Log cleared</div>';
+}
+
+setInterval(fetchOptionsLog, 30000);
 
 </script>
 </body>
