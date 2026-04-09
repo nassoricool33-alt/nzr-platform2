@@ -1532,6 +1532,7 @@ footer{border-top:1px solid var(--border);padding:32px 0;margin-top:80px}
 
     <!-- Error message -->
     <div id="scan-error" style="display:none;font-family:var(--font-mono);font-size:11px;color:var(--red);padding:8px 0"></div>
+    <div id="next-scan-timer" style="font-family:var(--font-mono);font-size:11px;color:var(--text3);margin-top:10px;letter-spacing:.3px">Next auto-scan in: --:--</div>
   </div>
 
   <!-- Bot activity log -->
@@ -6640,21 +6641,48 @@ function render52WeekBlock(ind) {
   </div>`;
 }
 
-/* ── Client-side bot scan trigger (replaces Vercel cron frequency) ── */
-setInterval(async () => {
-  try {
-    const nowET = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
-    const hour = nowET.getHours();
-    const minute = nowET.getMinutes();
-    const day = nowET.getDay();
-    const isMarketHours = day >= 1 && day <= 5 && (hour > 9 || (hour === 9 && minute >= 30)) && hour < 16;
-    if (isMarketHours) {
-      await fetch('/api/bot?type=scan');
+/* ── Auto-scan every 15 minutes during market hours ── */
+let nextScanTime = Date.now() + 15 * 60 * 1000;
+
+function startAutoScan() {
+  setInterval(async () => {
+    try {
+      const nowET = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+      const hour = nowET.getHours();
+      const minute = nowET.getMinutes();
+      const day = nowET.getDay();
+      const isMarketHours = day >= 1 && day <= 5 &&
+        (hour > 9 || (hour === 9 && minute >= 30)) &&
+        (hour < 15 || (hour === 15 && minute <= 45));
+      if (isMarketHours) {
+        console.log('[AUTO-SCAN] Triggering 15-min scan...');
+        const res = await fetch('/api/bot?type=scan');
+        const data = await res.json();
+        console.log('[AUTO-SCAN] Done:', data.symbolsScanned, 'scanned,', data.signalsPassed, 'signals,', data.tradesPlaced, 'trades');
+        // Refresh bot log after scan
+        setTimeout(pollBotLog, 3000);
+      }
+      nextScanTime = Date.now() + 15 * 60 * 1000;
+    } catch(e) {
+      console.log('[AUTO-SCAN] Error:', e.message);
     }
-  } catch(e) {
-    console.log('Auto-scan error:', e.message);
+  }, 15 * 60 * 1000);
+}
+
+// Countdown timer update
+setInterval(() => {
+  const remaining = nextScanTime - Date.now();
+  if (remaining <= 0) {
+    nextScanTime = Date.now() + 15 * 60 * 1000;
+    return;
   }
-}, 15 * 60 * 1000);
+  const mins = Math.floor(remaining / 60000);
+  const secs = Math.floor((remaining % 60000) / 1000);
+  const el = document.getElementById('next-scan-timer');
+  if (el) el.textContent = 'Next auto-scan in: ' + mins + ':' + String(secs).padStart(2, '0');
+}, 1000);
+
+startAutoScan();
 
 </script>
 </body>

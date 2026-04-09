@@ -3545,8 +3545,7 @@ module.exports = async function handler(req, res) {
   console.log('[BOT] Handler called, method=' + req.method + ' type=' + (req.query?.type || 'none') + ' action=' + (req.query?.action || 'none'));
   const SCAN_START_TIME = Date.now(); // soft timeout sentinel — checked inside scan loop
 
-  const origin = req.headers.origin || '';
-  if (ALLOWED_ORIGINS.includes(origin)) res.setHeader('Access-Control-Allow-Origin', origin);
+  res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -3785,6 +3784,26 @@ module.exports = async function handler(req, res) {
       ? botLogBuffer.filter(e => new Date(e.timestamp).getTime() > since)
       : [...botLogBuffer];
     return res.status(200).json({ logs, count: logs.length });
+  }
+
+  // ── CRON SETUP INSTRUCTIONS ────────────────────────────────────────────────
+  if (type === 'cronsetup') {
+    console.log('[BOT] CRONSETUP route matched');
+    const host = req.headers.host || 'your-domain.vercel.app';
+    return res.status(200).json({
+      message: 'Set up a free cron job at cron-job.org to call this endpoint every 15 minutes during market hours.',
+      steps: [
+        '1. Go to https://cron-job.org and create a free account',
+        '2. Create a new cron job with these settings:',
+        '   URL: https://' + host + '/api/bot?type=scan',
+        '   Schedule: Every 15 minutes (*/15 * * * *)',
+        '   Request method: GET',
+        '3. Optionally restrict to market hours: */15 14-21 * * 1-5 (UTC) or */15 9-16 * * 1-5 (ET)',
+        '4. Enable the job and save'
+      ],
+      scanUrl: 'https://' + host + '/api/bot?type=scan',
+      recommendedSchedule: '*/15 14-21 * * 1-5'
+    });
   }
 
   // ── SET CAPITAL (GET) ──────────────────────────────────────────────────────
