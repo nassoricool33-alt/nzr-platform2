@@ -240,12 +240,18 @@ async function getPelosiIntelligence() {
       method: 'POST',
       signal: controller.signal,
       headers: { 'Content-Type': 'application/json', 'x-api-key': process.env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
-      body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 1000, messages: [{ role: 'user', content: 'As of April 2026, list the top 5 US stocks most likely to benefit from current legislation and macro trends. Return ONLY JSON: { "topStocks": [{"symbol": "string", "thesis": "string", "optionPlay": "buy calls or buy puts", "confidence": "high or medium"}], "keyThemes": ["string", "string", "string"], "summary": "string" }' }] })
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-6',
+        max_tokens: 1000,
+        tools: [{ type: 'web_search_20250305', name: 'web_search' }],
+        messages: [{ role: 'user', content: 'Search for current US stock market trends, legislative catalysts, and macro themes as of today April 2026. Based on real current information, which 5 stocks have the strongest options play opportunity right now? Return ONLY valid JSON after searching: { "topStocks": [{"symbol": "string", "thesis": "string", "optionPlay": "buy calls or buy puts", "confidence": "high or medium"}], "keyThemes": ["string"], "summary": "string" }' }]
+      })
     });
     clearTimeout(timeout);
     const data = await res.json();
-    const text = data?.content?.[0]?.text || '{}';
-    return JSON.parse(text.replace(/```json|```/g, '').trim());
+    const fullResponse = data.content.map(item => item.type === 'text' ? item.text : '').filter(Boolean).join('');
+    const jsonMatch = fullResponse.match(/\{[\s\S]*\}/);
+    return jsonMatch ? JSON.parse(jsonMatch[0]) : { topStocks: [], keyThemes: [], summary: 'Search failed' };
   } catch(e) { return { topSectors: [], topStocks: [], keyThemes: [], riskFactors: [], summary: 'Intelligence unavailable', error: e.message }; }
 }
 
@@ -323,6 +329,8 @@ module.exports = async function handler(req, res) {
             if (contract) {
               const order = await executeOptionsOrder(contract, signal, capitalAmount);
               if (order) ordersPlaced++;
+            } else if (signal.direction === 'puts') {
+              pushLog('PUTS_SKIP: no options contract available and cannot short — skipping ' + signal.symbol, 'warn');
             } else {
               pushLog('NO_CONTRACT_FALLBACK: placing equity order for ' + signal.symbol + ' instead', 'warn');
 
@@ -332,7 +340,6 @@ module.exports = async function handler(req, res) {
               if (fbPrice && process.env.BOT_LIVE_TRADING === 'true') {
                 const positionSize = capitalAmount * 0.05;
                 const qty = Math.max(1, Math.floor(positionSize / fbPrice));
-                const side = signal.direction === 'calls' ? 'buy' : 'sell';
 
                 const fbOrderRes = await fetch('https://paper-api.alpaca.markets/v2/orders', {
                   method: 'POST',
@@ -340,7 +347,7 @@ module.exports = async function handler(req, res) {
                   body: JSON.stringify({
                     symbol: signal.symbol,
                     qty: String(qty),
-                    side: side === 'sell' ? 'sell_short' : 'buy',
+                    side: 'buy',
                     type: 'market',
                     time_in_force: 'day',
                     client_order_id: 'NZR-OPTIONS-EQ-' + signal.symbol + '-' + Date.now()
@@ -349,7 +356,7 @@ module.exports = async function handler(req, res) {
                 const fbOrderData = await fbOrderRes.json();
                 if (fbOrderRes.ok) {
                   ordersPlaced++;
-                  pushLog('EQUITY_FALLBACK_PLACED: ' + signal.symbol + ' ' + side + ' ' + qty + ' shares @ $' + fbPrice, 'pass');
+                  pushLog('EQUITY_FALLBACK_PLACED: ' + signal.symbol + ' buy ' + qty + ' shares @ $' + fbPrice, 'pass');
                 } else {
                   pushLog('EQUITY_FALLBACK_REJECTED: ' + signal.symbol + ' — ' + JSON.stringify(fbOrderData), 'warn');
                 }
