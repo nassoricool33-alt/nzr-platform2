@@ -323,6 +323,37 @@ module.exports = async function handler(req, res) {
             if (contract) {
               const order = await executeOptionsOrder(contract, signal, capitalAmount);
               if (order) ordersPlaced++;
+            } else {
+              pushLog('NO_CONTRACT_FALLBACK: placing equity order for ' + signal.symbol + ' instead', 'warn');
+
+              const fbPriceData = await fetchWithTimeout('https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers/' + signal.symbol + '?apiKey=' + process.env.POLYGON_API_KEY);
+              const fbPrice = fbPriceData?.ticker?.day?.c || fbPriceData?.ticker?.lastTrade?.p || null;
+
+              if (fbPrice && process.env.BOT_LIVE_TRADING === 'true') {
+                const positionSize = capitalAmount * 0.05;
+                const qty = Math.max(1, Math.floor(positionSize / fbPrice));
+                const side = signal.direction === 'calls' ? 'buy' : 'sell';
+
+                const fbOrderRes = await fetch('https://paper-api.alpaca.markets/v2/orders', {
+                  method: 'POST',
+                  headers: { 'APCA-API-KEY-ID': process.env.ALPACA_API_KEY, 'APCA-API-SECRET-KEY': process.env.ALPACA_SECRET_KEY, 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    symbol: signal.symbol,
+                    qty: String(qty),
+                    side: side === 'sell' ? 'sell_short' : 'buy',
+                    type: 'market',
+                    time_in_force: 'day',
+                    client_order_id: 'NZR-OPTIONS-EQ-' + signal.symbol + '-' + Date.now()
+                  })
+                });
+                const fbOrderData = await fbOrderRes.json();
+                if (fbOrderRes.ok) {
+                  ordersPlaced++;
+                  pushLog('EQUITY_FALLBACK_PLACED: ' + signal.symbol + ' ' + side + ' ' + qty + ' shares @ $' + fbPrice, 'pass');
+                } else {
+                  pushLog('EQUITY_FALLBACK_REJECTED: ' + signal.symbol + ' — ' + JSON.stringify(fbOrderData), 'warn');
+                }
+              }
             }
           }
         }
