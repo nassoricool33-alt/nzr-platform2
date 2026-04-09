@@ -661,6 +661,41 @@ footer{border-top:1px solid var(--border);padding:32px 0;margin-top:80px}
 .dir-levels-table td:first-child{color:var(--text3);font-family:var(--font-mono);font-size:10px;letter-spacing:.3px;width:45%}
 .dir-levels-table td:last-child{font-family:var(--font-mono);font-weight:700;color:var(--text);text-align:right}
 .dir-rr-badge{display:inline-block;font-family:var(--font-mono);font-size:10px;font-weight:700;padding:2px 10px;border-radius:99px;background:var(--gold-dim);color:var(--gold);border:1px solid rgba(200,150,12,.3)}
+
+/* ─── JOURNAL BOT SUMMARY BAR ─────────────────────── */
+.jn-summary-bar{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:12px;margin-bottom:16px}
+.jn-summary-stat{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius-lg);padding:16px 18px;box-shadow:var(--shadow)}
+.jn-summary-label{font-family:var(--font-mono);font-size:9px;color:var(--text3);letter-spacing:1.5px;text-transform:uppercase;margin-bottom:6px}
+.jn-summary-value{font-family:var(--font-display);font-size:20px;font-weight:700;color:var(--text);line-height:1.2}
+.jn-summary-sub{font-family:var(--font-mono);font-size:10px;color:var(--text3);margin-top:2px}
+
+/* ─── JOURNAL RATIONALE PANEL ─────────────────────── */
+.jn-row-bot{cursor:pointer;transition:background .15s}
+.jn-row-bot:hover{background:var(--bg2)}
+.jn-row-bot td:first-child{position:relative;padding-left:26px}
+.jn-row-bot td:first-child::before{content:'';position:absolute;left:10px;top:50%;transform:translateY(-50%);width:6px;height:6px;border-radius:50%;background:var(--gold)}
+.jn-rationale{display:none;background:var(--panel2);border-bottom:1px solid var(--border)}
+.jn-rationale.open{display:table-row}
+.jn-rationale-inner{padding:20px 24px;display:grid;grid-template-columns:1fr 1fr;gap:20px}
+.jn-rationale-section{display:flex;flex-direction:column;gap:8px}
+.jn-rationale-heading{font-family:var(--font-mono);font-size:9px;color:var(--text3);letter-spacing:1.5px;text-transform:uppercase}
+.jn-nzr-bar{height:8px;border-radius:4px;background:var(--bg3);overflow:hidden;margin-top:4px}
+.jn-nzr-fill{height:100%;border-radius:4px;transition:width .4s}
+.jn-dir-badge{display:inline-flex;align-items:center;gap:4px;font-family:var(--font-mono);font-size:12px;font-weight:700;padding:4px 12px;border-radius:6px}
+.jn-dir-long{background:var(--green-dim);color:var(--green);border:1px solid rgba(26,122,64,.25)}
+.jn-dir-short{background:var(--red-dim);color:var(--red);border:1px solid rgba(192,24,42,.25)}
+.jn-price-ladder{display:flex;flex-direction:column;gap:6px;font-family:var(--font-mono);font-size:12px}
+.jn-price-row{display:flex;justify-content:space-between;align-items:center}
+.jn-price-label{font-size:10px;color:var(--text3);letter-spacing:.5px;text-transform:uppercase}
+.jn-price-val{font-weight:700;color:var(--text)}
+.jn-price-target .jn-price-val{color:var(--green)}
+.jn-price-stop .jn-price-val{color:var(--red)}
+.jn-reason-item{font-size:12px;color:var(--text2);line-height:1.6;padding:4px 0;border-bottom:1px solid var(--border)}
+.jn-reason-item:last-child{border-bottom:none}
+.jn-rr-pill{display:inline-block;font-family:var(--font-mono);font-size:11px;font-weight:700;padding:3px 10px;border-radius:99px;background:var(--gold-dim);color:var(--gold);border:1px solid rgba(200,150,12,.3)}
+.jn-ask-ai-btn{font-family:var(--font-display);font-weight:700;font-size:11px;letter-spacing:.5px;color:var(--cyan);background:var(--cyan-dim);border:1px solid rgba(0,107,143,.25);border-radius:var(--radius);padding:8px 16px;cursor:pointer;transition:all .2s;text-transform:uppercase;margin-top:8px}
+.jn-ask-ai-btn:hover{background:rgba(0,107,143,.15);transform:translateY(-1px)}
+@media(max-width:640px){.jn-rationale-inner{grid-template-columns:1fr}.jn-summary-bar{grid-template-columns:1fr 1fr}}
 </style>
 </head>
 <body>
@@ -1608,6 +1643,7 @@ footer{border-top:1px solid var(--border);padding:32px 0;margin-top:80px}
         <span id="jn-add-error" style="font-size:12px;color:var(--red);display:none"></span>
       </div>
     </div>
+    <div id="jn-bot-summary" class="jn-summary-bar sec-fade" style="display:none;animation-delay:80ms"></div>
     <div class="stat-card sec-fade" style="padding:0;animation-delay:100ms;overflow-x:auto">
       <div id="jn-table-wrap">
         <div style="padding:28px;text-align:center;font-family:var(--font-mono);font-size:11px;color:var(--text3)">Loading…</div>
@@ -3673,6 +3709,187 @@ async function removePosition(id,userId){
 
 /* ── JOURNAL ────────────────────────────────────── */
 
+/* ── Parse bot notes field into structured object ── */
+function parseBotNotes(notes){
+  if(!notes||!notes.startsWith('Bot:'))return null;
+  const p={};
+  const parts=notes.split('|').map(s=>s.trim());
+  parts.forEach(part=>{
+    const kv=part.split('=');
+    if(kv.length<2)return;
+    const key=kv[0].trim().toLowerCase();
+    const val=kv.slice(1).join('=').trim();
+    if(key.includes('nzr'))p.nzr=parseFloat(val)||0;
+    else if(key.includes('dir'))p.direction=val;
+    else if(key.includes('rsi'))p.rsi=val;
+    else if(key.includes('macd'))p.macd=val;
+    else if(key.includes('ema'))p.ema=val;
+    else if(key.includes('stop'))p.stop=val.replace('$','');
+    else if(key.includes('target'))p.target=val.replace('$','');
+    else if(key.includes('qty'))p.qty=val;
+    else if(key.includes('orderid'))p.orderId=val;
+  });
+  // Extract strategy from first segment "Bot: COMBINED"
+  const stratMatch=parts[0].match(/Bot:\s*(\S+)/);
+  if(stratMatch)p.strategy=stratMatch[1];
+  return p;
+}
+
+/* ── Explain indicator in plain English ── */
+function explainIndicator(key,val){
+  if(key==='rsi'){
+    const v=parseFloat(val);
+    if(isNaN(v)||val==='n/a')return null;
+    if(v>=65&&v<=70)return'Strong momentum — approaching overbought, monitor closely';
+    if(v>=50&&v<65)return'Momentum is bullish — price trending up with room to run';
+    if(v>70)return'Overbought — RSI above 70, reversal risk elevated';
+    if(v>=30&&v<50)return'Momentum is bearish — sellers have some control';
+    if(v<30)return'Oversold — RSI below 30, bounce potential';
+    return'Neutral momentum zone';
+  }
+  if(key==='macd'){
+    const v=parseFloat(val);
+    if(isNaN(v)||val==='n/a')return null;
+    if(v>0)return'MACD crossover confirmed — buyers in control';
+    if(v<0)return'MACD negative — sellers currently dominating';
+    return'MACD flat — no clear directional signal';
+  }
+  if(key==='ema'){
+    if(!val||val==='n/a')return null;
+    if(val.toUpperCase()==='BULL')return'Long term trend is up — trading with the trend';
+    if(val.toUpperCase()==='BEAR')return'Long term trend is down — countertrend caution';
+    return null;
+  }
+  return null;
+}
+
+/* ── Build rationale panel HTML for a bot trade ── */
+function buildRationaleHTML(row,parsed,rowId,userId){
+  const entryP=row.entry_price!=null?Number(row.entry_price):0;
+  const stopP=parsed.stop?parseFloat(parsed.stop):0;
+  const targetP=parsed.target?parseFloat(parsed.target):0;
+  const riskAmt=entryP-stopP;
+  const rewardAmt=targetP-entryP;
+  const rr=(riskAmt>0&&rewardAmt>0)?(rewardAmt/riskAmt).toFixed(2):'—';
+  const qty=parsed.qty?parseInt(parsed.qty,10):0;
+  const posSize=qty>0&&entryP>0?'$'+(qty*entryP).toFixed(0):'—';
+  const nzr=parsed.nzr||0;
+  const nzrColor=nzr>80?'var(--green)':nzr>=60?'var(--gold)':'var(--red)';
+  const dir=(parsed.direction||'LONG').toUpperCase();
+  const isLong=dir.includes('LONG');
+
+  // Reasons
+  let reasons='';
+  const rsiExplain=explainIndicator('rsi',parsed.rsi);
+  const macdExplain=explainIndicator('macd',parsed.macd);
+  const emaExplain=explainIndicator('ema',parsed.ema);
+  if(rsiExplain)reasons+=`<div class="jn-reason-item"><strong>RSI ${parsed.rsi}:</strong> ${rsiExplain}</div>`;
+  if(macdExplain)reasons+=`<div class="jn-reason-item"><strong>MACD ${parsed.macd}:</strong> ${macdExplain}</div>`;
+  if(emaExplain)reasons+=`<div class="jn-reason-item"><strong>EMA ${parsed.ema}:</strong> ${emaExplain}</div>`;
+  if(!reasons)reasons='<div class="jn-reason-item" style="color:var(--text3)">No indicator details available</div>';
+
+  const escapedNotes=(row.notes||'').replace(/'/g,"\\'").replace(/"/g,'&quot;');
+
+  return `<tr class="jn-rationale" id="rationale-${rowId}"><td colspan="7">
+    <div class="jn-rationale-inner">
+      <div class="jn-rationale-section">
+        <div class="jn-rationale-heading">Signal Strength</div>
+        <div style="display:flex;align-items:center;gap:10px">
+          <span style="font-family:var(--font-display);font-size:24px;font-weight:800;color:${nzrColor}">${nzr}</span>
+          <div style="flex:1">
+            <div class="jn-nzr-bar"><div class="jn-nzr-fill" style="width:${nzr}%;background:${nzrColor}"></div></div>
+          </div>
+        </div>
+
+        <div class="jn-rationale-heading" style="margin-top:8px">Direction</div>
+        <div>
+          <span class="jn-dir-badge ${isLong?'jn-dir-long':'jn-dir-short'}">${isLong?'&#9650;':'&#9660;'} ${dir}</span>
+        </div>
+
+        <div class="jn-rationale-heading" style="margin-top:8px">Price Ladder</div>
+        <div class="jn-price-ladder">
+          <div class="jn-price-row jn-price-target"><span class="jn-price-label">Target</span><span class="jn-price-val">${targetP>0?'$'+targetP.toFixed(2):'—'}</span></div>
+          <div class="jn-price-row"><span class="jn-price-label">Entry</span><span class="jn-price-val">$${entryP.toFixed(2)}</span></div>
+          <div class="jn-price-row jn-price-stop"><span class="jn-price-label">Stop</span><span class="jn-price-val">${stopP>0?'$'+stopP.toFixed(2):'—'}</span></div>
+        </div>
+        <div style="display:flex;gap:10px;align-items:center;margin-top:4px">
+          <span class="jn-rr-pill">R:R ${rr}</span>
+          <span style="font-family:var(--font-mono);font-size:11px;color:var(--text3)">Size: ${posSize} (${qty} shares)</span>
+        </div>
+      </div>
+
+      <div class="jn-rationale-section">
+        <div class="jn-rationale-heading">Why It Traded</div>
+        ${reasons}
+        <button class="jn-ask-ai-btn" onclick="askAiAboutTrade('${escapedNotes}')">Ask AI About This Trade</button>
+      </div>
+    </div>
+  </td></tr>`;
+}
+
+/* ── Send trade to AI Chat for explanation ── */
+function askAiAboutTrade(notes){
+  const chatInput=document.getElementById('chat-input');
+  if(!chatInput)return;
+  showPage('aichat');
+  chatInput.value='Explain this bot trade in simple terms and tell me if it was a good setup: '+notes;
+  chatInput.focus();
+  // Auto-send
+  setTimeout(()=>{const btn=document.getElementById('chat-send');if(btn)btn.click();},150);
+}
+
+/* ── Build bot summary bar ── */
+function renderBotSummary(data){
+  const bar=document.getElementById('jn-bot-summary');
+  if(!bar)return;
+  const now=new Date();
+  const monthStr=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0');
+  const botTrades=data.filter(r=>r.notes&&r.notes.startsWith('Bot:')&&r.trade_date&&r.trade_date.startsWith(monthStr));
+  if(botTrades.length===0){bar.style.display='none';return;}
+
+  const closed=botTrades.filter(r=>r.pnl_pct!=null);
+  const wins=closed.filter(r=>Number(r.pnl_pct)>0);
+  const winRate=closed.length>0?((wins.length/closed.length)*100).toFixed(0):'-';
+  let totalPnlPct=0;let totalPnlDollars=0;let bestPnl=-Infinity;let worstPnl=Infinity;let bestSym='—';let worstSym='—';
+  closed.forEach(r=>{
+    const p=Number(r.pnl_pct);
+    totalPnlPct+=p;
+    const entry=Number(r.entry_price)||0;
+    const qty=r.notes?(r.notes.match(/Qty=(\d+)/)||[])[1]:null;
+    if(qty&&entry)totalPnlDollars+=(p/100)*entry*parseInt(qty,10);
+    if(p>bestPnl){bestPnl=p;bestSym=r.symbol;}
+    if(p<worstPnl){worstPnl=p;worstSym=r.symbol;}
+  });
+
+  const pnlColor=totalPnlPct>=0?'var(--green)':'var(--red)';
+  bar.style.display='grid';
+  bar.innerHTML=`
+    <div class="jn-summary-stat">
+      <div class="jn-summary-label">Bot Trades</div>
+      <div class="jn-summary-value">${botTrades.length}</div>
+      <div class="jn-summary-sub">this month · ${closed.length} closed</div>
+    </div>
+    <div class="jn-summary-stat">
+      <div class="jn-summary-label">Win Rate</div>
+      <div class="jn-summary-value" style="color:${Number(winRate)>=50?'var(--green)':'var(--red)'}">${winRate}%</div>
+      <div class="jn-summary-sub">${wins.length}W / ${closed.length-wins.length}L</div>
+    </div>
+    <div class="jn-summary-stat">
+      <div class="jn-summary-label">Total P&amp;L</div>
+      <div class="jn-summary-value" style="color:${pnlColor}">${totalPnlPct>=0?'+':''}${totalPnlPct.toFixed(2)}%</div>
+      <div class="jn-summary-sub" style="color:${pnlColor}">${totalPnlDollars>=0?'+$':'−$'}${Math.abs(totalPnlDollars).toFixed(0)}</div>
+    </div>
+    <div class="jn-summary-stat">
+      <div class="jn-summary-label">Best / Worst</div>
+      <div class="jn-summary-value" style="font-size:14px">
+        <span style="color:var(--green)">${bestSym} +${bestPnl!=-Infinity?bestPnl.toFixed(1):'—'}%</span>
+      </div>
+      <div class="jn-summary-sub">
+        <span style="color:var(--red)">${worstSym} ${worstPnl!=Infinity?worstPnl.toFixed(1):'—'}%</span>
+      </div>
+    </div>`;
+}
+
 async function loadJournal(userId){
   const wrap=document.getElementById('jn-table-wrap');
   if(!wrap||!supabaseClient)return;
@@ -3683,8 +3900,13 @@ async function loadJournal(userId){
     if(error)throw error;
     if(!data||data.length===0){
       wrap.innerHTML='<div style="padding:28px;text-align:center;font-family:var(--font-mono);font-size:11px;color:var(--text3)">No trades logged yet</div>';
+      document.getElementById('jn-bot-summary')&&(document.getElementById('jn-bot-summary').style.display='none');
       return;
     }
+
+    renderBotSummary(data);
+
+    let rowIdx=0;
     wrap.innerHTML=`<table style="width:100%;border-collapse:collapse;font-family:var(--font-mono);font-size:12px">
       <thead><tr style="border-bottom:1px solid var(--border)">
         <th style="padding:10px 16px;text-align:left;color:var(--text3);font-weight:500;font-size:10px;text-transform:uppercase">Date</th>
@@ -3699,7 +3921,12 @@ async function loadJournal(userId){
         const pnl=row.pnl_pct!=null?Number(row.pnl_pct):null;
         const pnlColor=pnl==null?'var(--text3)':pnl>=0?'var(--green)':'var(--red)';
         const pnlStr=pnl==null?'—':(pnl>=0?'+':'')+pnl.toFixed(2)+'%';
-        return`<tr style="border-bottom:1px solid var(--border)">
+        const isBot=row.notes&&row.notes.startsWith('Bot:');
+        const rid='jnr-'+(rowIdx++);
+        const parsed=isBot?parseBotNotes(row.notes):null;
+        const botClass=isBot?'jn-row-bot':'';
+        const clickAttr=isBot?`onclick="toggleRationale('${rid}')"`:''
+        let html=`<tr class="${botClass}" ${clickAttr} style="border-bottom:1px solid var(--border)">
           <td style="padding:11px 16px;color:var(--text3);font-size:11px;white-space:nowrap">${row.trade_date||'—'}</td>
           <td style="padding:11px 16px;font-weight:700;color:var(--text)">${row.symbol}</td>
           <td style="padding:11px 16px;text-align:right;color:var(--text2)">${row.entry_price!=null?'$'+Number(row.entry_price).toFixed(2):'—'}</td>
@@ -3707,15 +3934,26 @@ async function loadJournal(userId){
           <td style="padding:11px 16px;text-align:right;font-weight:600;color:${pnlColor}">${pnlStr}</td>
           <td style="padding:11px 16px;color:var(--text3);font-size:11px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${row.notes||''}</td>
           <td style="padding:11px 16px;text-align:right">
-            <button onclick="removeJournalEntry('${row.id}','${userId}')"
+            <button onclick="event.stopPropagation();removeJournalEntry('${row.id}','${userId}')"
               style="font-size:11px;padding:3px 10px;background:var(--red-dim);color:var(--red);border:1px solid rgba(255,68,102,.25);border-radius:4px;cursor:pointer">Delete</button>
           </td>
         </tr>`;
+        if(isBot&&parsed){
+          html+=buildRationaleHTML(row,parsed,rid,userId);
+        }
+        return html;
       }).join('')}</tbody>
     </table>`;
   }catch(err){
     wrap.innerHTML=`<div style="padding:20px;text-align:center;font-size:12px;color:var(--red)">Error loading journal: ${err.message}</div>`;
   }
+}
+
+/* ── Toggle rationale panel visibility ── */
+function toggleRationale(rid){
+  const el=document.getElementById('rationale-'+rid);
+  if(!el)return;
+  el.classList.toggle('open');
 }
 
 async function addJournalEntry(){
