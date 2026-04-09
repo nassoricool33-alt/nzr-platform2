@@ -17,7 +17,9 @@
  */
 
 const { createClient } = require('@supabase/supabase-js');
-const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
+const supabase = (process.env.SUPABASE_URL && process.env.SUPABASE_ANON_KEY)
+  ? createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY)
+  : null;
 
 const ALLOWED_ORIGINS = ['https://nzr-platform2.vercel.app', 'http://localhost:3000'];
 
@@ -3013,6 +3015,7 @@ function recommendDirection(ind) {
  * with exit_price and pnl_pct.  Called at the start of every cron scan cycle.
  */
 async function updateClosedTrades() {
+  if (!supabase) { pushLog('JOURNAL_UPDATE_SKIP: Supabase not configured', 'warn'); return; }
   try {
     const sb = supabase;
     const today = new Date().toISOString().split('T')[0];
@@ -3291,14 +3294,18 @@ async function executeSignal(signal, newsContext = null) {
 
       pushLog('JOURNAL_ATTEMPT: writing trade for ' + signal.symbol, 'info');
 
-      const { data: journalData, error: journalError } = await supabase
-        .from('journal')
-        .insert(journalEntry);
-
-      if (journalError) {
-        pushLog('JOURNAL_ERROR: ' + JSON.stringify(journalError), 'warn');
+      if (!supabase) {
+        pushLog('JOURNAL_SKIP: Supabase not configured', 'warn');
       } else {
-        pushLog('JOURNAL_SUCCESS: ' + signal.symbol + ' trade logged', 'pass');
+        const { data: journalData, error: journalError } = await supabase
+          .from('journal')
+          .insert(journalEntry);
+
+        if (journalError) {
+          pushLog('JOURNAL_ERROR: ' + JSON.stringify(journalError), 'warn');
+        } else {
+          pushLog('JOURNAL_SUCCESS: ' + signal.symbol + ' trade logged', 'pass');
+        }
       }
 
       return { executed: true, orderId, qty };
@@ -3551,6 +3558,7 @@ async function runPreMarketGapProtection() {
 // ─── MAIN HANDLER ────────────────────────────────────────────────────────────
 
 module.exports = async function handler(req, res) {
+  console.log('[BOT] File loaded successfully');
   console.log('[BOT] Handler called, method=' + req.method + ' type=' + (req.query?.type || 'none') + ' action=' + (req.query?.action || 'none'));
   const SCAN_START_TIME = Date.now(); // soft timeout sentinel — checked inside scan loop
 
@@ -3571,6 +3579,7 @@ module.exports = async function handler(req, res) {
 
   // ── TEST JOURNAL INSERT ─────────────────────────────────────────────────────
   if (type === 'testjournal') {
+    if (!supabase) return res.json({ data: null, error: { message: 'Supabase not configured — check SUPABASE_URL and SUPABASE_ANON_KEY env vars' } });
     const { data, error } = await supabase.from('journal').insert({
       symbol: 'TEST',
       entry_price: 100,
