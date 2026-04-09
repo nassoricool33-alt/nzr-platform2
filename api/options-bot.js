@@ -99,8 +99,34 @@ async function scoreOptionsSignal(symbol) {
     if (macdHist < 0) techScore -= 15;
     techScore = Math.max(0, Math.min(100, techScore));
 
-    const finalScore = Math.round((aiScore * 0.5) + (techScore * 0.3) + (Math.min(100, callPutRatio * 100) * 0.2));
-    const ivCrushRisk = avgIV > 0.8;
+    // Legislative sector bonus
+    const SECTOR_BONUS = {
+      'NVDA': 15, 'AMD': 10, 'MSFT': 10, 'GOOGL': 10, 'ARM': 12, 'PLTR': 15,
+      'COIN': 12, 'MSTR': 10,
+      'SPY': 5, 'QQQ': 5,
+      'META': 8, 'AMZN': 8, 'AAPL': 5
+    };
+    const sectorBonus = SECTOR_BONUS[symbol] || 0;
+
+    // Unusual options volume bonus
+    const volumeBonus = callVolume > 10000 ? 10 : callVolume > 5000 ? 5 : 0;
+
+    // Momentum bonus
+    const momentumBonus = (rsi > 55 && macdHist > 0) ? 15 : (rsi > 50 && macdHist > 0) ? 8 : 0;
+
+    // News catalyst / AI confidence bonus
+    const confidenceBonus = aiConfidence === 'high' ? 15 : aiConfidence === 'medium' ? 5 : 0;
+
+    const finalScore = Math.min(100, Math.round(
+      (aiScore * 0.35) +
+      (techScore * 0.25) +
+      (Math.min(100, callPutRatio * 100) * 0.15) +
+      sectorBonus +
+      volumeBonus +
+      momentumBonus +
+      confidenceBonus
+    ));
+    const ivCrushRisk = avgIV > 1.2;
     const recommendation = finalScore >= 80 ? 'strong_buy' : finalScore >= 65 ? 'buy' : finalScore >= 50 ? 'watch' : 'skip';
 
     pushLog(symbol + ' score=' + finalScore + ' dir=' + aiDirection + ' ' + aiCatalyst, finalScore >= 65 ? 'pass' : 'info');
@@ -189,15 +215,15 @@ async function executeOptionsOrder(contract, signal, capitalAmount) {
 
 async function getPelosiIntelligence() {
   try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 25000);
     const res = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
+      signal: controller.signal,
       headers: { 'Content-Type': 'application/json', 'x-api-key': process.env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-6',
-        max_tokens: 1000,
-        messages: [{ role: 'user', content: 'You are a political intelligence analyst for options trading. Based on current US legislative activity, government spending trends, Federal Reserve policy, geopolitical developments, and macro trends as of April 2026, which sectors and stocks are most likely to benefit in the next 30-90 days? Consider AI infrastructure, defense budgets, crypto regulation, financial deregulation, semiconductor supply chains, energy policy. Return ONLY valid JSON: { "topSectors": [{"sector": "string", "thesis": "string", "timeframe": "string", "direction": "bullish or bearish"}], "topStocks": [{"symbol": "string", "thesis": "string", "optionPlay": "string", "timeframe": "string", "confidence": "high or medium"}], "keyThemes": ["string"], "riskFactors": ["string"], "summary": "string" }' }]
-      })
+      body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 1000, messages: [{ role: 'user', content: 'You are a political intelligence analyst for options trading. Based on current US legislative activity, government spending, Federal Reserve policy, and geopolitical trends as of April 2026, which sectors and stocks will benefit most in the next 30-90 days? Return ONLY valid JSON: { "topSectors": [{"sector": "string", "thesis": "string", "direction": "bullish or bearish"}], "topStocks": [{"symbol": "string", "thesis": "string", "optionPlay": "string", "confidence": "high or medium"}], "keyThemes": ["string"], "summary": "string" }' }] })
     });
+    clearTimeout(timeout);
     const data = await res.json();
     const text = data?.content?.[0]?.text || '{}';
     return JSON.parse(text.replace(/```json|```/g, '').trim());
