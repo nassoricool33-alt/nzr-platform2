@@ -21,6 +21,28 @@ const OPTIONS_UNIVERSE = [
   'SPY','QQQ','PLTR','COIN','ARM','JPM','MSTR','NFLX'
 ];
 
+const INVERSE_ETF_MAP = {
+  'SPY': 'SH',
+  'QQQ': 'PSQ',
+  'AAPL': null,
+  'MSFT': null,
+  'NVDA': null,
+  'AMD': null,
+  'META': null,
+  'AMZN': null,
+  'GOOGL': null,
+  'TSLA': null,
+  'PLTR': null,
+  'COIN': null,
+  'ARM': null,
+  'JPM': null,
+  'MSTR': null,
+  'NFLX': null
+};
+
+let lastSignals = [];
+let ordersPlacedToday = { date: '', count: 0 };
+
 async function fetchWithTimeout(url, options = {}, timeoutMs = 4000) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -265,16 +287,132 @@ async function getPelosiIntelligence() {
   }
 }
 
+async function placeEquityFallback(signal, capitalAmount) {
+  try {
+    let buySymbol = null;
+    let logPrefix = '';
+
+    if (signal.direction === 'calls') {
+      buySymbol = signal.symbol;
+      logPrefix = 'EQUITY_FALLBACK_CALLS';
+    } else if (signal.direction === 'puts') {
+      const inverse = INVERSE_ETF_MAP[signal.symbol];
+      if (inverse) {
+        buySymbol = inverse;
+        logPrefix = 'EQUITY_FALLBACK_INVERSE';
+      } else {
+        pushLog('PUTS_NO_PROXY: ' + signal.symbol, 'warn');
+        return null;
+      }
+    } else {
+      pushLog('EQUITY_FALLBACK_UNKNOWN_DIR: ' + signal.direction + ' for ' + signal.symbol, 'warn');
+      return null;
+    }
+
+    pushLog(logPrefix + ': placing equity order for ' + buySymbol + ' (signal=' + signal.symbol + ' dir=' + signal.direction + ')', 'info');
+
+    const fbPriceData = await fetchWithTimeout('https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers/' + buySymbol + '?apiKey=' + process.env.POLYGON_API_KEY);
+    const price = fbPriceData?.ticker?.day?.c || fbPriceData?.ticker?.lastTrade?.p || null;
+
+    if (!price) {
+      pushLog('EQUITY_FALLBACK_NO_PRICE: ' + buySymbol, 'warn');
+      return null;
+    }
+
+    if (process.env.BOT_LIVE_TRADING !== 'true') {
+      pushLog('PAPER_MODE: equity fallback logged — ' + buySymbol + ' @ $' + price, 'info');
+      return null;
+    }
+
+    const positionSize = Math.max(500, capitalAmount * 0.05);
+    const qty = Math.max(1, Math.floor(positionSize / price));
+
+    const fbOrderRes = await fetch('https://paper-api.alpaca.markets/v2/orders', {
+      method: 'POST',
+      headers: { 'APCA-API-KEY-ID': process.env.ALPACA_API_KEY, 'APCA-API-SECRET-KEY': process.env.ALPACA_SECRET_KEY, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        symbol: buySymbol,
+        qty: String(qty),
+        side: 'buy',
+        type: 'market',
+        time_in_force: 'day',
+        client_order_id: 'NZR-OPTIONS-EQ-' + buySymbol + '-' + Date.now()
+      })
+    });
+    const fbOrderData = await fbOrderRes.json();
+
+    if (fbOrderRes.ok) {
+      pushLog(logPrefix + '_PLACED: ' + buySymbol + ' buy ' + qty + ' shares @ $' + price, 'pass');
+      try {
+        if (supabase) {
+          await supabase.from('journal').insert({
+            symbol: buySymbol,
+            entry_price: parseFloat(price) || 0,
+            trade_date: new Date().toISOString().split('T')[0],
+            notes: 'Options Bot Fallback: ' + signal.catalyst + ' | Score=' + signal.optionsScore + ' | OriginalSignal=' + signal.symbol + ' | Dir=' + signal.direction
+          });
+        }
+      } catch(je) {
+        pushLog('JOURNAL_SKIP: ' + je.message, 'info');
+      }
+      return fbOrderData;
+    } else {
+      pushLog(logPrefix + '_REJECTED: ' + buySymbol + ' — ' + JSON.stringify(fbOrderData), 'warn');
+      return null;
+    }
+  } catch(e) {
+    pushLog('EQUITY_FALLBACK_ERROR: ' + e.message, 'warn');
+    return null;
+  }
+}
+
 module.exports = async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   if (req.method === 'OPTIONS') return res.status(200).end();
 
-  const type = req.query.type || 'status';
+  let type = req.query.type || 'status';
   console.log('[OPTIONS-BOT] type=' + type);
 
   try {
-    if (type === 'status') return res.json({ status: 'active', universe: OPTIONS_UNIVERSE.length });
+    // Cron support — treat as scan
+    if (type === 'cron') {
+      pushLog('CRON_TRIGGERED: options scan starting', 'info');
+      type = 'scan';
+    }
+
+    if (type === 'status') {
+      const nowET = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+      const etHour = nowET.getHours();
+      const etMinute = nowET.getMinutes();
+      const etDay = nowET.getDay();
+      const etTime = etHour + etMinute / 60;
+      const isMarketOpen = etDay >= 1 && etDay <= 5 && etTime >= 9.5 && etTime < 15.75;
+
+      // Calculate next scan: cron-job.org runs every 15 minutes during market hours
+      let nextScanIn = 15;
+      if (!isMarketOpen) {
+        if (etDay >= 1 && etDay <= 5 && etTime < 9.5) {
+          nextScanIn = Math.ceil((9.5 - etTime) * 60);
+        } else {
+          nextScanIn = -1; // market closed for the day
+        }
+      }
+
+      const today = new Date().toISOString().split('T')[0];
+      const todayOrders = ordersPlacedToday.date === today ? ordersPlacedToday.count : 0;
+      const topSignals = lastSignals.filter(s => s.optionsScore >= 75).slice(0, 5);
+
+      return res.json({
+        status: 'active',
+        universe: OPTIONS_UNIVERSE.length,
+        isMarketOpen,
+        currentETTime: etHour + ':' + String(etMinute).padStart(2, '0') + ' ET',
+        topSignals,
+        ordersToday: todayOrders,
+        nextScanIn
+      });
+    }
 
     if (type === 'log') {
       const since = req.query.since;
@@ -300,16 +438,13 @@ module.exports = async function handler(req, res) {
     if (type === 'scan') {
       const startTime = Date.now();
       const nowET = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
-      const etHour = nowET.getHours(), etMinute = nowET.getMinutes(), etDay = nowET.getDay();
+      const etHour = nowET.getHours();
+      const etMinute = nowET.getMinutes();
+      const etDay = nowET.getDay();
       const etTime = etHour + etMinute / 60;
       const isMarketOpen = etDay >= 1 && etDay <= 5 && etTime >= 9.5 && etTime < 15.75;
 
-      if (!isMarketOpen) {
-        pushLog('MARKET_CLOSED: ' + etHour + ':' + String(etMinute).padStart(2,'0') + ' ET', 'info');
-        return res.json({ success: true, message: 'Market closed', symbolsScanned: 0, signalsFound: 0, ordersPlaced: 0 });
-      }
-
-      pushLog('OPTIONS_SCAN_START: ' + OPTIONS_UNIVERSE.length + ' symbols', 'info');
+      pushLog('OPTIONS_SCAN_START: ' + OPTIONS_UNIVERSE.length + ' symbols | marketOpen=' + isMarketOpen, 'info');
 
       let capitalAmount = 10000;
       if (supabase) {
@@ -333,52 +468,79 @@ module.exports = async function handler(req, res) {
 
           if (signal.optionsScore >= 75 && !signal.ivCrushRisk && (signal.recommendation === 'strong_buy' || signal.recommendation === 'buy')) {
             signalsFound++;
+
+            // Pre-market mode: score but don't place orders
+            if (!isMarketOpen) continue;
+
             const priceData = await fetchWithTimeout('https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers/' + signal.symbol + '?apiKey=' + process.env.POLYGON_API_KEY);
             const currentPrice = priceData?.ticker?.day?.c || priceData?.ticker?.lastTrade?.p || 100;
             const contract = await selectOptionsContract(signal.symbol, signal.direction, signal.daysToPlay, currentPrice);
             if (contract) {
               const order = await executeOptionsOrder(contract, signal, capitalAmount);
               if (order) ordersPlaced++;
-            } else if (signal.direction === 'puts') {
-              pushLog('PUTS_SKIP: no options contract available and cannot short — skipping ' + signal.symbol, 'warn');
             } else {
-              pushLog('NO_CONTRACT_FALLBACK: placing equity order for ' + signal.symbol + ' instead', 'warn');
-
-              const fbPriceData = await fetchWithTimeout('https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers/' + signal.symbol + '?apiKey=' + process.env.POLYGON_API_KEY);
-              const fbPrice = fbPriceData?.ticker?.day?.c || fbPriceData?.ticker?.lastTrade?.p || null;
-
-              if (fbPrice && process.env.BOT_LIVE_TRADING === 'true') {
-                const positionSize = capitalAmount * 0.05;
-                const qty = Math.max(1, Math.floor(positionSize / fbPrice));
-
-                const fbOrderRes = await fetch('https://paper-api.alpaca.markets/v2/orders', {
-                  method: 'POST',
-                  headers: { 'APCA-API-KEY-ID': process.env.ALPACA_API_KEY, 'APCA-API-SECRET-KEY': process.env.ALPACA_SECRET_KEY, 'Content-Type': 'application/json' },
-                  body: JSON.stringify({
-                    symbol: signal.symbol,
-                    qty: String(qty),
-                    side: 'buy',
-                    type: 'market',
-                    time_in_force: 'day',
-                    client_order_id: 'NZR-OPTIONS-EQ-' + signal.symbol + '-' + Date.now()
-                  })
-                });
-                const fbOrderData = await fbOrderRes.json();
-                if (fbOrderRes.ok) {
-                  ordersPlaced++;
-                  pushLog('EQUITY_FALLBACK_PLACED: ' + signal.symbol + ' buy ' + qty + ' shares @ $' + fbPrice, 'pass');
-                } else {
-                  pushLog('EQUITY_FALLBACK_REJECTED: ' + signal.symbol + ' — ' + JSON.stringify(fbOrderData), 'warn');
-                }
-              }
+              // Equity fallback for both calls and puts
+              const fbOrder = await placeEquityFallback(signal, capitalAmount);
+              if (fbOrder) ordersPlaced++;
             }
           }
         }
       }
 
+      // Cache signals for status endpoint and pre-market use
+      lastSignals = results;
+
+      // Track daily order count
+      const today = new Date().toISOString().split('T')[0];
+      if (ordersPlacedToday.date !== today) {
+        ordersPlacedToday = { date: today, count: ordersPlaced };
+      } else {
+        ordersPlacedToday.count += ordersPlaced;
+      }
+
+      // Pre-market: cache top signals to Supabase for market-open firing
+      if (!isMarketOpen && signalsFound > 0 && supabase) {
+        try {
+          const topSignals = results.filter(s => s.optionsScore >= 75 && !s.ivCrushRisk && (s.recommendation === 'strong_buy' || s.recommendation === 'buy'));
+          await supabase.from('bot_state').upsert({ key: 'options_premarket_signals', value: JSON.stringify(topSignals) });
+          pushLog('PREMARKET_CACHED: ' + topSignals.length + ' signals saved for market open', 'info');
+        } catch(e) {
+          pushLog('PREMARKET_CACHE_ERROR: ' + e.message, 'warn');
+        }
+      }
+
+      // Market open: check for cached pre-market signals to fire
+      if (isMarketOpen && supabase && ordersPlaced === 0) {
+        try {
+          const { data } = await supabase.from('bot_state').select('value').eq('key', 'options_premarket_signals').single();
+          if (data && data.value) {
+            const cached = JSON.parse(data.value);
+            if (Array.isArray(cached) && cached.length > 0) {
+              pushLog('PREMARKET_FIRE: executing ' + cached.length + ' cached signals', 'info');
+              for (const signal of cached) {
+                const priceData = await fetchWithTimeout('https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers/' + signal.symbol + '?apiKey=' + process.env.POLYGON_API_KEY);
+                const currentPrice = priceData?.ticker?.day?.c || priceData?.ticker?.lastTrade?.p || 100;
+                const contract = await selectOptionsContract(signal.symbol, signal.direction, signal.daysToPlay, currentPrice);
+                if (contract) {
+                  const order = await executeOptionsOrder(contract, signal, capitalAmount);
+                  if (order) ordersPlaced++;
+                } else {
+                  const fbOrder = await placeEquityFallback(signal, capitalAmount);
+                  if (fbOrder) ordersPlaced++;
+                }
+              }
+              // Clear cached signals after firing
+              await supabase.from('bot_state').upsert({ key: 'options_premarket_signals', value: '[]' });
+            }
+          }
+        } catch(e) {
+          pushLog('PREMARKET_FIRE_ERROR: ' + e.message, 'warn');
+        }
+      }
+
       const duration = Date.now() - startTime;
       pushLog('OPTIONS_SCAN_DONE: ' + symbolsScanned + ' scanned, ' + signalsFound + ' signals, ' + ordersPlaced + ' orders, ' + duration + 'ms', 'info');
-      return res.json({ success: true, symbolsScanned, signalsFound, ordersPlaced, duration: duration + 'ms', results });
+      return res.json({ success: true, isMarketOpen, symbolsScanned, signalsFound, ordersPlaced, duration: duration + 'ms', results });
     }
 
     return res.json({ error: 'unknown type: ' + type });
