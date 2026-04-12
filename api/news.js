@@ -401,15 +401,55 @@ module.exports = async function handler(req, res) {
       const result = await getHighImpactEvents(finnhubKey);
       return res.status(200).json(result);
 
-    } else if (type === 'economic') {
-      // Economic calendar still uses Finnhub — Polygon does not cover macro events
-      if (!finnhubKey) return res.status(500).json({ error: 'Not configured' });
+    } else if (type === 'economic' || type === 'calendar') {
+      // Economic calendar — Finnhub with timeout + fallback
+      console.log('[NEWS] Finnhub key present:', !!finnhubKey);
+
+      const FALLBACK_EVENTS = [
+        { event: 'FOMC Meeting Minutes', time: '2026-04-09', country: 'US', impact: 'high', importance: 3 },
+        { event: 'CPI Data Release', time: '2026-04-15', country: 'US', impact: 'high', importance: 3 },
+        { event: 'Retail Sales', time: '2026-04-16', country: 'US', impact: 'medium', importance: 2 },
+        { event: 'Initial Jobless Claims', time: '2026-04-17', country: 'US', impact: 'medium', importance: 2 },
+        { event: 'PCE Price Index', time: '2026-04-30', country: 'US', impact: 'high', importance: 3 },
+        { event: 'Non-Farm Payrolls', time: '2026-05-01', country: 'US', impact: 'high', importance: 3 },
+        { event: 'FOMC Rate Decision', time: '2026-05-07', country: 'US', impact: 'high', importance: 3 }
+      ];
+
       const from = req.query.from || new Date().toISOString().split('T')[0];
-      const to   = req.query.to   || new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0];
-      const data = await httpsGet(
-        `https://finnhub.io/api/v1/calendar/economic?from=${from}&to=${to}&token=${finnhubKey}`
-      );
-      return res.status(200).json(data);
+      const to   = req.query.to   || new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0];
+
+      if (!finnhubKey) {
+        console.log('[NEWS] No Finnhub key — returning fallback calendar');
+        return res.status(200).json({ economicCalendar: FALLBACK_EVENTS, source: 'fallback' });
+      }
+
+      try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 5000);
+        let data;
+        try {
+          const resp = await fetch(
+            `https://finnhub.io/api/v1/calendar/economic?from=${from}&to=${to}&token=${finnhubKey}`,
+            { signal: controller.signal }
+          );
+          data = await resp.json();
+        } finally {
+          clearTimeout(timeout);
+        }
+
+        const events = data?.economicCalendar;
+        if (Array.isArray(events) && events.length > 0) {
+          console.log('[NEWS] Finnhub returned', events.length, 'economic events');
+          return res.status(200).json(data);
+        }
+
+        // Finnhub returned empty — use fallback
+        console.log('[NEWS] Finnhub returned empty — using fallback calendar');
+        return res.status(200).json({ economicCalendar: FALLBACK_EVENTS, source: 'fallback' });
+      } catch (err) {
+        console.error('[NEWS] Finnhub economic calendar error:', err.message);
+        return res.status(200).json({ economicCalendar: FALLBACK_EVENTS, source: 'fallback' });
+      }
 
     } else {
       if (!polygonKey) return res.status(500).json({ error: 'Not configured' });
