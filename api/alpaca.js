@@ -207,47 +207,38 @@ module.exports = async function handler(req, res) {
 
       // Race entire attribution work against 8 s hard timeout
       const attributionWork = (async () => {
-        const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
-
-        // Fetch both closed and all orders (to catch filled), 6s timeout each
+        // Fetch ALL orders — no client_order_id filter
         let orders = [];
         try {
-          const [closedRaw, allRaw] = await Promise.all([
-            Promise.race([
-              alpacaFetch(`/v2/orders?status=closed&limit=100&after=${encodeURIComponent(thirtyDaysAgo)}`),
-              new Promise((_, reject) => setTimeout(() => reject(new Error('closed_timeout')), 6000)),
-            ]).catch(() => []),
-            Promise.race([
-              alpacaFetch(`/v2/orders?status=all&limit=100&after=${encodeURIComponent(thirtyDaysAgo)}`),
-              new Promise((_, reject) => setTimeout(() => reject(new Error('all_timeout')), 6000)),
-            ]).catch(() => []),
+          const raw = await Promise.race([
+            alpacaFetch('/v2/orders?status=all&limit=500&direction=desc'),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('orders_timeout')), 6000)),
           ]);
-          const closedOrders = Array.isArray(closedRaw) ? closedRaw : [];
-          const allOrders = Array.isArray(allRaw) ? allRaw : [];
-          // Merge and deduplicate by order id
-          const seen = new Set();
-          for (const o of [...closedOrders, ...allOrders]) {
-            if (o && o.id && !seen.has(o.id)) {
-              seen.add(o.id);
-              orders.push(o);
-            }
-          }
+          orders = Array.isArray(raw) ? raw : [];
         } catch {
           return { ...ATTRIBUTION_EMPTY };
         }
 
-        // Keep only NZR-tagged orders with fills
-        const nzr = orders.filter(o =>
-          o.client_order_id?.startsWith('NZR-') && parseFloat(o.filled_qty || 0) > 0
+        // Keep ALL filled orders — no NZR- tag requirement
+        const filled = orders.filter(o =>
+          o.status === 'filled' && parseFloat(o.filled_qty || 0) > 0 && parseFloat(o.filled_avg_price || 0) > 0
         );
-        console.log('[ATTRIBUTION] Found', orders.length, 'total orders,', nzr.length, 'NZR-tagged');
+        console.log('[ATTRIBUTION] Found', orders.length, 'total orders,', filled.length, 'filled');
 
-        // Parse tag: NZR-{MODE}-{STRATEGY}-{SIGNAL}-{SYMBOL}-{TS}  (new, 6 parts)
-        //            NZR-{mode}-{symbol}-{ts}                       (old, 4 parts)
+        // Parse NZR tag if present for strategy/signal metadata
+        // Formats:  NZR-{MODE}-{STRATEGY}-{SYMBOL}-{TS}  (5 parts, bot.js)
+        //           NZR-{MODE}-{STRATEGY}-{SIGNAL}-{SYMBOL}-{TS}  (6 parts)
+        //           NZR-OPTIONS-EQ-{SYMBOL}-{TS}  (options-bot)
+        //           NZR-PHARMA-{SYMBOL}-{TS}  (pharma)
+        //           no tag / other
         function parseTag(cid) {
+          if (!cid) return { mode: 'MANUAL', strategy: 'MANUAL', signal: 'MANUAL' };
           const p = cid.split('-');
+          if (p[0] !== 'NZR') return { mode: 'MANUAL', strategy: 'MANUAL', signal: 'MANUAL' };
           if (p.length >= 6) return { mode: p[1], strategy: p[2], signal: p[3] };
-          return { mode: (p[1] || 'UNKNOWN').toUpperCase(), strategy: 'UNKNOWN', signal: 'UNKNOWN' };
+          if (p.length >= 5) return { mode: p[1], strategy: p[2], signal: p[2] };
+          if (p.length >= 4) return { mode: p[1], strategy: p[1], signal: p[1] };
+          return { mode: p[1] || 'NZR', strategy: 'NZR', signal: 'NZR' };
         }
 
         // DST-aware ET minute-of-day
@@ -273,7 +264,7 @@ module.exports = async function handler(req, res) {
 
         const DOW = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
 
-        const tagged = nzr.map(o => ({
+        const tagged = filled.map(o => ({
           ...parseTag(o.client_order_id),
           orderId:     o.id,
           symbol:      o.symbol,
@@ -289,27 +280,33 @@ module.exports = async function handler(req, res) {
 
         const trades = [];
         const matchedBuyIds = new Set();
+        const matchedSellIds = new Set();
 
-        // Match sell orders to their corresponding buy orders
+        // Match sell orders to their most recent preceding buy for the same symbol
         for (const sell of sells) {
           const buy = buys
-            .filter(b => b.symbol === sell.symbol && b.submittedAt <= sell.submittedAt)
+            .filter(b => b.symbol === sell.symbol && b.submittedAt <= sell.submittedAt && !matchedBuyIds.has(b.orderId))
             .sort((a, b) => b.submittedAt.localeCompare(a.submittedAt))[0];
           if (!buy) continue;
 
           matchedBuyIds.add(buy.orderId);
+          matchedSellIds.add(sell.orderId);
           const pnl    = (sell.fillPrice - buy.fillPrice) * Math.min(sell.qty, buy.qty);
-          const pnlPct = ((sell.fillPrice - buy.fillPrice) / buy.fillPrice) * 100;
+          const pnlPct = buy.fillPrice > 0 ? ((sell.fillPrice - buy.fillPrice) / buy.fillPrice) * 100 : 0;
           trades.push({
             symbol:   sell.symbol,
+            buyPrice: buy.fillPrice,
+            sellPrice: sell.fillPrice,
+            qty:      Math.min(sell.qty, buy.qty),
             pnl:      parseFloat(pnl.toFixed(2)),
             pnlPct:   parseFloat(pnlPct.toFixed(2)),
             win:      pnl > 0,
-            mode:     sell.mode     !== 'UNKNOWN' ? sell.mode     : buy.mode,
-            strategy: sell.strategy !== 'UNKNOWN' ? sell.strategy : buy.strategy,
-            signal:   sell.signal   !== 'UNKNOWN' ? sell.signal   : buy.signal,
+            mode:     sell.mode     !== 'MANUAL' ? sell.mode     : buy.mode,
+            strategy: sell.strategy !== 'MANUAL' ? sell.strategy : buy.strategy,
+            signal:   sell.signal   !== 'MANUAL' ? sell.signal   : buy.signal,
             session:  sessionLabel(sell.filledAt),
             dow:      DOW[new Date(sell.filledAt).getUTCDay()],
+            status:   'closed',
           });
         }
 
@@ -318,6 +315,9 @@ module.exports = async function handler(req, res) {
           if (matchedBuyIds.has(buy.orderId)) continue;
           trades.push({
             symbol:   buy.symbol,
+            buyPrice: buy.fillPrice,
+            sellPrice: 0,
+            qty:      buy.qty,
             pnl:      0,
             pnlPct:   0,
             win:      false,
@@ -352,14 +352,20 @@ module.exports = async function handler(req, res) {
           }).sort((a, b) => b.totalPnl - a.totalPnl);
         }
 
-        const totalWins = trades.filter(t => t.win).length;
+        const closedTrades = trades.filter(t => t.status === 'closed');
+        const totalWins = closedTrades.filter(t => t.win).length;
         return {
           totalTrades:    trades.length,
-          overallWinRate: trades.length ? parseFloat((totalWins / trades.length * 100).toFixed(1)) : 0,
+          closedTrades:   closedTrades.length,
+          openTrades:     trades.length - closedTrades.length,
+          overallWinRate: closedTrades.length ? parseFloat((totalWins / closedTrades.length * 100).toFixed(1)) : 0,
+          totalPnl:       parseFloat(closedTrades.reduce((s, t) => s + t.pnl, 0).toFixed(2)),
           byStrategy:     groupBy('strategy'),
           bySignal:       groupBy('signal'),
           byTimeOfDay:    groupBy('session'),
           byDayOfWeek:    groupBy('dow'),
+          bySymbol:       groupBy('symbol'),
+          trades,
         };
       })();
 
