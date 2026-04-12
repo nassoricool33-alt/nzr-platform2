@@ -3008,6 +3008,326 @@ function recommendDirection(ind) {
   return { direction, leverage: Math.min(leverage, 3), confidence, reasoning };
 }
 
+// ─── DYNAMIC POSITION MANAGEMENT ─────────────────────────────────────────────
+
+/**
+ * Runs every scan cycle BEFORE evaluating new signals.
+ * Fetches all open Alpaca positions, evaluates fresh indicators, and makes
+ * close / hold / trail-stop decisions.  Also cancels stale open orders.
+ *
+ * Returns { positionsManaged, closed, held, trailUpdated, staleOrdersCancelled,
+ *           openCount, totalUnrealizedPct, newEntriesAllowed }
+ */
+async function manageOpenPositions() {
+  const alpacaKey    = process.env.ALPACA_API_KEY;
+  const alpacaSecret = process.env.ALPACA_SECRET_KEY;
+  if (!alpacaKey || !alpacaSecret) {
+    pushLog('POS_MGMT_SKIP: Alpaca keys not configured', 'warn');
+    return { positionsManaged: 0, closed: 0, held: 0, trailUpdated: 0, staleOrdersCancelled: 0, openCount: 0, totalUnrealizedPct: 0, newEntriesAllowed: true };
+  }
+
+  const alpacaHeaders = {
+    'APCA-API-KEY-ID':     alpacaKey,
+    'APCA-API-SECRET-KEY': alpacaSecret,
+    'Content-Type':        'application/json',
+    'Accept':              'application/json',
+  };
+
+  const polyKey = process.env.POLYGON_API_KEY;
+  const raceFetch = (url) => Promise.race([
+    fetch(url).then(r => r.ok ? r.json() : null),
+    new Promise(resolve => setTimeout(() => resolve(null), 3500))
+  ]).catch(() => null);
+
+  // ── 1. Fetch all open positions ────────────────────────────────────────────
+  let positions = [];
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 6000);
+    let posResp;
+    try { posResp = await fetch(`${ALPACA_BASE}/v2/positions`, { headers: alpacaHeaders, signal: ctrl.signal }); }
+    finally { clearTimeout(t); }
+    if (posResp.ok) {
+      const raw = await posResp.json();
+      positions = Array.isArray(raw) ? raw : [];
+    }
+  } catch (e) {
+    pushLog('POS_MGMT_FETCH_ERR: ' + e.message, 'warn');
+    return { positionsManaged: 0, closed: 0, held: 0, trailUpdated: 0, staleOrdersCancelled: 0, openCount: 0, totalUnrealizedPct: 0, newEntriesAllowed: true };
+  }
+
+  // ── 2. Fetch account for drawdown check ────────────────────────────────────
+  let portfolioValue = 0;
+  let totalUnrealizedPl = 0;
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 4000);
+    let acctResp;
+    try { acctResp = await fetch(`${ALPACA_BASE}/v2/account`, { headers: alpacaHeaders, signal: ctrl.signal }); }
+    finally { clearTimeout(t); }
+    if (acctResp.ok) {
+      const acct = await acctResp.json();
+      portfolioValue = parseFloat(acct.portfolio_value) || 0;
+    }
+  } catch { /* use 0 */ }
+
+  for (const p of positions) {
+    totalUnrealizedPl += parseFloat(p.unrealized_pl) || 0;
+  }
+  const totalUnrealizedPct = portfolioValue > 0 ? totalUnrealizedPl / portfolioValue : 0;
+
+  // ── Position limit & drawdown gate ─────────────────────────────────────────
+  let newEntriesAllowed = true;
+  if (positions.length >= 15) {
+    pushLog('MAX_POSITIONS: ' + positions.length + ' positions open, skipping new signals', 'warn');
+    newEntriesAllowed = false;
+  }
+  if (totalUnrealizedPct < -0.05) {
+    pushLog('DRAWDOWN_PAUSE: portfolio down ' + (totalUnrealizedPct * 100).toFixed(2) + '%, no new entries', 'warn');
+    newEntriesAllowed = false;
+  }
+
+  pushLog('POS_MGMT_START: ' + positions.length + ' open positions, unrealized=' + (totalUnrealizedPct * 100).toFixed(2) + '%', 'info');
+
+  let closed = 0, held = 0, trailUpdated = 0;
+
+  // ── 3. Evaluate each position ──────────────────────────────────────────────
+  for (const pos of positions) {
+    const symbol = pos.symbol;
+    const currentPrice = parseFloat(pos.current_price) || 0;
+    const entryPrice   = parseFloat(pos.avg_entry_price) || 0;
+    const qty          = parseFloat(pos.qty) || 0;
+    const unrealizedPct = parseFloat(pos.unrealized_plpc) || 0;
+    const side         = pos.side; // 'long' or 'short'
+
+    if (!currentPrice || !entryPrice) {
+      pushLog('POS_MGMT_SKIP_NODATA: ' + symbol, 'warn');
+      held++;
+      continue;
+    }
+
+    // Fetch fresh RSI and MACD for this symbol
+    let rsi = 50, macdHist = 0, macdHistPrev = 0;
+    if (polyKey) {
+      try {
+        const [rsiData, macdData] = await Promise.all([
+          raceFetch('https://api.polygon.io/v1/indicators/rsi/' + symbol + '?timespan=hour&adjusted=true&window=14&series_type=close&order=desc&limit=1&apiKey=' + polyKey),
+          raceFetch('https://api.polygon.io/v1/indicators/macd/' + symbol + '?timespan=hour&adjusted=true&short_window=12&long_window=26&signal_window=9&series_type=close&order=desc&limit=3&apiKey=' + polyKey),
+        ]);
+        rsi          = rsiData?.results?.values?.[0]?.value || 50;
+        macdHist     = macdData?.results?.values?.[0]?.histogram || 0;
+        macdHistPrev = macdData?.results?.values?.[1]?.histogram || 0;
+      } catch { /* use defaults */ }
+    }
+
+    // Read position tracking state from Supabase
+    let posTrack = null;
+    const stateKey = 'position_' + symbol;
+    try {
+      const sbUrl = process.env.SUPABASE_URL;
+      const sbHdrs = _sbHeaders();
+      if (sbUrl && sbHdrs) {
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), 3000);
+        let sr;
+        try { sr = await fetch(`${sbUrl}/rest/v1/bot_state?key=eq.${encodeURIComponent(stateKey)}&select=value`, { headers: sbHdrs, signal: ctrl.signal }); }
+        finally { clearTimeout(t); }
+        if (sr.ok) {
+          const rows = await sr.json().catch(() => []);
+          if (Array.isArray(rows) && rows.length && rows[0].value) {
+            posTrack = JSON.parse(rows[0].value);
+          }
+        }
+      }
+    } catch { /* no tracking data */ }
+
+    // Initialize or update tracking data
+    const highestPrice = posTrack ? Math.max(posTrack.highestPrice || currentPrice, currentPrice) : currentPrice;
+    const lowestPrice  = posTrack ? Math.min(posTrack.lowestPrice || currentPrice, currentPrice) : currentPrice;
+    const entryDate    = posTrack?.entryDate || new Date().toISOString().split('T')[0];
+    const entryMacdPositive = posTrack?.entryMacdPositive ?? (macdHist > 0);
+
+    // Calculate days held
+    const daysHeld = Math.max(0, Math.floor((Date.now() - new Date(entryDate).getTime()) / 86400000));
+
+    // Persist updated tracking data
+    writeBotState(stateKey, JSON.stringify({
+      entryPrice, entryDate, highestPrice, lowestPrice,
+      lastRsi: rsi, lastMacd: macdHist, entryMacdPositive,
+      updatedAt: new Date().toISOString()
+    }));
+
+    // ── Decision logic ───────────────────────────────────────────────────────
+    let action = 'HOLD';
+    let reason = '';
+
+    // --- CLOSE conditions (checked first, order matters) ---
+    if (unrealizedPct >= 0.08) {
+      action = 'CLOSE'; reason = 'PROFIT_TARGET: +' + (unrealizedPct * 100).toFixed(1) + '% (>=8%)';
+    } else if (unrealizedPct <= -0.04) {
+      action = 'CLOSE'; reason = 'STOP_LOSS: ' + (unrealizedPct * 100).toFixed(1) + '% (<=-4%)';
+    } else if (rsi >= 75 && unrealizedPct > 0) {
+      action = 'CLOSE'; reason = 'OVERBOUGHT_PROFIT: RSI=' + rsi.toFixed(1) + ' pnl=+' + (unrealizedPct * 100).toFixed(1) + '%';
+    } else if (rsi <= 25 && unrealizedPct < 0) {
+      action = 'CLOSE'; reason = 'OVERSOLD_LOSING: RSI=' + rsi.toFixed(1) + ' pnl=' + (unrealizedPct * 100).toFixed(1) + '%';
+    } else if (macdHist < 0 && entryMacdPositive && unrealizedPct > 0.02) {
+      action = 'CLOSE'; reason = 'MOMENTUM_REVERSAL: MACD flipped negative, locking +' + (unrealizedPct * 100).toFixed(1) + '%';
+    } else if (daysHeld > 7 && unrealizedPct > 0) {
+      action = 'CLOSE'; reason = 'TIME_LIMIT_PROFIT: held ' + daysHeld + 'd with +' + (unrealizedPct * 100).toFixed(1) + '%';
+    } else if (daysHeld > 3 && unrealizedPct < -0.02) {
+      action = 'CLOSE'; reason = 'UNDERPERFORMER_CUT: held ' + daysHeld + 'd at ' + (unrealizedPct * 100).toFixed(1) + '%';
+    }
+
+    // --- HOLD conditions (skip trail stop check) ---
+    if (action === 'HOLD') {
+      if (daysHeld < 1) {
+        reason = 'NEW_POSITION: held <1d, giving time';
+      } else if (rsi >= 50 && rsi <= 70 && macdHist > 0 && unrealizedPct > 0) {
+        reason = 'MOMENTUM_INTACT: RSI=' + rsi.toFixed(1) + ' MACD_H=+' + macdHist.toFixed(3) + ' pnl=+' + (unrealizedPct * 100).toFixed(1) + '%';
+      } else if (unrealizedPct > 0.02 && unrealizedPct < 0.08 && macdHist > 0) {
+        reason = 'WINNER_RUNNING: +' + (unrealizedPct * 100).toFixed(1) + '% with positive momentum';
+      } else {
+        reason = 'DEFAULT_HOLD: pnl=' + (unrealizedPct * 100).toFixed(1) + '% RSI=' + rsi.toFixed(1) + ' MACD_H=' + macdHist.toFixed(3);
+      }
+    }
+
+    // --- TRAIL STOP (only when holding and profitable enough) ---
+    if (action === 'HOLD' && unrealizedPct >= 0.05) {
+      if (unrealizedPct >= 0.06) {
+        // Trail at highest price - 1.5%
+        const trailStop = +(highestPrice * (1 - 0.015)).toFixed(2);
+        if (currentPrice <= trailStop) {
+          action = 'CLOSE'; reason = 'TRAIL_STOP_HIT: price $' + currentPrice.toFixed(2) + ' <= trail $' + trailStop + ' (high=$' + highestPrice.toFixed(2) + ')';
+        } else {
+          pushLog('TRAIL_STOP_UPDATE: ' + symbol + ' new_stop=$' + trailStop + ' high=$' + highestPrice.toFixed(2) + ' price=$' + currentPrice.toFixed(2), 'info');
+          trailUpdated++;
+        }
+      } else {
+        // Trail at breakeven (entry price)
+        if (currentPrice <= entryPrice) {
+          action = 'CLOSE'; reason = 'BREAKEVEN_STOP: price $' + currentPrice.toFixed(2) + ' hit entry $' + entryPrice.toFixed(2);
+        } else {
+          pushLog('TRAIL_STOP_UPDATE: ' + symbol + ' breakeven_stop=$' + entryPrice.toFixed(2) + ' price=$' + currentPrice.toFixed(2), 'info');
+          trailUpdated++;
+        }
+      }
+    }
+
+    // ── Execute decision ─────────────────────────────────────────────────────
+    if (action === 'CLOSE') {
+      pushLog('POSITION_CLOSE: ' + symbol + ' reason=' + reason + ' pnl=' + (unrealizedPct * 100).toFixed(1) + '%', unrealizedPct >= 0 ? 'pass' : 'warn');
+      try {
+        const closeSide = side === 'long' ? 'sell' : 'buy';
+        const closeCtrl = new AbortController();
+        const closeTimer = setTimeout(() => closeCtrl.abort(), 10000);
+        let closeResp;
+        try {
+          closeResp = await fetch(`${ALPACA_BASE}/v2/orders`, {
+            method: 'POST',
+            headers: alpacaHeaders,
+            body: JSON.stringify({
+              symbol: symbol,
+              qty: String(Math.abs(qty)),
+              side: closeSide,
+              type: 'market',
+              time_in_force: 'day',
+              client_order_id: ('NZR-CLOSE-' + symbol + '-' + Date.now()).slice(0, 48)
+            }),
+            signal: closeCtrl.signal,
+          });
+        } finally { clearTimeout(closeTimer); }
+
+        if (closeResp.ok) {
+          closed++;
+          pushLog('POSITION_CLOSED_OK: ' + symbol + ' ' + closeSide + ' ' + Math.abs(qty) + ' shares', 'pass');
+
+          // Update journal entry
+          if (supabase) {
+            try {
+              const { data: journalEntries } = await supabase.from('journal')
+                .select('*')
+                .eq('symbol', symbol)
+                .is('exit_price', null)
+                .order('trade_date', { ascending: false })
+                .limit(1);
+              if (journalEntries && journalEntries.length > 0) {
+                const entry = journalEntries[0];
+                const pnlPct = ((currentPrice - parseFloat(entry.entry_price)) / parseFloat(entry.entry_price) * 100).toFixed(2);
+                await supabase.from('journal').update({
+                  exit_price: currentPrice,
+                  pnl_pct: parseFloat(pnlPct),
+                  notes: (entry.notes || '') + ' | CLOSED: ' + reason
+                }).eq('id', entry.id);
+                pushLog('JOURNAL_EXIT_UPDATED: ' + symbol + ' pnl=' + pnlPct + '%', 'info');
+              }
+            } catch (je) {
+              pushLog('JOURNAL_EXIT_ERR: ' + symbol + ' ' + je.message, 'warn');
+            }
+          }
+
+          // Clean up position tracking state
+          writeBotState(stateKey, JSON.stringify({ closed: true, closedAt: new Date().toISOString(), reason }));
+        } else {
+          const errBody = await closeResp.text().catch(() => 'unknown');
+          pushLog('POSITION_CLOSE_FAILED: ' + symbol + ' — ' + errBody, 'warn');
+          held++;
+        }
+      } catch (e) {
+        pushLog('POSITION_CLOSE_ERR: ' + symbol + ' — ' + e.message, 'warn');
+        held++;
+      }
+    } else {
+      pushLog('POSITION_HOLD: ' + symbol + ' reason=' + reason + ' pnl=' + (unrealizedPct * 100).toFixed(1) + '% rsi=' + rsi.toFixed(1), 'info');
+      held++;
+    }
+  }
+
+  // ── 7. Cancel stale open orders (> 30 minutes old) ─────────────────────────
+  let staleOrdersCancelled = 0;
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 5000);
+    let ordResp;
+    try { ordResp = await fetch(`${ALPACA_BASE}/v2/orders?status=open`, { headers: alpacaHeaders, signal: ctrl.signal }); }
+    finally { clearTimeout(t); }
+
+    if (ordResp.ok) {
+      const openOrders = await ordResp.json();
+      if (Array.isArray(openOrders)) {
+        const thirtyMinAgo = Date.now() - 30 * 60 * 1000;
+        for (const order of openOrders) {
+          const submittedAt = new Date(order.submitted_at || order.created_at).getTime();
+          if (submittedAt < thirtyMinAgo) {
+            try {
+              const cancelCtrl = new AbortController();
+              const cancelTimer = setTimeout(() => cancelCtrl.abort(), 4000);
+              try {
+                await fetch(`${ALPACA_BASE}/v2/orders/${order.id}`, { method: 'DELETE', headers: alpacaHeaders, signal: cancelCtrl.signal });
+              } finally { clearTimeout(cancelTimer); }
+              staleOrdersCancelled++;
+              pushLog('STALE_ORDER_CANCELLED: ' + (order.symbol || 'unknown') + ' id=' + order.id + ' age=' + Math.round((Date.now() - submittedAt) / 60000) + 'min', 'info');
+            } catch (ce) {
+              pushLog('STALE_CANCEL_ERR: ' + order.id + ' — ' + ce.message, 'warn');
+            }
+          }
+        }
+      }
+    }
+  } catch (e) {
+    pushLog('STALE_ORDERS_CHECK_ERR: ' + e.message, 'warn');
+  }
+
+  pushLog('POS_MGMT_DONE: managed=' + positions.length + ' closed=' + closed + ' held=' + held + ' trail=' + trailUpdated + ' stale_cancelled=' + staleOrdersCancelled, 'info');
+
+  return {
+    positionsManaged: positions.length,
+    closed, held, trailUpdated, staleOrdersCancelled,
+    openCount: positions.length - closed,
+    totalUnrealizedPct: +(totalUnrealizedPct * 100).toFixed(2),
+    newEntriesAllowed
+  };
+}
+
 // ─── JOURNAL P&L UPDATE FOR CLOSED TRADES ────────────────────────────────────
 
 /**
@@ -3635,6 +3955,14 @@ module.exports = async function handler(req, res) {
 
     pushLog('SCAN_STARTED: capital=$' + capital + ' day=$' + dayAlloc + ' swing=$' + swingAlloc + ' universe=' + SCAN_UNIVERSE.length + ' ET=' + etHour + ':' + String(etMinute).padStart(2,'0'), 'info');
 
+    // ── Dynamic position management — runs FIRST every cycle ─────────────────
+    let posMgmt = { positionsManaged: 0, closed: 0, held: 0, trailUpdated: 0, staleOrdersCancelled: 0, openCount: 0, totalUnrealizedPct: 0, newEntriesAllowed: true };
+    try {
+      posMgmt = await manageOpenPositions();
+    } catch(e) {
+      pushLog('POS_MGMT_ERROR: ' + e.message, 'warn');
+    }
+
     // Update P&L for any closed trades before scanning
     try { await updateClosedTrades(); } catch(e) { pushLog('CLOSED_TRADES_ERR: ' + e.message, 'warn'); }
 
@@ -3716,7 +4044,9 @@ module.exports = async function handler(req, res) {
         if (nrzScore >= 70) {
           signalsFound++;
           pushLog('SIGNAL: ' + symbol + ' ' + direction + ' score=' + nrzScore, 'pass');
-          try {
+          if (!posMgmt.newEntriesAllowed) {
+            pushLog('SIGNAL_BLOCKED: ' + symbol + ' — new entries paused (positions=' + posMgmt.openCount + ' drawdown=' + posMgmt.totalUnrealizedPct + '%)', 'warn');
+          } else try {
             const execResult = await executeSignal({
               symbol, direction, mode: 'day', strategy: 'COMBINED',
               nrzScore, entryPrice: price, price, atr: price * 0.015,
@@ -3776,6 +4106,7 @@ module.exports = async function handler(req, res) {
       signalsPassed: signalsFound,
       tradesPlaced,
       duration: duration + 'ms',
+      positionManagement: posMgmt,
       results: signalResults.sort((a, b) => b.nrzScore - a.nrzScore)
     });
   }
