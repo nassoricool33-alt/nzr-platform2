@@ -207,24 +207,40 @@ module.exports = async function handler(req, res) {
 
       // Race entire attribution work against 8 s hard timeout
       const attributionWork = (async () => {
-        const after7 = new Date(Date.now() - 7 * 24 * 3600 * 1000).toISOString();
+        const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
 
-        // Give the orders fetch 4 s; fall back to empty on miss
+        // Fetch both closed and all orders (to catch filled), 6s timeout each
         let orders = [];
         try {
-          const raw = await Promise.race([
-            alpacaFetch(`/v2/orders?status=closed&limit=50&after=${encodeURIComponent(after7)}`),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('orders_timeout')), 4000)),
+          const [closedRaw, allRaw] = await Promise.all([
+            Promise.race([
+              alpacaFetch(`/v2/orders?status=closed&limit=100&after=${encodeURIComponent(thirtyDaysAgo)}`),
+              new Promise((_, reject) => setTimeout(() => reject(new Error('closed_timeout')), 6000)),
+            ]).catch(() => []),
+            Promise.race([
+              alpacaFetch(`/v2/orders?status=all&limit=100&after=${encodeURIComponent(thirtyDaysAgo)}`),
+              new Promise((_, reject) => setTimeout(() => reject(new Error('all_timeout')), 6000)),
+            ]).catch(() => []),
           ]);
-          orders = Array.isArray(raw) ? raw : [];
+          const closedOrders = Array.isArray(closedRaw) ? closedRaw : [];
+          const allOrders = Array.isArray(allRaw) ? allRaw : [];
+          // Merge and deduplicate by order id
+          const seen = new Set();
+          for (const o of [...closedOrders, ...allOrders]) {
+            if (o && o.id && !seen.has(o.id)) {
+              seen.add(o.id);
+              orders.push(o);
+            }
+          }
         } catch {
           return { ...ATTRIBUTION_EMPTY };
         }
 
-        // Keep only filled NZR-tagged orders
+        // Keep only NZR-tagged orders with fills
         const nzr = orders.filter(o =>
           o.client_order_id?.startsWith('NZR-') && parseFloat(o.filled_qty || 0) > 0
         );
+        console.log('[ATTRIBUTION] Found', orders.length, 'total orders,', nzr.length, 'NZR-tagged');
 
         // Parse tag: NZR-{MODE}-{STRATEGY}-{SIGNAL}-{SYMBOL}-{TS}  (new, 6 parts)
         //            NZR-{mode}-{symbol}-{ts}                       (old, 4 parts)
@@ -272,12 +288,16 @@ module.exports = async function handler(req, res) {
         const sells = tagged.filter(o => o.side === 'sell' && o.fillPrice > 0);
 
         const trades = [];
+        const matchedBuyIds = new Set();
+
+        // Match sell orders to their corresponding buy orders
         for (const sell of sells) {
           const buy = buys
             .filter(b => b.symbol === sell.symbol && b.submittedAt <= sell.submittedAt)
             .sort((a, b) => b.submittedAt.localeCompare(a.submittedAt))[0];
           if (!buy) continue;
 
+          matchedBuyIds.add(buy.orderId);
           const pnl    = (sell.fillPrice - buy.fillPrice) * Math.min(sell.qty, buy.qty);
           const pnlPct = ((sell.fillPrice - buy.fillPrice) / buy.fillPrice) * 100;
           trades.push({
@@ -290,6 +310,23 @@ module.exports = async function handler(req, res) {
             signal:   sell.signal   !== 'UNKNOWN' ? sell.signal   : buy.signal,
             session:  sessionLabel(sell.filledAt),
             dow:      DOW[new Date(sell.filledAt).getUTCDay()],
+          });
+        }
+
+        // Include unmatched buy orders as open positions (pnl = 0)
+        for (const buy of buys) {
+          if (matchedBuyIds.has(buy.orderId)) continue;
+          trades.push({
+            symbol:   buy.symbol,
+            pnl:      0,
+            pnlPct:   0,
+            win:      false,
+            mode:     buy.mode,
+            strategy: buy.strategy,
+            signal:   buy.signal,
+            session:  sessionLabel(buy.filledAt),
+            dow:      DOW[new Date(buy.filledAt).getUTCDay()],
+            status:   'open',
           });
         }
 
