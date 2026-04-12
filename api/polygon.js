@@ -209,23 +209,68 @@ module.exports = async function handler(req, res) {
 
     // ── EARNINGS / FINANCIALS ───────────────────────────────────────
     } else if (type === 'earnings') {
-      const data = await httpsGet(
-        `https://api.polygon.io/vX/reference/financials?limit=20&order=desc&apiKey=${key}`
-      );
+      const today = new Date().toISOString().split('T')[0];
 
-      const items = (data.results || []).map(r => {
-        const is = r.financials?.income_statement || {};
-        return {
-          ticker:    r.ticker,
-          period:    r.fiscal_period || null,
-          year:      r.fiscal_year   || null,
-          date:      r.filing_date   || r.start_date || null,
-          revenue:   is.revenues?.value               ?? null,
-          netIncome: is.net_income_loss?.value         ?? null,
-          eps:       is.basic_earnings_per_share?.value ?? null,
-        };
-      });
+      // Fetch recent filings with tickers — request more so we can filter empty tickers
+      let items = [];
+      try {
+        const data = await httpsGet(
+          `https://api.polygon.io/vX/reference/financials?timeframe=quarterly&filing_date.gte=${today}&order=asc&limit=50&sort=filing_date&apiKey=${key}`
+        );
+        items = (data.results || [])
+          .filter(r => r.tickers?.[0] || r.ticker)
+          .map(r => {
+            const is = r.financials?.income_statement || {};
+            const ticker = r.tickers?.[0] || r.ticker || null;
+            const epsActual = is.basic_earnings_per_share?.value ?? null;
+            const epsDiluted = is.diluted_earnings_per_share?.value ?? null;
+            return {
+              ticker,
+              companyName: r.company_name || ticker || '--',
+              reportDate:  r.filing_date || r.end_date || null,
+              period:      r.fiscal_period || null,
+              year:        r.fiscal_year   || null,
+              date:        r.filing_date   || r.start_date || null,
+              revenue:     is.revenues?.value               ?? null,
+              netIncome:   is.net_income_loss?.value         ?? null,
+              eps:         epsActual ?? epsDiluted ?? null,
+            };
+          });
+      } catch (e) {
+        console.error('[polygon/earnings] upcoming fetch error:', e.message);
+      }
 
+      // If no upcoming filings, fall back to recent filings (desc order)
+      if (!items.length) {
+        try {
+          const data = await httpsGet(
+            `https://api.polygon.io/vX/reference/financials?timeframe=quarterly&order=desc&limit=50&sort=filing_date&apiKey=${key}`
+          );
+          items = (data.results || [])
+            .filter(r => r.tickers?.[0] || r.ticker)
+            .map(r => {
+              const is = r.financials?.income_statement || {};
+              const ticker = r.tickers?.[0] || r.ticker || null;
+              const epsActual = is.basic_earnings_per_share?.value ?? null;
+              const epsDiluted = is.diluted_earnings_per_share?.value ?? null;
+              return {
+                ticker,
+                companyName: r.company_name || ticker || '--',
+                reportDate:  r.filing_date || r.end_date || null,
+                period:      r.fiscal_period || null,
+                year:        r.fiscal_year   || null,
+                date:        r.filing_date   || r.start_date || null,
+                revenue:     is.revenues?.value               ?? null,
+                netIncome:   is.net_income_loss?.value         ?? null,
+                eps:         epsActual ?? epsDiluted ?? null,
+              };
+            });
+        } catch (e) {
+          console.error('[polygon/earnings] recent fetch error:', e.message);
+        }
+      }
+
+      console.log('[polygon/earnings] returning', items.length, 'entries, tickers:', items.slice(0, 5).map(i => i.ticker).join(','));
       return res.status(200).json({ earnings: items });
 
     // ── HISTORICAL OHLCV ────────────────────────────────────────────

@@ -3132,16 +3132,19 @@ async function buildEarnings(){
     const data=await r.json();
     const items=data.earnings||[];
     if(!items.length)throw new Error();
-    const ts=new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
-    tbody.innerHTML=items.map(e=>`
+    const ts=new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'});
+    tbody.innerHTML=items.map(e=>{
+      const tickerDisplay=e.ticker||e.companyName||'--';
+      const nameNote=e.companyName&&e.companyName!==e.ticker&&e.ticker?`<div style="font-size:9px;color:var(--text3);font-family:var(--font-mono);margin-top:1px">${e.companyName}</div>`:'';
+      return`
       <tr>
-        <td style="font-family:var(--font-mono);font-size:12px;color:var(--text3)">${e.date||'--'}</td>
-        <td><span class="earnings-sym">${e.ticker||'--'}</span></td>
+        <td style="font-family:var(--font-mono);font-size:12px;color:var(--text3)">${e.reportDate||e.date||'--'}</td>
+        <td><span class="earnings-sym">${tickerDisplay}</span>${nameNote}</td>
         <td style="font-family:var(--font-mono);font-size:11px;color:var(--text3)">${e.period||''}${e.year?' '+e.year:''}</td>
         <td><span class="earnings-est">${fmtRevenue(e.revenue)}</span></td>
         <td style="font-family:var(--font-mono);font-size:12px;color:var(--text2)">${fmtRevenue(e.netIncome)}</td>
         <td style="font-family:var(--font-mono);font-size:12px;color:var(--text)">${e.eps!=null?'$'+Number(e.eps).toFixed(2):'--'}</td>
-      </tr>`).join('');
+      </tr>`;}).join('');
     const tbl=document.getElementById('earnings-table');
     if(tbl){
       const note=document.createElement('caption');
