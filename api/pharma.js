@@ -883,6 +883,217 @@ async function handleBotCheck(key) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// ── AUTOMATED PHARMA TRADING ─────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// PDUFA calendar symbols — the 20 symbols with upcoming FDA dates
+const PDUFA_SCAN_SYMBOLS = FDA_HARDCODED.map(e => e.ticker).filter((v, i, a) => a.indexOf(v) === i);
+
+let pharmaLastScanResults = [];
+let pharmaOrdersToday = { date: '', count: 0 };
+
+async function executePharmaSignal(symbol, signal, capitalAmount) {
+  const sym = sanitizeSym(symbol);
+
+  // 1. Only trade within 7 days of a PDUFA date
+  const days = daysUntilFDA(sym);
+  if (days === null || days > 7) {
+    return { skip: true, reason: 'No PDUFA within 7 days (daysUntil=' + days + ')' };
+  }
+
+  // 2. Halal filter — skip excluded symbols
+  const halalCheck = checkHalal(sym);
+  if (!halalCheck.allowed) {
+    return { skip: true, reason: halalCheck.reason };
+  }
+
+  // 3. IV crush risk — skip if options IV > 200%
+  if (signal.atr && signal.price) {
+    const impliedMove = (signal.atr / signal.price) * 100 * Math.sqrt(days || 1);
+    if (impliedMove > 200) {
+      return { skip: true, reason: 'IV_CRUSH_RISK: implied move ' + impliedMove.toFixed(0) + '% > 200%' };
+    }
+  }
+
+  // 4. Check live trading mode
+  if (process.env.BOT_LIVE_TRADING !== 'true') {
+    return { skip: true, reason: 'PAPER_MODE: pharma signal logged for ' + sym + ' (score=' + signal.combinedScore + ')' };
+  }
+
+  // 5. Position size — max 3% of capital per pharma trade
+  const positionSize = Math.max(300, (capitalAmount || 10000) * 0.03);
+  const price = signal.price;
+  if (!price || price <= 0) {
+    return { skip: true, reason: 'No valid price for ' + sym };
+  }
+  const qty = Math.max(1, Math.floor(positionSize / price));
+
+  // 6. Calculate bracket order stops — 2.5x ATR for pharma volatility
+  const atr = signal.atr || (price * 0.03); // fallback 3% of price
+  const stopLoss = +(price - 2.5 * atr).toFixed(2);
+  const takeProfit = +(price + 3.5 * atr).toFixed(2);
+
+  // 7. Determine order side from signal
+  const side = (signal.signal === 'SELL') ? 'sell' : 'buy';
+
+  try {
+    const orderRes = await alpacaReq('POST', '/v2/orders', {
+      symbol: sym,
+      qty: String(qty),
+      side: side,
+      type: 'market',
+      time_in_force: 'day',
+      order_class: 'bracket',
+      stop_loss: { stop_price: String(stopLoss) },
+      take_profit: { limit_price: String(takeProfit) },
+      client_order_id: 'NZR-PHARMA-' + sym + '-' + Date.now()
+    });
+
+    if (orderRes.status === 200 || orderRes.status === 201) {
+      console.log('[pharma/exec] ORDER_PLACED: ' + sym + ' ' + side + ' ' + qty + ' @ $' + price + ' SL=$' + stopLoss + ' TP=$' + takeProfit);
+      return {
+        skip: false,
+        placed: true,
+        symbol: sym,
+        side,
+        qty,
+        price,
+        stopLoss,
+        takeProfit,
+        atr: +atr.toFixed(4),
+        pdufaDays: days,
+        halalStatus: halalCheck.halalStatus,
+        orderId: orderRes.body?.id || null
+      };
+    } else {
+      // Bracket order rejected — fall back to simple market order
+      console.log('[pharma/exec] BRACKET_REJECTED: ' + sym + ' — ' + JSON.stringify(orderRes.body) + ' — trying simple order');
+      const simpleRes = await alpacaReq('POST', '/v2/orders', {
+        symbol: sym,
+        qty: String(qty),
+        side: side,
+        type: 'market',
+        time_in_force: 'day',
+        client_order_id: 'NZR-PHARMA-' + sym + '-' + Date.now()
+      });
+      if (simpleRes.status === 200 || simpleRes.status === 201) {
+        console.log('[pharma/exec] SIMPLE_ORDER_PLACED: ' + sym + ' ' + side + ' ' + qty + ' @ $' + price);
+        return {
+          skip: false,
+          placed: true,
+          symbol: sym,
+          side,
+          qty,
+          price,
+          stopLoss,
+          takeProfit,
+          atr: +atr.toFixed(4),
+          pdufaDays: days,
+          halalStatus: halalCheck.halalStatus,
+          orderId: simpleRes.body?.id || null,
+          note: 'Simple order (bracket rejected)'
+        };
+      }
+      return { skip: true, reason: 'ORDER_REJECTED: ' + JSON.stringify(simpleRes.body) };
+    }
+  } catch (err) {
+    console.error('[pharma/exec] error:', err.message);
+    return { skip: true, reason: 'ORDER_ERROR: ' + err.message };
+  }
+}
+
+async function handleAutoScan(polyKey, anthropicKey) {
+  const startTime = Date.now();
+
+  // Market hours check
+  const nowET = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+  const etHour = nowET.getHours();
+  const etMinute = nowET.getMinutes();
+  const etDay = nowET.getDay();
+  const etTime = etHour + etMinute / 60;
+  const isMarketOpen = etDay >= 1 && etDay <= 5 && etTime >= 9.5 && etTime < 15.75;
+
+  // Get capital amount
+  let capitalAmount = 10000;
+  if (process.env.ALPACA_API_KEY && process.env.ALPACA_SECRET_KEY) {
+    try {
+      const acct = await alpacaReq('GET', '/v2/account', null);
+      capitalAmount = safeNum(acct.body?.portfolio_value) || capitalAmount;
+    } catch { /* use default */ }
+  }
+
+  let symbolsScanned = 0, signalsFound = 0, ordersPlaced = 0;
+  const results = [];
+
+  // Scan PDUFA calendar symbols
+  for (let i = 0; i < PDUFA_SCAN_SYMBOLS.length; i += 3) {
+    if (Date.now() - startTime > 25000) {
+      console.log('[pharma/autoscan] TIME_BUDGET: stopping early');
+      break;
+    }
+    const batch = PDUFA_SCAN_SYMBOLS.slice(i, i + 3);
+    const batchResults = await Promise.all(batch.map(async (sym) => {
+      symbolsScanned++;
+      try {
+        return await handleSignal(sym, polyKey, anthropicKey);
+      } catch (e) {
+        return { symbol: sym, error: e.message };
+      }
+    }));
+
+    for (const signal of batchResults) {
+      if (!signal || signal.error) continue;
+      results.push(signal);
+
+      // Score threshold: combinedScore >= 0.75 maps to score >= 75
+      const score = Math.round((signal.combinedScore || 0) * 100);
+      if (score >= 75 && (signal.signal === 'BUY' || signal.signal === 'SELL')) {
+        signalsFound++;
+
+        if (!isMarketOpen) continue; // pre-score but don't trade
+
+        const execResult = await executePharmaSignal(signal.symbol, signal, capitalAmount);
+        if (execResult && !execResult.skip && execResult.placed) {
+          ordersPlaced++;
+        }
+        // Attach execution result to signal for response
+        signal.execResult = execResult;
+      }
+    }
+  }
+
+  // Cache results
+  pharmaLastScanResults = results;
+  const today = new Date().toISOString().split('T')[0];
+  if (pharmaOrdersToday.date !== today) {
+    pharmaOrdersToday = { date: today, count: ordersPlaced };
+  } else {
+    pharmaOrdersToday.count += ordersPlaced;
+  }
+
+  const duration = Date.now() - startTime;
+  return {
+    success: true,
+    isMarketOpen,
+    symbolsScanned,
+    signalsFound,
+    ordersPlaced,
+    duration: duration + 'ms',
+    results: results.map(r => ({
+      symbol: r.symbol,
+      combinedScore: r.combinedScore,
+      signal: r.signal,
+      signalStrength: r.signalStrength,
+      price: r.price,
+      atr: r.atr,
+      catalystInfo: r.catalystInfo,
+      halalStatus: r.halalStatus,
+      execResult: r.execResult || null
+    }))
+  };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // ── MAIN HANDLER ──────────────────────────────────────────────────────────────
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -961,8 +1172,26 @@ module.exports = async function handler(req, res) {
     if (action === 'botcheck' && req.method === 'POST')
       return res.status(200).json(await handleBotCheck(polyKey));
 
+    // ── Automated pharma trading endpoints ───────────────────────────────────
+    if (action === 'autoscan')
+      return res.status(200).json(await handleAutoScan(polyKey, anthropicKey));
+
+    if (action === 'autopilot') {
+      console.log('[pharma] AUTOPILOT_TRIGGERED: cron-job.org pharma scan starting');
+      return res.status(200).json(await handleAutoScan(polyKey, anthropicKey));
+    }
+
+    // Also support ?type= parameter for cron-job.org compatibility
+    const typeParam = String(req.query.type || '').toLowerCase();
+    if (typeParam === 'scan')
+      return res.status(200).json(await handleAutoScan(polyKey, anthropicKey));
+    if (typeParam === 'autopilot') {
+      console.log('[pharma] AUTOPILOT_TRIGGERED: cron-job.org pharma scan starting');
+      return res.status(200).json(await handleAutoScan(polyKey, anthropicKey));
+    }
+
     return res.status(400).json({
-      error: `Unknown action: "${action}". Data: calendar|scan|signal|shorts|fda. Bot: botstatus|botstart|botstop|botrules|validate|botcheck`,
+      error: `Unknown action: "${action}". Data: calendar|scan|signal|shorts|fda. Bot: botstatus|botstart|botstop|botrules|validate|botcheck. Auto: autoscan|autopilot`,
     });
 
   } catch (err) {
