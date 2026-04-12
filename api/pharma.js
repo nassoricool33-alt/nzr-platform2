@@ -1045,9 +1045,14 @@ async function handleAutoScan(polyKey, anthropicKey) {
       if (!signal || signal.error) continue;
       results.push(signal);
 
-      // Score threshold: combinedScore >= 0.75 maps to score >= 75
-      const score = Math.round((signal.combinedScore || 0) * 100);
-      if (score >= 75 && (signal.signal === 'BUY' || signal.signal === 'SELL')) {
+      // Score with PDUFA proximity boost: +0.15 if within 7 days of catalyst
+      let adjustedScore = signal.combinedScore || 0;
+      const daysAway = signal.catalystInfo?.daysAway;
+      if (daysAway !== null && daysAway !== undefined && daysAway >= 0 && daysAway <= 7) {
+        adjustedScore = Math.min(1, adjustedScore + 0.15);
+      }
+      const score = Math.round(adjustedScore * 100);
+      if (score >= 52 && (signal.signal === 'BUY' || signal.signal === 'SELL')) {
         signalsFound++;
 
         if (!isMarketOpen) continue; // pre-score but don't trade
