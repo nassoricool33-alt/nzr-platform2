@@ -72,25 +72,24 @@ body{background:var(--bg);color:var(--text);font-family:var(--font-body);font-we
 
 /* ─── NAVBAR ───────────────────────────────────────── */
 nav{position:sticky;top:0;z-index:200;backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);background:rgba(247,245,240,.97);border-bottom:1px solid var(--border);overflow:hidden}
-.nav-inner{display:flex;align-items:center;height:64px;max-width:1400px;margin:0 auto;padding:0 24px;gap:12px;overflow:hidden;width:100%}
-.logo{display:flex;align-items:center;gap:12px;text-decoration:none;flex-shrink:0}
-.logo-mark{width:36px;height:36px;background:var(--gold);display:flex;align-items:center;justify-content:center;font-family:var(--font-display);font-weight:800;font-size:16px;color:#ffffff;clip-path:polygon(50% 0%,100% 25%,100% 75%,50% 100%,0% 75%,0% 25%);animation:logoSpin 8s ease-in-out infinite}
-@keyframes logoSpin{0%,100%{filter:brightness(1)}50%{filter:brightness(1.2)}}
-.logo-text{font-family:var(--font-display);font-weight:800;font-size:22px;letter-spacing:3px;color:var(--gold)}
-.logo-sub{font-family:var(--font-mono);font-size:9px;color:var(--text3);letter-spacing:3px;text-transform:uppercase;margin-top:-2px}
+.nav-inner{display:flex;align-items:center;width:100%;height:56px;max-width:1400px;margin:0 auto;padding:0 16px;gap:0;overflow:hidden}
+.logo{display:flex;align-items:center;gap:8px;text-decoration:none;flex-shrink:0;margin-right:10px}
+.logo-mark{width:32px;height:32px;background:var(--gold);display:flex;align-items:center;justify-content:center;font-family:var(--font-display);font-weight:800;font-size:14px;color:#ffffff;clip-path:polygon(50% 0%,100% 25%,100% 75%,50% 100%,0% 75%,0% 25%)}
+.logo-text{font-family:var(--font-display);font-weight:800;font-size:18px;letter-spacing:2px;color:var(--gold)}
+.logo-sub{display:none}
 
-/* Nav groups — scrollable tab container between fixed logo and status */
-.nav-groups{display:flex;align-items:center;gap:0;flex:1;min-width:0;overflow-x:auto;overflow-y:hidden;white-space:nowrap;-webkit-overflow-scrolling:touch;scrollbar-width:none;-ms-overflow-style:none;max-width:calc(100vw - 400px)}
+/* Nav groups — scrollable tab strip between fixed logo and status */
+.nav-groups{display:flex;flex-wrap:nowrap;align-items:center;gap:0;flex:1;min-width:0;overflow-x:auto;overflow-y:hidden;-webkit-overflow-scrolling:touch;scrollbar-width:none;-ms-overflow-style:none}
 .nav-groups::-webkit-scrollbar{display:none}
-.nav-group{display:flex;align-items:center;padding:0 2px;flex-shrink:0}
-.nav-group+.nav-group{border-left:1px solid var(--border);margin-left:4px;padding-left:6px}
-.nav-tab{background:none;border:none;color:var(--text2);font-family:var(--font-display);font-size:12px;font-weight:500;letter-spacing:.2px;padding:4px 8px;border-radius:var(--radius);cursor:pointer;transition:all .2s;position:relative;white-space:nowrap;flex-shrink:0}
+.nav-group{display:flex;align-items:center;padding:0;flex-shrink:0}
+.nav-group+.nav-group{margin-left:0;padding-left:0;border-left:none}
+.nav-tab{background:none;border:none;color:var(--text2);font-family:var(--font-display);font-size:11px;font-weight:500;letter-spacing:.2px;padding:4px 6px;border-radius:var(--radius);cursor:pointer;transition:all .2s;position:relative;white-space:nowrap;flex-shrink:0}
 .nav-tab:hover{color:var(--text);background:rgba(0,0,0,.05)}
 .nav-tab.active{color:var(--gold);background:var(--gold-dim)}
-.nav-tab.active::after{content:'';position:absolute;bottom:-1px;left:8px;right:8px;height:2px;background:var(--gold);border-radius:2px 2px 0 0}
+.nav-tab.active::after{content:'';position:absolute;bottom:-1px;left:6px;right:6px;height:2px;background:var(--gold);border-radius:2px 2px 0 0}
 
 /* Status — pinned right */
-.nav-status{display:flex;align-items:center;gap:8px;font-family:var(--font-mono);font-size:11px;color:var(--text2);flex-shrink:0;margin-left:auto}
+.nav-status{display:flex;align-items:center;gap:6px;font-family:var(--font-mono);font-size:10px;color:var(--text2);flex-shrink:0;margin-left:auto;padding-left:8px}
 .status-dot{width:6px;height:6px;border-radius:50%;background:var(--green);animation:blink 2s infinite}
 .status-dot.closed{background:var(--red);animation:none}
 @keyframes blink{0%,100%{opacity:1}50%{opacity:.4}}
@@ -440,13 +439,11 @@ footer{border-top:1px solid var(--border);padding:32px 0;margin-top:80px}
 
 /* ─── RESPONSIVE ───────────────────────────────────── */
 @media(max-width:1100px){
-  .nav-tab{font-size:11px;padding:4px 7px}
-  .nav-groups{max-width:calc(100vw - 320px)}
+  .nav-tab{font-size:11px;padding:4px 5px}
 }
 @media(max-width:768px){
-  .nav-tab{font-size:11px;padding:4px 6px}
-  .nav-groups{max-width:calc(100vw - 240px)}
-  .nav-group+.nav-group{margin-left:2px;padding-left:4px}
+  .nav-tab{font-size:10px;padding:3px 4px}
+  .nav-inner{padding:0 10px}
 }
 @media(max-width:900px){
   .nav-inner{padding:0 16px}
@@ -471,9 +468,8 @@ footer{border-top:1px solid var(--border);padding:32px 0;margin-top:80px}
   .hero-title{letter-spacing:-1.5px}
   .hero-cta{flex-direction:column;align-items:center}
   .logo-sub{display:none}
-  .nav-tab{padding:4px 5px;font-size:10px}
-  .nav-groups{max-width:calc(100vw - 160px)}
-  .nav-group+.nav-group{margin-left:2px;padding-left:3px}
+  .nav-tab{padding:3px 4px;font-size:10px}
+  .nav-inner{padding:0 8px}
   .indices-bar-inner{padding:0 14px}
 }
 
@@ -766,31 +762,21 @@ footer{border-top:1px solid var(--border);padding:32px 0;margin-top:80px}
   <div class="nav-inner">
     <a class="logo" href="#">
       <div class="logo-mark">N</div>
-      <div>
-        <div class="logo-text">NZR</div>
-        <div class="logo-sub">AI Trading Intelligence</div>
-      </div>
+      <div class="logo-text">NZR</div>
     </a>
 
     <div class="nav-groups" id="nav-groups">
-      <!-- Research group -->
       <div class="nav-group">
-        <button class="nav-tab active" data-page="dashboard">Dashboard</button>
+        <button class="nav-tab active" data-page="dashboard">Home</button>
         <button class="nav-tab" data-page="analyzer">Analyzer</button>
         <button class="nav-tab" data-page="markets">Markets</button>
         <button class="nav-tab" data-page="screener">Screener</button>
-      </div>
-      <!-- My Trading group -->
-      <div class="nav-group">
         <button class="nav-tab" data-page="watchlist">Watchlist</button>
         <button class="nav-tab" data-page="portfolio">Portfolio</button>
         <button class="nav-tab" data-page="journal">Journal</button>
-        <button class="nav-tab" data-page="leaderboard">Leaderboard</button>
+        <button class="nav-tab" data-page="leaderboard">Leaders</button>
         <button class="nav-tab" data-page="bot">Bot</button>
         <button class="nav-tab" data-page="options">Options</button>
-      </div>
-      <!-- Intelligence group -->
-      <div class="nav-group">
         <button class="nav-tab" data-page="flow">Flow</button>
         <button class="nav-tab" data-page="pharma">Pharma</button>
         <button class="nav-tab" data-page="earnings">Earnings</button>
@@ -2301,7 +2287,7 @@ function acceptDisclaimer(){
 /* ── CLOCK ──────────────────────────────────────── */
 function updateClock(){
   document.getElementById('clock').textContent=
-    new Date().toLocaleTimeString('en-US',{timeZone:'America/New_York',hour:'2-digit',minute:'2-digit',second:'2-digit'})+' ET';
+    new Date().toLocaleTimeString('en-US',{timeZone:'America/New_York',hour:'2-digit',minute:'2-digit'})+' ET';
 }
 setInterval(updateClock,1000);updateClock();
 
