@@ -174,7 +174,7 @@ module.exports = async function handler(req, res) {
       return res.status(200).json({ gainers, losers });
 
     // ── OPTIONS CHAIN ───────────────────────────────────────────────
-    } else if (type === 'options') {
+    } else if (type === 'options' || type === 'flow') {
       const rawSym = (req.query.symbol || '')
         .toUpperCase()
         .replace(/[^A-Z0-9.\-]/g, '')

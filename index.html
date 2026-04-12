@@ -1769,6 +1769,11 @@ footer{border-top:1px solid var(--border);padding:32px 0;margin-top:80px}
 
   <div class="stat-card sec-fade" style="padding:0;animation-delay:100ms">
     <div style="padding:24px 24px 16px">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:16px">
+        <input id="flow-symbol-input" type="text" value="SPY" placeholder="Symbol" style="font-family:var(--font-mono);font-size:13px;font-weight:700;padding:6px 12px;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg);color:var(--text);width:100px;text-transform:uppercase;letter-spacing:1px" />
+        <button onclick="buildFlowTable(document.getElementById('flow-symbol-input').value.trim().toUpperCase()||'SPY')" style="font-family:var(--font-mono);font-size:11px;padding:7px 14px;border:1px solid var(--gold);border-radius:var(--radius);background:var(--gold-dim);color:var(--gold);cursor:pointer;font-weight:600;letter-spacing:.5px">Scan</button>
+        <span style="font-family:var(--font-mono);font-size:10px;color:var(--text3)">Enter ticker to view options flow</span>
+      </div>
       <div class="flow-table-wrap">
         <table class="flow-table" id="flow-table">
           <thead>
