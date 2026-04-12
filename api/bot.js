@@ -4588,6 +4588,11 @@ module.exports = async function handler(req, res) {
     }
   }
 
+  // ── PING — lightweight health check for browser/cron (GET or POST) ──────────
+  if (type === 'ping') {
+    return res.status(200).json({ status: 'ok', killSwitch, capitalAmount, timestamp: new Date().toISOString() });
+  }
+
   // ── ORDER VALIDATION ─────────────────────────────────────────────────────────
   if (req.method !== 'POST') return res.status(405).json({ error: 'POST required' });
 
