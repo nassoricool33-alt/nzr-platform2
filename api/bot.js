@@ -3112,8 +3112,8 @@ async function manageOpenPositions() {
 
   // ── Position limit & drawdown gate ─────────────────────────────────────────
   let newEntriesAllowed = true;
-  if (positions.length >= 15) {
-    pushLog('MAX_POSITIONS: ' + positions.length + ' positions open, skipping new signals', 'warn');
+  if (positions.length >= 25) {
+    pushLog('MAX_POSITIONS: ' + positions.length + ' positions open (limit 25), skipping new signals', 'warn');
     newEntriesAllowed = false;
   }
   if (totalUnrealizedPct < -0.05) {
@@ -4610,8 +4610,13 @@ module.exports = async function handler(req, res) {
 
     for (const sig of topSignals) {
       if (!posMgmt.newEntriesAllowed) {
-        pushLog('SIGNAL_BLOCKED: ' + sig.symbol + ' — new entries paused (positions=' + posMgmt.openCount + ' drawdown=' + posMgmt.totalUnrealizedPct + '%)', 'warn');
-        continue;
+        // High conviction override: score >= 90 and under hard cap of 30 positions
+        if (sig.nrzScore >= 90 && posMgmt.openCount < 30) {
+          pushLog('HIGH_CONVICTION_OVERRIDE: ' + sig.symbol + ' score=' + sig.nrzScore + ' forcing entry despite max positions', 'pass');
+        } else {
+          pushLog('SIGNAL_BLOCKED: ' + sig.symbol + ' — new entries paused (positions=' + posMgmt.openCount + ' drawdown=' + posMgmt.totalUnrealizedPct + '%)', 'warn');
+          continue;
+        }
       }
       try {
         const posSize = dayAlloc * 0.10 * sig.sectorSizeMultiplier;
