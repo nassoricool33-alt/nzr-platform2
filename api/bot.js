@@ -2521,26 +2521,40 @@ async function getOptimizedStrategyWeights() {
   if (!supabaseUrl || !supabaseKey) return neutral;
 
   try {
-    const ctrl  = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 8000);
-    let resp;
-    try {
-      resp = await fetch(
-        `${supabaseUrl}/rest/v1/journal?select=pnl_pct,notes&pnl_pct=not.is.null&order=id.desc&limit=20`,
-        {
-          headers: {
-            'apikey':        supabaseKey,
-            'Authorization': `Bearer ${supabaseKey}`,
-            'Content-Type':  'application/json',
-          },
-          signal: ctrl.signal,
-        }
-      );
-    } finally { clearTimeout(timer); }
+    // Fetch last 50 trades — no strategy filter, include open trades
+    const { data: trades, error: tradeErr } = await supabase
+      .from('journal')
+      .select('symbol, pnl_pct, notes, trade_date')
+      .not('pnl_pct', 'is', null)
+      .order('trade_date', { ascending: false })
+      .limit(50);
 
-    if (!resp.ok) throw new Error(`Supabase HTTP ${resp.status}`);
-    const trades = await resp.json();
+    if (tradeErr) throw new Error('Supabase: ' + tradeErr.message);
     if (!Array.isArray(trades)) throw new Error('Unexpected response shape');
+
+    // If fewer than 5 closed trades, also count open trades for tradeCount
+    let totalTradeCount = trades.length;
+    if (trades.length < 5) {
+      const { data: openTrades } = await supabase
+        .from('journal')
+        .select('id')
+        .is('pnl_pct', null)
+        .limit(50);
+      totalTradeCount = trades.length + (openTrades ? openTrades.length : 0);
+    }
+
+    // ── Parse strategy from notes field ────────────────────────────────────
+    function parseStrategy(notes) {
+      if (!notes) return 'COMBINED';
+      const n = notes.toUpperCase();
+      if (n.includes('MACD'))                          return 'MACD';
+      if (n.includes('RSI'))                           return 'RSI';
+      if (n.includes('EMA2050') || n.includes('EMA 20/50'))   return 'EMA2050';
+      if (n.includes('EMA60200') || n.includes('EMA 60/200')) return 'EMA60200';
+      if (n.includes('COMBINED'))                      return 'COMBINED';
+      if (n.includes('BACKFILLED') || n.includes('BOT:'))     return 'COMBINED';
+      return 'COMBINED';
+    }
 
     // ── Aggregate per strategy ──────────────────────────────────────────────
     const agg = {};
@@ -2549,9 +2563,7 @@ async function getOptimizedStrategyWeights() {
     for (const t of trades) {
       const pnl = parseFloat(t.pnl_pct);
       if (!isFinite(pnl)) continue;
-      const match = (t.notes || '').match(/^Bot:\s+(\w+)\s+NZR=/);
-      if (!match) continue;
-      const s = match[1];
+      const s = parseStrategy(t.notes);
       if (!agg[s]) continue;
       agg[s].total++;
       agg[s].sumPnl += pnl;
@@ -2595,10 +2607,10 @@ async function getOptimizedStrategyWeights() {
       ...weights,
       perfStats,
       computedAt: new Date().toISOString(),
-      tradeCount: trades.length,
+      tradeCount: totalTradeCount,
     };
     strategyWeightsCache = { ts: Date.now(), result };
-    console.log(`[bot] STRATEGY_WEIGHTS computed from ${trades.length} trades: ${STRATEGIES.map(s => `${s}=${weights[s]}`).join(' ')}`);
+    console.log(`[bot] STRATEGY_WEIGHTS computed from ${trades.length} trades (total=${totalTradeCount}): ${STRATEGIES.map(s => `${s}=${weights[s]}`).join(' ')}`);
     return result;
   } catch (err) {
     console.warn('[bot] STRATEGY_WEIGHTS error:', err.message);
