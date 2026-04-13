@@ -4549,7 +4549,7 @@ module.exports = async function handler(req, res) {
       const sbUrl  = process.env.SUPABASE_URL;
       const sbHdrs = _sbHeaders();
       if (sbUrl && sbHdrs) {
-        const idxResp = await fetch(`${sbUrl}/rest/v1/bot_state?key=eq.last_scan_index&select=value`, { headers: sbHdrs });
+        const idxResp = await fetch(`${sbUrl}/rest/v1/bot_state?key=eq.scan_batch_index&select=value`, { headers: sbHdrs });
         const idxRows = await idxResp.json().catch(() => []);
         if (Array.isArray(idxRows) && idxRows.length) {
           scanStartIndex = parseInt(idxRows[0].value, 10) || 0;
@@ -4560,11 +4560,11 @@ module.exports = async function handler(req, res) {
 
     const scanEndIndex = Math.min(scanStartIndex + SYMBOLS_PER_CYCLE, SCAN_UNIVERSE.length);
     const scanSlice = SCAN_UNIVERSE.slice(scanStartIndex, scanEndIndex);
-    pushLog('ROTATING_SCAN: symbols ' + scanStartIndex + '-' + (scanEndIndex - 1) + ' of ' + SCAN_UNIVERSE.length, 'info');
+    pushLog('BATCH_SCAN: symbols ' + scanStartIndex + '-' + (scanEndIndex - 1) + ' of ' + SCAN_UNIVERSE.length, 'info');
 
     // Save next scan index for next cycle
     const nextIndex = scanEndIndex >= SCAN_UNIVERSE.length ? 0 : scanEndIndex;
-    writeBotState('last_scan_index', String(nextIndex));
+    writeBotState('scan_batch_index', String(nextIndex));
 
     // ── Process symbols in parallel batches of 5 ─────────────────────────────
     const BATCH_SIZE = 5;

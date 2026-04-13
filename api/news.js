@@ -281,8 +281,20 @@ Headlines:\n${headlineList}`;
     ? headlines.find(h => h.analysis.pauseTrading)?.title ?? 'Breaking news'
     : null;
 
+  // Build normalized news array for frontend consumption
+  const news = headlines.map(h => ({
+    headline: h.title,
+    source:   h.source,
+    url:      h.url,
+    datetime: h.datetime,
+    summary:  h.analysis?.reason || '',
+    tickers:  h.tickers || [],
+  }));
+
   const result = {
     headlines,
+    news,
+    count: news.length,
     marketPauseRecommended,
     pauseReason,
     highImpactCount: highImpact.length,
@@ -294,6 +306,86 @@ Headlines:\n${headlineList}`;
 
   breakingNewsCache = { ts: Date.now(), result };
   console.log(`[news/breaking] ${headlines.length} headlines, ${highImpact.length} high-impact, pauseRecommended=${marketPauseRecommended}`);
+  return result;
+}
+
+// ─── SECTOR NEWS IMPACT ──────────────────────────────────────────────────
+
+let sectorImpactCache = null;
+const SECTOR_IMPACT_CACHE_TTL = 10 * 60 * 1000; // 10 minutes
+
+async function handleSectorImpact(polygonKey) {
+  if (sectorImpactCache && (Date.now() - sectorImpactCache.ts) < SECTOR_IMPACT_CACHE_TTL) {
+    console.log('[news/sectorimpact] cache hit');
+    return sectorImpactCache.result;
+  }
+
+  const SECTOR_ETFS = [
+    { etf: 'XLK', sector: 'Technology' },
+    { etf: 'XLF', sector: 'Financials' },
+    { etf: 'XLV', sector: 'Healthcare' },
+    { etf: 'XLE', sector: 'Energy' },
+    { etf: 'XLY', sector: 'Consumer Discretionary' },
+    { etf: 'XLI', sector: 'Industrials' },
+  ];
+
+  // Fetch news for each sector ETF in parallel
+  const fetches = SECTOR_ETFS.map(async ({ etf, sector }) => {
+    try {
+      const data = await withTimeout(
+        httpsGet(`https://api.polygon.io/v2/reference/news?ticker=${etf}&limit=5&order=desc&sort=published_utc&apiKey=${polygonKey}`),
+        6000,
+        null
+      );
+      const articles = data?.results ?? [];
+      const headlines = articles.map(n => n.title).filter(Boolean);
+      return { etf, sector, headlines, topHeadline: headlines[0] || null };
+    } catch (err) {
+      console.error(`[news/sectorimpact] ${etf} fetch error:`, err.message);
+      return { etf, sector, headlines: [], topHeadline: null };
+    }
+  });
+
+  const sectorData = await Promise.all(fetches);
+
+  // Score each sector using Claude if available
+  const anthropicKey = process.env.ANTHROPIC_API_KEY;
+  if (anthropicKey) {
+    const sectorSummary = sectorData
+      .filter(s => s.headlines.length > 0)
+      .map(s => `${s.etf} (${s.sector}): ${s.headlines.slice(0, 3).join(' | ')}`)
+      .join('\n');
+
+    if (sectorSummary) {
+      const prompt = `Analyze these sector news headlines and return ONLY valid JSON array (no markdown, no explanation). For each sector, score sentiment as BULLISH, BEARISH, or NEUTRAL with a confidence score 1-10:
+[{"etf":"XLK","sentiment":"BULLISH","score":7},...]
+Sectors:\n${sectorSummary}`;
+
+      const result = await callClaude(prompt, 300);
+      if (Array.isArray(result)) {
+        for (const item of result) {
+          const match = sectorData.find(s => s.etf === item.etf);
+          if (match) {
+            match.sentiment = item.sentiment || 'NEUTRAL';
+            match.score = Math.max(1, Math.min(10, Number(item.score) || 5));
+          }
+        }
+      }
+    }
+  }
+
+  // Fill defaults for any sectors without Claude scoring
+  const sectors = sectorData.map(s => ({
+    sector:      s.sector,
+    etf:         s.etf,
+    sentiment:   s.sentiment || 'NEUTRAL',
+    score:       s.score || 5,
+    topHeadline: s.topHeadline,
+  }));
+
+  const result = { sectors, analyzedAt: new Date().toISOString() };
+  sectorImpactCache = { ts: Date.now(), result };
+  console.log(`[news/sectorimpact] ${sectors.length} sectors analyzed`);
   return result;
 }
 
@@ -359,9 +451,10 @@ Headlines: ${headlineList.join(' | ')}`;
 }
 
 module.exports = async function handler(req, res) {
+  const isBreaking = (req.query.type || 'market') === 'breaking';
   const _deadline = setTimeout(() => {
-    if (!res.headersSent) res.status(200).json({ error: 'timeout', news: [] });
-  }, 8000);
+    if (!res.headersSent) res.status(200).json({ error: 'timeout', news: [], headlines: [] });
+  }, isBreaking ? 25000 : 8000);
 
   const origin = req.headers.origin || '';
   if (ALLOWED_ORIGINS.includes(origin)) {
@@ -393,6 +486,12 @@ module.exports = async function handler(req, res) {
     if (type === 'georisk') {
       if (!polygonKey) return res.status(500).json({ error: 'Not configured' });
       const result = await handleGeoRisk(polygonKey);
+      return res.status(200).json(result);
+    }
+
+    if (type === 'sectorimpact') {
+      if (!polygonKey) return res.status(500).json({ error: 'Not configured' });
+      const result = await handleSectorImpact(polygonKey);
       return res.status(200).json(result);
     }
 

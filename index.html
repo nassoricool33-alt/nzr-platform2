@@ -1550,16 +1550,16 @@ footer{border-top:1px solid var(--border);padding:32px 0;margin-top:80px}
     <div class="section-title">My <span>Portfolio</span></div>
   </div>
 
-  <!-- signed-out prompt -->
-  <div id="pf-signin-prompt" class="auth-prompt sec-fade" style="animation-delay:100ms">
+  <!-- signed-out prompt (only for manual positions, Alpaca loads without auth) -->
+  <div id="pf-signin-prompt" class="auth-prompt sec-fade" style="animation-delay:100ms;display:none">
     <div class="auth-prompt-icon">🔒</div>
-    <div class="auth-prompt-title">Sign in to track your portfolio</div>
-    <div class="auth-prompt-desc">Log your positions and track performance over time. Sign in to save your portfolio, view P&amp;L, and get AI insights on your holdings.</div>
+    <div class="auth-prompt-title">Sign in to add manual positions</div>
+    <div class="auth-prompt-desc">Sign in to save manual positions, view P&amp;L history, and get AI insights on your holdings.</div>
     <button class="auth-prompt-btn" onclick="openAuthModal()">Sign in to continue</button>
   </div>
 
-  <!-- signed-in content -->
-  <div id="pf-content" style="display:none">
+  <!-- portfolio content (Alpaca always visible, manual positions need sign-in) -->
+  <div id="pf-content" style="display:block">
     <!-- Alpaca Live Positions -->
     <div id="pf-alpaca-summary" class="stat-card sec-fade" style="padding:20px 24px;margin-bottom:16px;display:none">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
@@ -1580,7 +1580,8 @@ footer{border-top:1px solid var(--border);padding:32px 0;margin-top:80px}
       </div>
     </div>
 
-    <!-- Manual Positions -->
+    <!-- Manual Positions (requires sign-in) -->
+    <div id="pf-manual-section" style="display:none">
     <div class="stat-card sec-fade" style="padding:20px 24px;margin-bottom:16px">
       <div style="font-family:var(--font-mono);font-size:10px;color:var(--text3);letter-spacing:1px;text-transform:uppercase;margin-bottom:4px">Add Manual Position</div>
       <div style="font-family:var(--font-body);font-size:11px;color:var(--text3);margin-bottom:14px">Manual positions are separate from your connected Alpaca account</div>
@@ -1605,6 +1606,7 @@ footer{border-top:1px solid var(--border);padding:32px 0;margin-top:80px}
       <div id="pf-table-wrap">
         <div style="padding:28px;text-align:center;font-family:var(--font-mono);font-size:11px;color:var(--text3)">Loading…</div>
       </div>
+    </div>
     </div>
   </div>
 </div>
@@ -2341,7 +2343,7 @@ function showPage(id){
   if(id==='bot'){ startBotLogPolling(); loadStrategyWeights(); pollStatus(); }
   if(id==='markets'){ buildSectorRotation(); }
   if(id==='watchlist'&&currentUser){ loadWatchlist(currentUser.id); }
-  if(id==='portfolio'&&currentUser){ loadPortfolio(currentUser.id); }
+  if(id==='portfolio'){ loadAlpacaPositions(); startPortfolioAutoRefresh(); if(currentUser) loadPortfolio(currentUser.id); }
   if(id==='journal'&&currentUser){ loadJournal(currentUser.id); }
   if(id==='dashboard'){ loadPerfSummary(); loadMarketIntelligence(); }
   if(id==='options'){ loadPelosiIntel(); fetchOptionsLog(); }
@@ -3215,28 +3217,30 @@ async function buildFlowTable(sym){
 
     // Rebuild header for movers view
     const thead=tbody.parentElement.querySelector('thead tr');
-    if(thead)thead.innerHTML='<th style="padding:8px 14px;text-align:left;color:var(--text3);font-weight:500;font-size:10px">Symbol</th><th style="padding:8px 10px;text-align:right;color:var(--text3);font-weight:500;font-size:10px">Price</th><th style="padding:8px 10px;text-align:right;color:var(--text3);font-weight:500;font-size:10px">Change %</th><th style="padding:8px 10px;text-align:center;color:var(--text3);font-weight:500;font-size:10px">Signal</th>';
+    if(thead)thead.innerHTML='<th style="padding:8px 14px;text-align:left;color:var(--text3);font-weight:500;font-size:10px">Symbol</th><th style="padding:8px 10px;text-align:right;color:var(--text3);font-weight:500;font-size:10px">Price</th><th style="padding:8px 10px;text-align:right;color:var(--text3);font-weight:500;font-size:10px">Change %</th><th style="padding:8px 10px;text-align:right;color:var(--text3);font-weight:500;font-size:10px">Volume</th><th style="padding:8px 10px;text-align:center;color:var(--text3);font-weight:500;font-size:10px">Signal</th>';
 
     tbody.innerHTML=all.map(m=>{
       const chg=m.changePercent!=null?Number(m.changePercent):0;
       const chgColor=chg>=0?'var(--green)':'var(--red)';
       const sigColor=m.direction==='BULLISH'?'var(--green)':'var(--red)';
       const sigBg=m.direction==='BULLISH'?'var(--green-dim)':'var(--red-dim)';
+      const vol=m.volume!=null?Number(m.volume):0;
+      const volStr=vol>=1e6?(vol/1e6).toFixed(1)+'M':vol>=1e3?(vol/1e3).toFixed(0)+'K':vol.toString();
       return`<tr style="border-bottom:1px solid var(--border)">
         <td style="padding:10px 14px;font-weight:700;color:var(--text);font-family:var(--font-mono)">${m.symbol||'--'}</td>
         <td style="padding:10px 10px;text-align:right;color:var(--text2);font-family:var(--font-mono)">${m.price!=null?'$'+Number(m.price).toFixed(2):'--'}</td>
         <td style="padding:10px 10px;text-align:right;font-weight:600;color:${chgColor};font-family:var(--font-mono)">${chg>=0?'+':''}${chg.toFixed(2)}%</td>
+        <td style="padding:10px 10px;text-align:right;color:var(--text2);font-family:var(--font-mono)">${volStr}</td>
         <td style="padding:10px 10px;text-align:center"><span style="font-size:9px;font-weight:700;padding:3px 10px;border-radius:99px;background:${sigBg};color:${sigColor};letter-spacing:.3px">${m.direction}</span></td>
       </tr>`;
     }).join('');
-    if(note)note.innerHTML='<span style="color:var(--gold);font-size:10px">Options contract data requires Polygon Options add-on. Showing unusual volume data instead.</span><br><span style="color:var(--text3);font-size:10px;margin-top:4px;display:inline-block">Upgrade Polygon plan to see full options chain data including strikes, premiums, and open interest</span>';
+    if(note)note.innerHTML='<span style="color:var(--gold);font-size:10px">Showing unusual volume activity — upgrade Polygon for full options flow</span>';
   }catch(me){
-    tbody.innerHTML=`<tr><td colspan="9"><div class="empty-state" style="padding:36px 0">
-      <div class="empty-title" style="font-family:var(--font-mono);font-size:12px;color:var(--text3)">Options contract data requires Polygon Options add-on</div>
-      <div class="empty-desc" style="font-family:var(--font-body);font-size:12px;color:var(--text3);margin-top:8px">Showing unusual volume data instead — but movers data is also currently unavailable.</div>
-      <div style="font-family:var(--font-mono);font-size:10px;color:var(--gold);margin-top:12px">Upgrade Polygon plan to see full options chain data including strikes, premiums, and open interest</div>
+    tbody.innerHTML=`<tr><td colspan="5"><div style="padding:36px 20px;text-align:center">
+      <div style="font-family:var(--font-mono);font-size:12px;color:var(--text3)">No unusual activity data available right now</div>
+      <div style="font-family:var(--font-mono);font-size:10px;color:var(--gold);margin-top:10px">Showing unusual volume activity — upgrade Polygon for full options flow</div>
     </div></td></tr>`;
-    if(note)note.textContent='';
+    if(note)note.innerHTML='<span style="color:var(--gold);font-size:10px">Showing unusual volume activity — upgrade Polygon for full options flow</span>';
   }
 }
 buildFlowTable('SPY');
@@ -3869,6 +3873,7 @@ async function loadAlpacaPositions() {
   const table = document.getElementById('pf-alpaca-table');
   const summary = document.getElementById('pf-alpaca-summary');
   if (!table) return;
+  if (summary) summary.style.display = 'block';
   table.innerHTML = '<div style="padding:20px;text-align:center;font-family:var(--font-mono);font-size:11px;color:var(--text3)">Loading Alpaca positions…</div>';
   try {
     const resp = await fetch('/api/alpaca?type=positions');
@@ -4370,7 +4375,7 @@ function updateUIForSignedInUser(user){
   const show=id=>{const el=document.getElementById(id);if(el)el.style.display='block';};
   const hide=id=>{const el=document.getElementById(id);if(el)el.style.display='none';};
   hide('wl-signin-prompt'); show('wl-content');
-  hide('pf-signin-prompt'); show('pf-content');
+  hide('pf-signin-prompt'); show('pf-content'); show('pf-manual-section');
   hide('jn-signin-prompt'); show('jn-content');
   // Keep legacy auth-prompt-btn text updated for any remaining prompts
   document.querySelectorAll('.auth-prompt-btn').forEach(b=>{
@@ -4385,7 +4390,7 @@ function updateUIForSignedOutUser(){
   const show=id=>{const el=document.getElementById(id);if(el)el.style.display='';};
   const hide=id=>{const el=document.getElementById(id);if(el)el.style.display='none';};
   show('wl-signin-prompt'); hide('wl-content');
-  show('pf-signin-prompt'); hide('pf-content');
+  show('pf-signin-prompt'); hide('pf-manual-section');
   show('jn-signin-prompt'); hide('jn-content');
   document.querySelectorAll('.auth-prompt-btn').forEach(b=>{
     b.textContent='Sign in to continue';
@@ -6768,15 +6773,40 @@ async function loadMarketIntelligence() {
 
   // ── Sector impact tile ────────────────────────────────────────────────────
   const sectorsEl = document.getElementById('intel-sectors');
-  if (sectorsEl && brk) {
-    const lines = [];
-    for (const s of (brk.bearishSectors ?? []).slice(0,4))
-      lines.push(`<span style="color:var(--red)">▼ ${s}</span>`);
-    for (const s of (brk.bullishSectors ?? []).slice(0,4))
-      lines.push(`<span style="color:var(--green)">▲ ${s}</span>`);
-    sectorsEl.innerHTML = lines.length
-      ? lines.join('<span style="color:var(--border);margin:0 6px">|</span>')
-      : '<span style="color:var(--text3)">No sector impact detected</span>';
+  if (sectorsEl) {
+    // Try dedicated sector impact endpoint first
+    try {
+      const sectorRes = await fetch('/api/news?type=sectorimpact');
+      if (sectorRes.ok) {
+        const sectorData = await sectorRes.json();
+        if (sectorData.sectors && sectorData.sectors.length) {
+          sectorsEl.innerHTML = sectorData.sectors.map(s => {
+            const icon = s.sentiment === 'BULLISH' ? '▲' : s.sentiment === 'BEARISH' ? '▼' : '→';
+            const color = s.sentiment === 'BULLISH' ? 'var(--green)' : s.sentiment === 'BEARISH' ? 'var(--red)' : 'var(--text3)';
+            const title = s.topHeadline ? ` title="${s.topHeadline.replace(/"/g, '&quot;')}"` : '';
+            return `<span style="color:${color};cursor:default"${title}>${icon} ${s.etf}</span>`;
+          }).join('<span style="color:var(--border);margin:0 6px">|</span>');
+        } else {
+          throw new Error('empty');
+        }
+      } else {
+        throw new Error('fetch failed');
+      }
+    } catch(_) {
+      // Fallback to breaking news sector data
+      if (brk) {
+        const lines = [];
+        for (const s of (brk.bearishSectors ?? []).slice(0,4))
+          lines.push(`<span style="color:var(--red)">▼ ${s}</span>`);
+        for (const s of (brk.bullishSectors ?? []).slice(0,4))
+          lines.push(`<span style="color:var(--green)">▲ ${s}</span>`);
+        sectorsEl.innerHTML = lines.length
+          ? lines.join('<span style="color:var(--border);margin:0 6px">|</span>')
+          : '<span style="color:var(--text3)">No sector impact detected</span>';
+      } else {
+        sectorsEl.innerHTML = '<span style="color:var(--text3)">No sector impact detected</span>';
+      }
+    }
   }
 
   // ── Trading halt banner ────────────────────────────────────────────────────
@@ -6795,14 +6825,17 @@ async function loadMarketIntelligence() {
   // ── Breaking news count ────────────────────────────────────────────────────
   const countEl = document.getElementById('intel-news-count');
   if (countEl && brk) {
-    countEl.textContent = `${brk.highImpactCount ?? 0} high-impact · ${(brk.headlines ?? []).length} total`;
+    const totalItems = (brk.headlines ?? brk.news ?? []).length;
+    countEl.textContent = `${brk.highImpactCount ?? 0} high-impact · ${totalItems} total`;
   }
 
   // ── News list (last 5 breaking items) ────────────────────────────────────
   const listEl = document.getElementById('intel-news-list');
-  if (listEl && brk && Array.isArray(brk.headlines) && brk.headlines.length) {
-    const top5 = brk.headlines.slice(0, 5);
+  const brkItems = brk?.headlines ?? brk?.news ?? [];
+  if (listEl && brkItems.length) {
+    const top5 = brkItems.slice(0, 5);
     listEl.innerHTML = top5.map(h => {
+      const title = h.title || h.headline || '';
       const impact    = h.analysis?.impact ?? 'low';
       const direction = h.analysis?.direction ?? 'neutral';
       const impactColor = impact === 'high' ? 'var(--red)' : impact === 'medium' ? 'var(--gold)' : 'var(--text3)';
@@ -6814,14 +6847,15 @@ async function loadMarketIntelligence() {
       const impBadge = `<span style="background:${impactColor};color:#fff;font-size:9px;padding:1px 6px;border-radius:3px;text-transform:uppercase;letter-spacing:.5px">${impact}</span>`;
       const geo_ = h.analysis?.isGeopolitical ? `<span style="font-size:9px;color:var(--gold);margin-left:4px">🌐 geo</span>` : '';
       const ts   = h.datetime ? new Date(h.datetime).toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'}) : '';
+      const reason = h.analysis?.reason || h.summary || '';
       return `<div style="padding:11px 20px;border-bottom:1px solid var(--border);display:flex;flex-direction:column;gap:4px">
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
           ${impBadge}${geo_}
           ${dirBadge}
           <span style="font-family:var(--font-mono);font-size:9px;color:var(--text3);margin-left:auto">${ts}</span>
         </div>
-        <div style="font-family:var(--font-body);font-size:12px;color:var(--text);line-height:1.4">${h.title ?? ''}</div>
-        ${h.analysis?.reason ? `<div style="font-family:var(--font-mono);font-size:10px;color:var(--text3);font-style:italic">${h.analysis.reason}</div>` : ''}
+        <div style="font-family:var(--font-body);font-size:12px;color:var(--text);line-height:1.4">${title}</div>
+        ${reason ? `<div style="font-family:var(--font-mono);font-size:10px;color:var(--text3);font-style:italic">${reason}</div>` : ''}
       </div>`;
     }).join('');
   } else if (listEl) {
