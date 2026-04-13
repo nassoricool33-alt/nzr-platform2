@@ -3190,6 +3190,7 @@ async function manageOpenPositions() {
   }
 
   let closed = 0, held = 0, trailUpdated = 0;
+  const closedThisCycle = new Set(); // Prevent duplicate close orders within same scan
 
   // ── 5. Evaluate each position ──────────────────────────────────────────────
   for (const pd of positionData) {
@@ -3281,6 +3282,29 @@ async function manageOpenPositions() {
 
     // ── Execute decision ─────────────────────────────────────────────────────
     if (action === 'CLOSE') {
+      // Guard: skip if already closed this cycle
+      if (closedThisCycle.has(symbol)) {
+        pushLog('POSITION_ALREADY_CLOSED: ' + symbol + ' skipping duplicate close', 'warn');
+        continue;
+      }
+
+      // Guard: verify position still exists on Alpaca before placing close order
+      let posStillExists = true;
+      try {
+        const checkCtrl = new AbortController();
+        const checkTimer = setTimeout(() => checkCtrl.abort(), 2000);
+        let checkResp;
+        try { checkResp = await fetch(`${ALPACA_BASE}/v2/positions/${encodeURIComponent(symbol)}`, { headers: alpacaHeaders, signal: checkCtrl.signal }); }
+        finally { clearTimeout(checkTimer); }
+        posStillExists = checkResp.ok;
+      } catch { posStillExists = false; }
+
+      if (!posStillExists) {
+        pushLog('POSITION_GONE: ' + symbol + ' already closed, skipping', 'warn');
+        closedThisCycle.add(symbol);
+        continue;
+      }
+
       pushLog('POSITION_CLOSE: ' + symbol + ' reason=' + reason + ' pnl=' + (unrealizedPct * 100).toFixed(1) + '%', unrealizedPct >= 0 ? 'pass' : 'warn');
       try {
         const closeSide = side === 'long' ? 'sell' : 'buy';
@@ -3305,6 +3329,7 @@ async function manageOpenPositions() {
 
         if (closeResp.ok) {
           closed++;
+          closedThisCycle.add(symbol);
           pushLog('POSITION_CLOSED_OK: ' + symbol + ' ' + closeSide + ' ' + Math.abs(qty) + ' shares', 'pass');
 
           // Update journal entry

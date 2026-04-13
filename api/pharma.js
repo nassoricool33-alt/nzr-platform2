@@ -27,6 +27,9 @@ const PHARMA_SYMBOLS = [
 
 const HALAL_VERIFIED = new Set(['MRNA','PFE','BIIB','GILD','AMGN','LLY','NVO','VRTX']);
 
+// ── Duplicate order prevention ───────────────────────────────────────────────
+let pharmaOrdersTracked = { date: '', symbols: new Set() };
+
 // ── FDA / PDUFA calendar — updated quarterly ──────────────────────────────────
 const FDA_HARDCODED = [
   { date: '2026-04-10', ticker: 'VRTX', drug: 'Suzetrigine',      indication: 'Acute Pain',            type: 'FDA Decision', phase: 'PDUFA',   halalStatus: 'VERIFIED' },
@@ -831,6 +834,15 @@ async function handleBotValidate(body, key) {
   const signal = await evalBotEntrySignal(sym, equity, key);
   if (signal.skip) return { ok: false, skipped: true, reason: signal.reason };
 
+  // Check if already own this symbol
+  try {
+    const posCheck = await alpacaReq('GET', '/v2/positions/' + encodeURIComponent(sym), null);
+    if (posCheck.status === 200) {
+      console.log('[pharma/validate] PHARMA_ALREADY_OWNED: ' + sym + ' skipping');
+      return { ok: false, skipped: true, reason: 'PHARMA_ALREADY_OWNED: ' + sym };
+    }
+  } catch { /* no position — OK */ }
+
   try {
     const orderBody = {
       symbol: sym, qty: signal.qty, side: 'buy', type: 'market',
@@ -902,6 +914,24 @@ async function executePharmaSignal(symbol, signal, capitalAmount) {
     return { skip: true, reason: 'No PDUFA within 7 days (daysUntil=' + days + ')' };
   }
 
+  // 1b. Check if already ordered this symbol today
+  const today = new Date().toISOString().split('T')[0];
+  if (pharmaOrdersTracked.date !== today) {
+    pharmaOrdersTracked = { date: today, symbols: new Set() };
+  }
+  if (pharmaOrdersTracked.symbols.has(sym)) {
+    return { skip: true, reason: 'PHARMA_ALREADY_ORDERED_TODAY: ' + sym + ' skipping duplicate' };
+  }
+
+  // 1c. Check if we already own this symbol on Alpaca
+  try {
+    const checkRes = await alpacaReq('GET', '/v2/positions/' + encodeURIComponent(sym), null);
+    if (checkRes.status === 200) {
+      console.log('[pharma/exec] PHARMA_ALREADY_OWNED: ' + sym + ' skipping');
+      return { skip: true, reason: 'PHARMA_ALREADY_OWNED: ' + sym + ' skipping' };
+    }
+  } catch { /* position doesn't exist — OK to proceed */ }
+
   // 2. Halal filter — skip excluded symbols
   const halalCheck = checkHalal(sym);
   if (!halalCheck.allowed) {
@@ -951,6 +981,7 @@ async function executePharmaSignal(symbol, signal, capitalAmount) {
     });
 
     if (orderRes.status === 200 || orderRes.status === 201) {
+      pharmaOrdersTracked.symbols.add(sym);
       console.log('[pharma/exec] ORDER_PLACED: ' + sym + ' ' + side + ' ' + qty + ' @ $' + price + ' SL=$' + stopLoss + ' TP=$' + takeProfit);
       return {
         skip: false,
@@ -978,6 +1009,7 @@ async function executePharmaSignal(symbol, signal, capitalAmount) {
         client_order_id: 'NZR-PHARMA-' + sym + '-' + Date.now()
       });
       if (simpleRes.status === 200 || simpleRes.status === 201) {
+        pharmaOrdersTracked.symbols.add(sym);
         console.log('[pharma/exec] SIMPLE_ORDER_PLACED: ' + sym + ' ' + side + ' ' + qty + ' @ $' + price);
         return {
           skip: false,

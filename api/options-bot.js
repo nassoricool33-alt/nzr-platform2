@@ -454,6 +454,32 @@ module.exports = async function handler(req, res) {
         } catch(e) {}
       }
 
+      // ── Fetch owned symbols to prevent duplicate buys ─────────────────────
+      let ownedSymbols = new Set();
+      try {
+        const posRes = await fetch('https://paper-api.alpaca.markets/v2/positions', {
+          headers: { 'APCA-API-KEY-ID': process.env.ALPACA_API_KEY, 'APCA-API-SECRET-KEY': process.env.ALPACA_SECRET_KEY }
+        });
+        if (posRes.ok) {
+          const positions = await posRes.json();
+          ownedSymbols = new Set(Array.isArray(positions) ? positions.map(p => p.symbol) : []);
+        }
+      } catch(e) { pushLog('OPTIONS_POS_CHECK_ERR: ' + e.message, 'warn'); }
+
+      // ── Daily order limit (max 3 per day) — load from Supabase ────────────
+      const today = new Date().toISOString().split('T')[0];
+      let dailyOrderCount = 0;
+      if (supabase) {
+        try {
+          const { data } = await supabase.from('bot_state').select('value').eq('key', 'options_orders_today').single();
+          if (data) {
+            const parsed = JSON.parse(data.value);
+            if (parsed.date === today) dailyOrderCount = parsed.count || 0;
+          }
+        } catch(e) {}
+      }
+      pushLog('OPTIONS_DAILY_ORDERS: ' + dailyOrderCount + '/3 today, owned=' + ownedSymbols.size + ' symbols', 'info');
+
       let symbolsScanned = 0, signalsFound = 0, ordersPlaced = 0;
       const results = [];
 
@@ -472,16 +498,33 @@ module.exports = async function handler(req, res) {
             // Pre-market mode: score but don't place orders
             if (!isMarketOpen) continue;
 
+            // Daily order limit check
+            if (dailyOrderCount >= 3) {
+              pushLog('OPTIONS_DAILY_LIMIT: ' + signal.symbol + ' skipping — already placed ' + dailyOrderCount + '/3 orders today', 'warn');
+              continue;
+            }
+
+            // Duplicate ownership check
+            if (ownedSymbols.has(signal.symbol)) {
+              pushLog('OPTIONS_ALREADY_OWNED: ' + signal.symbol + ' skipping duplicate buy', 'warn');
+              continue;
+            }
+
             const priceData = await fetchWithTimeout('https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers/' + signal.symbol + '?apiKey=' + process.env.POLYGON_API_KEY);
             const currentPrice = priceData?.ticker?.day?.c || priceData?.ticker?.lastTrade?.p || 100;
             const contract = await selectOptionsContract(signal.symbol, signal.direction, signal.daysToPlay, currentPrice);
             if (contract) {
               const order = await executeOptionsOrder(contract, signal, capitalAmount);
-              if (order) ordersPlaced++;
+              if (order) { ordersPlaced++; dailyOrderCount++; ownedSymbols.add(signal.symbol); }
             } else {
-              // Equity fallback for both calls and puts
-              const fbOrder = await placeEquityFallback(signal, capitalAmount);
-              if (fbOrder) ordersPlaced++;
+              // Equity fallback — also check ownership for the buy symbol
+              const fbSymbol = signal.direction === 'calls' ? signal.symbol : (INVERSE_ETF_MAP[signal.symbol] || null);
+              if (fbSymbol && ownedSymbols.has(fbSymbol)) {
+                pushLog('OPTIONS_ALREADY_OWNED: ' + fbSymbol + ' skipping duplicate equity fallback', 'warn');
+              } else {
+                const fbOrder = await placeEquityFallback(signal, capitalAmount);
+                if (fbOrder) { ordersPlaced++; dailyOrderCount++; if (fbSymbol) ownedSymbols.add(fbSymbol); }
+              }
             }
           }
         }
@@ -490,12 +533,16 @@ module.exports = async function handler(req, res) {
       // Cache signals for status endpoint and pre-market use
       lastSignals = results;
 
-      // Track daily order count
-      const today = new Date().toISOString().split('T')[0];
+      // Track daily order count (in-memory + Supabase)
       if (ordersPlacedToday.date !== today) {
         ordersPlacedToday = { date: today, count: ordersPlaced };
       } else {
         ordersPlacedToday.count += ordersPlaced;
+      }
+      if (supabase) {
+        try {
+          await supabase.from('bot_state').upsert({ key: 'options_orders_today', value: JSON.stringify({ date: today, count: dailyOrderCount }) });
+        } catch(e) {}
       }
 
       // Pre-market: cache top signals to Supabase for market-open firing
@@ -518,15 +565,21 @@ module.exports = async function handler(req, res) {
             if (Array.isArray(cached) && cached.length > 0) {
               pushLog('PREMARKET_FIRE: executing ' + cached.length + ' cached signals', 'info');
               for (const signal of cached) {
+                if (dailyOrderCount >= 3) { pushLog('OPTIONS_DAILY_LIMIT: premarket fire stopped at ' + dailyOrderCount + '/3', 'warn'); break; }
+                if (ownedSymbols.has(signal.symbol)) { pushLog('OPTIONS_ALREADY_OWNED: ' + signal.symbol + ' skipping premarket fire', 'warn'); continue; }
                 const priceData = await fetchWithTimeout('https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers/' + signal.symbol + '?apiKey=' + process.env.POLYGON_API_KEY);
                 const currentPrice = priceData?.ticker?.day?.c || priceData?.ticker?.lastTrade?.p || 100;
                 const contract = await selectOptionsContract(signal.symbol, signal.direction, signal.daysToPlay, currentPrice);
                 if (contract) {
                   const order = await executeOptionsOrder(contract, signal, capitalAmount);
-                  if (order) ordersPlaced++;
+                  if (order) { ordersPlaced++; dailyOrderCount++; ownedSymbols.add(signal.symbol); }
                 } else {
-                  const fbOrder = await placeEquityFallback(signal, capitalAmount);
-                  if (fbOrder) ordersPlaced++;
+                  const fbSymbol = signal.direction === 'calls' ? signal.symbol : (INVERSE_ETF_MAP[signal.symbol] || null);
+                  if (fbSymbol && ownedSymbols.has(fbSymbol)) { pushLog('OPTIONS_ALREADY_OWNED: ' + fbSymbol + ' skipping premarket equity fallback', 'warn'); }
+                  else {
+                    const fbOrder = await placeEquityFallback(signal, capitalAmount);
+                    if (fbOrder) { ordersPlaced++; dailyOrderCount++; if (fbSymbol) ownedSymbols.add(fbSymbol); }
+                  }
                 }
               }
               // Clear cached signals after firing
