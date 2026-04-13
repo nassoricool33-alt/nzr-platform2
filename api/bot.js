@@ -4275,6 +4275,70 @@ module.exports = async function handler(req, res) {
   // TYPE-BASED ROUTES — checked FIRST, before any action or status catch-all
   // ══════════════════════════════════════════════════════════════════════════════
 
+  // ── EMERGENCY CLEANUP — one-time fix for duplicate positions ────────────────
+  if (type === 'emergency') {
+    const alpacaHdrs = { 'APCA-API-KEY-ID': process.env.ALPACA_API_KEY, 'APCA-API-SECRET-KEY': process.env.ALPACA_SECRET_KEY, 'Content-Type': 'application/json' };
+    const fixes = [];
+
+    // Fix 1: Close ORCL short position (duplicate sells created a short)
+    try {
+      const orclRes = await fetch('https://paper-api.alpaca.markets/v2/positions/ORCL', { headers: alpacaHdrs });
+      if (orclRes.ok) {
+        const orclPos = await orclRes.json();
+        if (parseFloat(orclPos.qty) < 0) {
+          const closeRes = await fetch('https://paper-api.alpaca.markets/v2/positions/ORCL', { method: 'DELETE', headers: alpacaHdrs });
+          fixes.push({ symbol: 'ORCL', action: 'closed short', status: closeRes.ok ? 'done' : 'failed' });
+        } else {
+          fixes.push({ symbol: 'ORCL', action: 'not short, skipped' });
+        }
+      } else {
+        fixes.push({ symbol: 'ORCL', action: 'no position found' });
+      }
+    } catch(e) { fixes.push({ symbol: 'ORCL', error: e.message }); }
+
+    // Fix 2: Close all SH (inverse ETF — not wanted)
+    try {
+      const shRes = await fetch('https://paper-api.alpaca.markets/v2/positions/SH', { method: 'DELETE', headers: alpacaHdrs });
+      fixes.push({ symbol: 'SH', action: 'closed all', status: shRes.ok ? 'done' : 'failed' });
+    } catch(e) { fixes.push({ symbol: 'SH', error: e.message }); }
+
+    // Fix 3: Close all PSQ (inverse ETF — not wanted)
+    try {
+      const psqRes = await fetch('https://paper-api.alpaca.markets/v2/positions/PSQ', { method: 'DELETE', headers: alpacaHdrs });
+      fixes.push({ symbol: 'PSQ', action: 'closed all', status: psqRes.ok ? 'done' : 'failed' });
+    } catch(e) { fixes.push({ symbol: 'PSQ', error: e.message }); }
+
+    // Fix 4: Sell 75 excess GOOGL shares (90 → 15)
+    try {
+      const googlRes = await fetch('https://paper-api.alpaca.markets/v2/orders', {
+        method: 'POST', headers: alpacaHdrs,
+        body: JSON.stringify({ symbol: 'GOOGL', qty: '75', side: 'sell', type: 'market', time_in_force: 'day' })
+      });
+      fixes.push({ symbol: 'GOOGL', action: 'sold 75 excess', status: googlRes.ok ? 'done' : 'failed' });
+    } catch(e) { fixes.push({ symbol: 'GOOGL', error: e.message }); }
+
+    // Fix 5: Sell 78 excess NVDA shares (100 → 22)
+    try {
+      const nvdaRes = await fetch('https://paper-api.alpaca.markets/v2/orders', {
+        method: 'POST', headers: alpacaHdrs,
+        body: JSON.stringify({ symbol: 'NVDA', qty: '78', side: 'sell', type: 'market', time_in_force: 'day' })
+      });
+      fixes.push({ symbol: 'NVDA', action: 'sold 78 excess', status: nvdaRes.ok ? 'done' : 'failed' });
+    } catch(e) { fixes.push({ symbol: 'NVDA', error: e.message }); }
+
+    // Fix 6: Sell 120 excess MRNA shares (179 → 59)
+    try {
+      const mrnaRes = await fetch('https://paper-api.alpaca.markets/v2/orders', {
+        method: 'POST', headers: alpacaHdrs,
+        body: JSON.stringify({ symbol: 'MRNA', qty: '120', side: 'sell', type: 'market', time_in_force: 'day' })
+      });
+      fixes.push({ symbol: 'MRNA', action: 'sold 120 excess', status: mrnaRes.ok ? 'done' : 'failed' });
+    } catch(e) { fixes.push({ symbol: 'MRNA', error: e.message }); }
+
+    pushLog('EMERGENCY_CLEANUP: ' + fixes.length + ' fixes applied', 'warn');
+    return res.json({ success: true, fixes });
+  }
+
   // ── FULL SCAN (synchronous — 20s budget, 15 symbols/cycle rotation) ────────
   if (type === 'scan') {
     if (global.scanInProgress) {
