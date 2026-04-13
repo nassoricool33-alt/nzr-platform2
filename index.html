@@ -3781,6 +3781,30 @@ function appendChat(role,text){
   chatMessages.scrollTop=chatMessages.scrollHeight;
 }
 
+const NZR_CHAT_SYSTEM = 'You are NZR Trading AI, an intelligent trading assistant integrated into the NZR platform. You have access to real market context. When users ask about stock prices or trading, always:\n1. Acknowledge you can fetch live data from the NZR platform\n2. Reference the user\'s actual portfolio positions if relevant\n3. Give specific, actionable trading advice based on technical analysis\n4. Never say you don\'t have access to real-time data — instead direct users to the live quote tool\n\nWhen a user asks about a stock price like AMZN, respond with something like:\n"Let me pull the latest NZR data for AMZN. Based on our live feed: [price context]. Here is my technical read..."\n\nKeep responses concise (under 200 words), specific, and trading-focused. Write in clear, confident prose like a seasoned trading mentor.';
+
+function detectSymbols(text) {
+  const COMMON_WORDS = new Set(['THE','AND','FOR','ARE','BUT','NOT','YOU','ALL','CAN','HER','WAS','ONE','OUR','OUT','HAS','HIS','HOW','MAN','NEW','NOW','OLD','SEE','WAY','WHO','DID','GET','HIM','LET','SAY','SHE','TOO','USE','DAD','MOM','BUY','SELL','HOLD','LONG','SHORT','WHAT','WHEN','WITH','HAVE','THIS','WILL','YOUR','FROM','THEY','BEEN','CALL','COME','EACH','MAKE','LIKE','JUST','OVER','SUCH','TAKE','YEAR','THEM','SOME','TIME','VERY','THAN','LOOK','ONLY','INTO','MOST','ALSO','BACK','THAN','MUCH','GOOD','GIVE','MANY','WELL','THEN','ABOUT','THINK','WHICH','COULD','WHERE','WOULD','THERE','THEIR','THESE','OTHER','AFTER','RIGHT','THINK','BEING','THOSE','STILL','EVERY','NEVER','FIRST','STOCK','TRADE','PRICE','CHART','HIGH','LOW','OPEN','CLOSE','STOP','LOSS','GAIN','MOVE','DROP','RISE','PUMP','DUMP','PUSH','PULL','DOWN']);
+  const matches = text.match(/\b[A-Z]{2,5}\b/g) || [];
+  return [...new Set(matches.filter(w => !COMMON_WORDS.has(w)))].slice(0, 5);
+}
+
+async function fetchQuotesForChat(symbols) {
+  if (!symbols.length) return '';
+  const quotes = await Promise.all(symbols.map(async sym => {
+    try {
+      const r = await fetch('/api/quote?symbol=' + sym);
+      if (!r.ok) return null;
+      const d = await r.json();
+      if (!d.price) return null;
+      const vol = d.volume >= 1e6 ? (d.volume / 1e6).toFixed(1) + 'M' : d.volume >= 1e3 ? (d.volume / 1e3).toFixed(0) + 'K' : d.volume;
+      return sym + ' price=$' + d.price + ' change=' + (d.changePercent >= 0 ? '+' : '') + d.changePercent + '% volume=' + vol + (d.high ? ' high=$' + d.high : '') + (d.low ? ' low=$' + d.low : '');
+    } catch { return null; }
+  }));
+  const valid = quotes.filter(Boolean);
+  return valid.length ? '\n\nLive NZR data:\n' + valid.join('\n') : '';
+}
+
 async function sendChat(){
   const msg=chatInput.value.trim();
   if(!msg)return;
@@ -3792,15 +3816,17 @@ async function sendChat(){
   typingIndicator.classList.add('visible');
   chatMessages.scrollTop=chatMessages.scrollHeight;
 
-  const prompt=`You are the NZR AI trading assistant. A trader asks: "${msg}"
+  // Detect stock symbols and fetch live quotes
+  const symbols = detectSymbols(msg);
+  const liveData = await fetchQuotesForChat(symbols);
 
-Respond concisely and professionally. Focus on actionable market insights, strategy guidance, or education. If asked about a specific stock, provide a brief technical perspective. Keep responses under 200 words. Do not use bullet points excessively — write in clear, confident prose like a seasoned trading mentor.`;
+  const prompt = 'User question: ' + msg + liveData;
 
   try{
     const resp=await fetch('/api/analyze',{
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({max_tokens:400,messages:[{role:'user',content:prompt}]})
+      body:JSON.stringify({max_tokens:400,system:NZR_CHAT_SYSTEM,messages:[{role:'user',content:prompt}]})
     });
     if(!resp.ok){
       let errBody='';
