@@ -3353,42 +3353,76 @@ async function manageOpenPositions() {
  * with exit_price and pnl_pct.  Called at the start of every cron scan cycle.
  */
 async function updateClosedTrades() {
-  if (!supabase) { pushLog('JOURNAL_UPDATE_SKIP: Supabase not configured', 'warn'); return; }
   try {
-    const sb = supabase;
-    const today = new Date().toISOString().split('T')[0];
-    const ordersRes = await fetch('https://paper-api.alpaca.markets/v2/orders?status=closed&limit=50&after=' + today + 'T00:00:00Z', {
+    pushLog('UPDATE_PNL: starting', 'info');
+
+    // Fetch all orders from Alpaca
+    const alpacaRes = await fetch('https://paper-api.alpaca.markets/v2/orders?status=all&limit=500&direction=desc', {
       headers: {
         'APCA-API-KEY-ID': process.env.ALPACA_API_KEY,
         'APCA-API-SECRET-KEY': process.env.ALPACA_SECRET_KEY
       }
     });
-    const orders = await ordersRes.json();
-    if (!Array.isArray(orders)) return;
-    for (const order of orders) {
-      if (!order.client_order_id || !order.client_order_id.startsWith('NZR-')) continue;
-      if (!order.filled_avg_price) continue;
-      const symbol = order.symbol;
-      const exitPrice = parseFloat(order.filled_avg_price);
-      const { data: journalEntries } = await sb.from('journal')
-        .select('*')
-        .eq('symbol', symbol)
-        .eq('trade_date', today)
-        .is('exit_price', null)
-        .limit(1);
-      if (journalEntries && journalEntries.length > 0) {
-        const entry = journalEntries[0];
+    const orders = await alpacaRes.json();
+    if (!Array.isArray(orders)) { pushLog('UPDATE_PNL: no orders from Alpaca', 'warn'); return; }
+
+    // Get all filled sell orders
+    const sellOrders = orders.filter(o =>
+      o.side === 'sell' &&
+      o.status === 'filled' &&
+      o.filled_avg_price &&
+      parseFloat(o.filled_avg_price) > 0
+    );
+
+    pushLog('UPDATE_PNL: found ' + sellOrders.length + ' filled sell orders', 'info');
+
+    // Get all journal entries with no exit_price
+    const { data: openEntries, error: fetchError } = await supabase
+      .from('journal')
+      .select('*')
+      .is('exit_price', null)
+      .order('trade_date', { ascending: true });
+
+    if (fetchError) { pushLog('UPDATE_PNL: supabase error: ' + fetchError.message, 'warn'); return; }
+    if (!openEntries || openEntries.length === 0) { pushLog('UPDATE_PNL: no open journal entries to update', 'info'); return; }
+
+    pushLog('UPDATE_PNL: ' + openEntries.length + ' open journal entries to check', 'info');
+
+    let updated = 0;
+
+    for (const entry of openEntries) {
+      // Find matching sell order for this symbol
+      const matchingSell = sellOrders.find(o =>
+        o.symbol === entry.symbol &&
+        new Date(o.filled_at) > new Date(entry.trade_date)
+      );
+
+      if (matchingSell) {
         const entryPrice = parseFloat(entry.entry_price);
-        const pnlPct = ((exitPrice - entryPrice) / entryPrice * 100).toFixed(2);
-        await sb.from('journal').update({
-          exit_price: exitPrice,
-          pnl_pct: parseFloat(pnlPct)
-        }).eq('id', entry.id);
-        pushLog('JOURNAL_UPDATED: ' + symbol + ' pnl=' + pnlPct + '%', 'info');
+        const exitPrice = parseFloat(matchingSell.filled_avg_price);
+        const pnlPct = ((exitPrice - entryPrice) / entryPrice * 100);
+
+        const { error: updateError } = await supabase
+          .from('journal')
+          .update({
+            exit_price: exitPrice,
+            pnl_pct: parseFloat(pnlPct.toFixed(2))
+          })
+          .eq('id', entry.id);
+
+        if (!updateError) {
+          updated++;
+          pushLog('PNL_UPDATED: ' + entry.symbol + ' entry=$' + entryPrice + ' exit=$' + exitPrice + ' pnl=' + pnlPct.toFixed(2) + '%', pnlPct > 0 ? 'pass' : 'warn');
+        } else {
+          pushLog('PNL_UPDATE_ERROR: ' + entry.symbol + ' — ' + updateError.message, 'warn');
+        }
       }
     }
+
+    pushLog('UPDATE_PNL_DONE: updated ' + updated + ' entries', 'info');
+
   } catch(e) {
-    pushLog('JOURNAL_UPDATE_ERROR: ' + e.message, 'warn');
+    pushLog('UPDATE_PNL_FATAL: ' + e.message, 'warn');
   }
 }
 
