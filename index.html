@@ -3999,7 +3999,7 @@ async function loadJournal(userId){
   wrap.innerHTML='<div style="padding:20px;text-align:center;font-family:var(--font-mono);font-size:11px;color:var(--text3)">Loading…</div>';
   try{
     const{data,error}=await supabaseClient
-      .from('journal').select('*').eq('user_id',userId).order('trade_date',{ascending:false});
+      .from('journal').select('*').or('user_id.eq.'+userId+',user_id.is.null').order('trade_date',{ascending:false});
     if(error)throw error;
     if(!data||data.length===0){
       wrap.innerHTML='<div style="padding:28px;text-align:center;font-family:var(--font-mono);font-size:11px;color:var(--text3)">No trades logged yet</div>';
@@ -4023,7 +4023,7 @@ async function loadJournal(userId){
       <tbody>${data.map(row=>{
         const pnl=row.pnl_pct!=null?Number(row.pnl_pct):null;
         const pnlColor=pnl==null?'var(--text3)':pnl>=0?'var(--green)':'var(--red)';
-        const pnlStr=pnl==null?'—':(pnl>=0?'+':'')+pnl.toFixed(2)+'%';
+        const pnlStr=pnl==null?'Open':(pnl>=0?'+':'')+pnl.toFixed(2)+'%';
         const isBot=row.notes&&row.notes.startsWith('Bot:');
         const rid='jnr-'+(rowIdx++);
         const parsed=isBot?parseBotNotes(row.notes):null;
@@ -4035,7 +4035,7 @@ async function loadJournal(userId){
           <td style="padding:11px 16px;text-align:right;color:var(--text2)">${row.entry_price!=null?'$'+Number(row.entry_price).toFixed(2):'—'}</td>
           <td style="padding:11px 16px;text-align:right;color:var(--text2)">${row.exit_price!=null?'$'+Number(row.exit_price).toFixed(2):'—'}</td>
           <td style="padding:11px 16px;text-align:right;font-weight:600;color:${pnlColor}">${pnlStr}</td>
-          <td style="padding:11px 16px;color:var(--text3);font-size:11px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${row.notes||''}</td>
+          <td style="padding:11px 16px;color:var(--text3);font-size:11px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${(row.notes||'').replace(/"/g,'&quot;')}">${(row.notes||'').length>50?(row.notes.slice(0,50)+'…'):row.notes||''}</td>
           <td style="padding:11px 16px;text-align:right">
             <button onclick="event.stopPropagation();removeJournalEntry('${row.id}','${userId}')"
               style="font-size:11px;padding:3px 10px;background:var(--red-dim);color:var(--red);border:1px solid rgba(255,68,102,.25);border-radius:4px;cursor:pointer">Delete</button>
