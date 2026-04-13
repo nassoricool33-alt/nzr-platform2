@@ -103,6 +103,9 @@ let killSwitch    = false;
 let capitalAmount = null;   // Must be set via setcapital before trading
 const DEFAULT_CAPITAL = 10000;
 
+// ─── ANOMALY DETECTION — prevents duplicate orders within short windows ──────
+const recentOrderTracker = new Map();
+
 /** Returns capitalAmount if set, otherwise DEFAULT_CAPITAL. Never returns null/0. */
 function getEffectiveCapital() {
   return (capitalAmount && capitalAmount > 0) ? capitalAmount : parseFloat(process.env.DEFAULT_CAPITAL || String(DEFAULT_CAPITAL));
@@ -3311,6 +3314,16 @@ async function manageOpenPositions() {
         continue;
       }
 
+      // Anomaly detection: block duplicate close within 2 minutes
+      const closeKey = symbol + '_close';
+      const lastClose = recentOrderTracker.get(closeKey);
+      const closeNow = Date.now();
+      if (lastClose && (closeNow - lastClose) < 120000) {
+        pushLog('DUPLICATE_CLOSE_BLOCKED: ' + symbol + ' already closed within 2 minutes (' + Math.round((closeNow - lastClose) / 1000) + 's ago)', 'warn');
+        continue;
+      }
+      recentOrderTracker.set(closeKey, closeNow);
+
       pushLog('POSITION_CLOSE: ' + symbol + ' reason=' + reason + ' pnl=' + (unrealizedPct * 100).toFixed(1) + '%', unrealizedPct >= 0 ? 'pass' : 'warn');
       try {
         const closeSide = side === 'long' ? 'sell' : 'buy';
@@ -3698,7 +3711,27 @@ async function executeSignal(signal, newsContext = null) {
     pushLog('EXEC_BP_ERR: ' + signal.symbol + ' ' + err.message + ' (proceeding)', 'warn');
   }
 
-  // 4. Submit bracket limit order
+  // 4. Anomaly detection — block rapid duplicate orders
+  const orderKey = signal.symbol + '_' + (signal.direction === 'LONG' ? 'buy' : 'sell');
+  const lastOrderTime = recentOrderTracker.get(orderKey);
+  const orderNow = Date.now();
+  if (lastOrderTime && (orderNow - lastOrderTime) < 60000) {
+    pushLog('ANOMALY_DETECTED: ' + signal.symbol + ' order attempted twice within 60s — BLOCKED (last=' + Math.round((orderNow - lastOrderTime) / 1000) + 's ago)', 'warn');
+    return { executed: false, reason: 'anomaly_duplicate_order' };
+  }
+  recentOrderTracker.set(orderKey, orderNow);
+
+  // 5. Position size sanity check
+  const positionValue = qty * entryPrice;
+  const portfolioPct = capitalAmount > 0 ? (positionValue / capitalAmount) * 100 : 0;
+  if (portfolioPct > 15) {
+    pushLog('SIZE_ALERT: ' + signal.symbol + ' position is ' + portfolioPct.toFixed(1) + '% of portfolio ($' + positionValue.toFixed(0) + '/$' + capitalAmount + ') — oversized', 'warn');
+    if (supabase) {
+      try { await supabase.from('bot_state').upsert({ key: 'size_alert', value: JSON.stringify({ symbol: signal.symbol, portfolioPct: +portfolioPct.toFixed(1), timestamp: new Date().toISOString() }) }); } catch {}
+    }
+  }
+
+  // 6. Submit bracket limit order
   const side          = signal.direction === 'LONG' ? 'buy' : 'sell';
   const clientOrderId = `NZR-${(signal.mode || 'day').toUpperCase()}-${signal.strategy || 'SCAN'}-${signal.symbol}-${Date.now()}`
     .slice(0, 48);
@@ -3800,6 +3833,53 @@ async function executeSignal(signal, newsContext = null) {
   } catch(err) {
     pushLog('EXEC_ERROR: ' + (signal?.symbol || 'unknown') + ' — ' + err.message, 'warn');
     return { executed: false, reason: 'exec_crash', detail: err.message };
+  }
+}
+
+// ─── BOT PERFORMANCE ATTRIBUTION ─────────────────────────────────────────────
+
+async function trackBotPerformance() {
+  try {
+    const posRes = await Promise.race([
+      fetch(`${ALPACA_BASE}/v2/positions`, {
+        headers: { 'APCA-API-KEY-ID': process.env.ALPACA_API_KEY, 'APCA-API-SECRET-KEY': process.env.ALPACA_SECRET_KEY }
+      }).then(r => r.ok ? r.json() : []),
+      new Promise(resolve => setTimeout(() => resolve([]), 3000))
+    ]);
+    const positions = Array.isArray(posRes) ? posRes : [];
+    if (!positions.length) return;
+
+    const unrealizedPnl = positions.reduce((sum, p) => sum + (parseFloat(p.unrealized_pl) || 0), 0);
+    const avgPnlPct = positions.reduce((sum, p) => sum + (parseFloat(p.unrealized_plpc) || 0), 0) / positions.length * 100;
+
+    // Total exposure check
+    const cap = getEffectiveCapital();
+    const totalExposure = positions.reduce((sum, p) => sum + Math.abs(parseFloat(p.market_value) || 0), 0);
+    const exposurePct = cap > 0 ? (totalExposure / cap) * 100 : 0;
+
+    if (supabase) {
+      try {
+        await supabase.from('bot_state').upsert({ key: 'daily_pnl', value: unrealizedPnl.toFixed(2) });
+        await supabase.from('bot_state').upsert({ key: 'daily_pnl_pct', value: avgPnlPct.toFixed(2) });
+        await supabase.from('bot_state').upsert({ key: 'portfolio_exposure', value: JSON.stringify({ exposure: +exposurePct.toFixed(1), positions: positions.length, timestamp: new Date().toISOString() }) });
+
+        // Drawdown pause: if losing more than 3% today
+        if (avgPnlPct < -3) {
+          await supabase.from('bot_state').upsert({ key: 'drawdown_pause', value: 'true' });
+          pushLog('DRAWDOWN_PAUSE_SET: portfolio down ' + avgPnlPct.toFixed(2) + '% — pausing new entries', 'warn');
+        } else {
+          await supabase.from('bot_state').upsert({ key: 'drawdown_pause', value: 'false' });
+        }
+      } catch {}
+    }
+
+    if (exposurePct > 150) {
+      pushLog('OVEREXPOSED: portfolio exposure at ' + exposurePct.toFixed(1) + '% of capital ($' + totalExposure.toFixed(0) + '/$' + cap + ') — flagged', 'warn');
+    }
+
+    pushLog('PERFORMANCE: ' + positions.length + ' positions, unrealized=$' + unrealizedPnl.toFixed(2) + ' (' + avgPnlPct.toFixed(2) + '%), exposure=' + exposurePct.toFixed(1) + '%', unrealizedPnl >= 0 ? 'pass' : 'warn');
+  } catch(e) {
+    pushLog('PERFORMANCE_ERROR: ' + e.message, 'warn');
   }
 }
 
@@ -4431,6 +4511,28 @@ module.exports = async function handler(req, res) {
     const ownedSymbols = new Set(openPositions.map(p => p.symbol));
     pushLog('POST_MGMT_POSITIONS: ' + currentOpenCount + ' open (' + [...ownedSymbols].slice(0, 10).join(',') + (currentOpenCount > 10 ? '...' : '') + ')', 'info');
 
+    // ── Drawdown pause check from Supabase ──────────────────────────────────
+    let drawdownPaused = false;
+    if (supabase) {
+      try {
+        const { data: pauseState } = await supabase.from('bot_state').select('value').eq('key', 'drawdown_pause').single();
+        if (pauseState?.value === 'true') {
+          pushLog('DRAWDOWN_PAUSE_ACTIVE: skipping new entries this cycle (set by previous performance check)', 'warn');
+          drawdownPaused = true;
+        }
+      } catch {}
+    }
+
+    // ── Total exposure check — block new entries if over 150% ────────────────
+    let overexposed = false;
+    const cap = getEffectiveCapital();
+    const totalExposure = openPositions.reduce((sum, p) => sum + Math.abs(parseFloat(p.market_value) || 0), 0);
+    const exposurePct = cap > 0 ? (totalExposure / cap) * 100 : 0;
+    if (exposurePct > 150) {
+      pushLog('OVEREXPOSED: portfolio exposure at ' + exposurePct.toFixed(1) + '% — blocking new entries', 'warn');
+      overexposed = true;
+    }
+
     let symbolsScanned = 0;
     let signalsFound = 0;
     let tradesPlaced = 0;
@@ -4786,7 +4888,15 @@ module.exports = async function handler(req, res) {
         continue;
       }
 
-      // Check 2: drawdown gate (unchanged — hard block, no override)
+      // Check 2: drawdown / exposure gates — hard block, no override
+      if (drawdownPaused) {
+        pushLog('SIGNAL_BLOCKED: ' + sig.symbol + ' — drawdown pause active', 'warn');
+        continue;
+      }
+      if (overexposed) {
+        pushLog('SIGNAL_BLOCKED: ' + sig.symbol + ' — portfolio overexposed (' + exposurePct.toFixed(1) + '%)', 'warn');
+        continue;
+      }
       if (posMgmt.totalUnrealizedPct < -5) {
         pushLog('SIGNAL_BLOCKED: ' + sig.symbol + ' — drawdown ' + posMgmt.totalUnrealizedPct + '% too deep', 'warn');
         continue;
@@ -4829,6 +4939,9 @@ module.exports = async function handler(req, res) {
 
     const duration = Date.now() - startTime;
     pushLog('SCAN_DONE: ' + symbolsScanned + '/' + scanSlice.length + ' scanned (rotation ' + scanStartIndex + '-' + (scanEndIndex - 1) + ' of ' + SCAN_UNIVERSE.length + '), ' + signalsFound + ' signals, ' + tradesPlaced + ' trades, ' + duration + 'ms', 'info');
+
+    // ── Performance attribution — track P&L and set drawdown pauses ─────────
+    try { await trackBotPerformance(); } catch(e) { pushLog('PERF_TRACK_ERR: ' + e.message, 'warn'); }
 
     // Save result to Supabase for scanresult poll
     try {
