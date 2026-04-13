@@ -478,8 +478,9 @@ async function handleSignal(symbol, key, anthropicKey) {
   const combinedScore = techScore * 0.4 + sentiment.score * 0.4 + catalystScore * 0.2;
 
   let signal = 'HOLD', signalStrength = 'WEAK';
-  if (combinedScore >= 0.72)      { signal = 'BUY';  signalStrength = 'STRONG'; }
-  else if (combinedScore >= 0.62) { signal = 'BUY';  signalStrength = 'MODERATE'; }
+  if (combinedScore >= 0.70)      { signal = 'BUY';  signalStrength = 'STRONG'; }
+  else if (combinedScore >= 0.60) { signal = 'BUY';  signalStrength = 'MODERATE'; }
+  else if (combinedScore >= 0.52) { signal = 'BUY';  signalStrength = 'WEAK'; }
   else if (combinedScore <= 0.28) { signal = 'SELL'; signalStrength = 'STRONG'; }
   else if (combinedScore <= 0.38) { signal = 'SELL'; signalStrength = 'MODERATE'; }
 
