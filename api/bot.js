@@ -3078,42 +3078,32 @@ async function manageOpenPositions() {
   };
 
   const polyKey = process.env.POLYGON_API_KEY;
-  const raceFetch = (url) => Promise.race([
+  const raceFetchFast = (url) => Promise.race([
     fetch(url).then(r => r.ok ? r.json() : null),
-    new Promise(resolve => setTimeout(() => resolve(null), 3500))
+    new Promise(resolve => setTimeout(() => resolve(null), 2000))
   ]).catch(() => null);
 
-  // ── 1. Fetch all open positions ────────────────────────────────────────────
+  // ── 1. Fetch all open positions + account in parallel ─────────────────────
   let positions = [];
+  let portfolioValue = 0;
+  let totalUnrealizedPl = 0;
   try {
-    const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), 6000);
-    let posResp;
-    try { posResp = await fetch(`${ALPACA_BASE}/v2/positions`, { headers: alpacaHeaders, signal: ctrl.signal }); }
-    finally { clearTimeout(t); }
-    if (posResp.ok) {
-      const raw = await posResp.json();
-      positions = Array.isArray(raw) ? raw : [];
-    }
+    const [posResult, acctResult] = await Promise.all([
+      Promise.race([
+        fetch(`${ALPACA_BASE}/v2/positions`, { headers: alpacaHeaders }).then(r => r.ok ? r.json() : []),
+        new Promise(resolve => setTimeout(() => resolve([]), 5000))
+      ]).catch(() => []),
+      Promise.race([
+        fetch(`${ALPACA_BASE}/v2/account`, { headers: alpacaHeaders }).then(r => r.ok ? r.json() : null),
+        new Promise(resolve => setTimeout(() => resolve(null), 5000))
+      ]).catch(() => null),
+    ]);
+    positions = Array.isArray(posResult) ? posResult : [];
+    if (acctResult) portfolioValue = parseFloat(acctResult.portfolio_value) || 0;
   } catch (e) {
     pushLog('POS_MGMT_FETCH_ERR: ' + e.message, 'warn');
     return { positionsManaged: 0, closed: 0, held: 0, trailUpdated: 0, staleOrdersCancelled: 0, openCount: 0, totalUnrealizedPct: 0, newEntriesAllowed: true };
   }
-
-  // ── 2. Fetch account for drawdown check ────────────────────────────────────
-  let portfolioValue = 0;
-  let totalUnrealizedPl = 0;
-  try {
-    const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), 4000);
-    let acctResp;
-    try { acctResp = await fetch(`${ALPACA_BASE}/v2/account`, { headers: alpacaHeaders, signal: ctrl.signal }); }
-    finally { clearTimeout(t); }
-    if (acctResp.ok) {
-      const acct = await acctResp.json();
-      portfolioValue = parseFloat(acct.portfolio_value) || 0;
-    }
-  } catch { /* use 0 */ }
 
   for (const p of positions) {
     totalUnrealizedPl += parseFloat(p.unrealized_pl) || 0;
@@ -3133,16 +3123,77 @@ async function manageOpenPositions() {
 
   pushLog('POS_MGMT_START: ' + positions.length + ' open positions, unrealized=' + (totalUnrealizedPct * 100).toFixed(2) + '%', 'info');
 
-  let closed = 0, held = 0, trailUpdated = 0;
+  // ── 2. Load all position tracking states from Supabase in one batch ───────
+  const posTrackMap = {};
+  try {
+    const sbUrl = process.env.SUPABASE_URL;
+    const sbHdrs = _sbHeaders();
+    if (sbUrl && sbHdrs && positions.length > 0) {
+      const keys = positions.map(p => 'position_' + p.symbol);
+      const keyFilter = keys.map(k => `"${k}"`).join(',');
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 3000);
+      let sr;
+      try { sr = await fetch(`${sbUrl}/rest/v1/bot_state?key=in.(${keyFilter})&select=key,value`, { headers: sbHdrs, signal: ctrl.signal }); }
+      finally { clearTimeout(t); }
+      if (sr.ok) {
+        const rows = await sr.json().catch(() => []);
+        if (Array.isArray(rows)) {
+          for (const row of rows) {
+            try { posTrackMap[row.key] = JSON.parse(row.value); } catch {}
+          }
+        }
+      }
+    }
+  } catch { /* no tracking data */ }
 
-  // ── 3. Evaluate each position ──────────────────────────────────────────────
+  // ── 3. Determine which positions need RSI — only those held > 1 day ───────
+  const needsRsi = [];
+  const positionData = [];
+
   for (const pos of positions) {
     const symbol = pos.symbol;
     const currentPrice = parseFloat(pos.current_price) || 0;
     const entryPrice   = parseFloat(pos.avg_entry_price) || 0;
     const qty          = parseFloat(pos.qty) || 0;
     const unrealizedPct = parseFloat(pos.unrealized_plpc) || 0;
-    const side         = pos.side; // 'long' or 'short'
+    const side         = pos.side;
+    const stateKey     = 'position_' + symbol;
+    const posTrack     = posTrackMap[stateKey] || null;
+    const entryDate    = posTrack?.entryDate || new Date().toISOString().split('T')[0];
+    const daysHeld     = Math.max(0, Math.floor((Date.now() - new Date(entryDate).getTime()) / 86400000));
+
+    const pd = { symbol, currentPrice, entryPrice, qty, unrealizedPct, side, stateKey, posTrack, entryDate, daysHeld };
+    positionData.push(pd);
+
+    // P&L threshold decisions don't need RSI
+    if (unrealizedPct >= 0.08 || unrealizedPct <= -0.04) continue;
+    // Positions held < 1 day: skip RSI, just hold
+    if (daysHeld < 1) continue;
+    // Older positions need RSI for nuanced decisions
+    needsRsi.push(symbol);
+  }
+
+  pushLog('POS_RSI_PLAN: ' + positions.length + ' positions, ' + needsRsi.length + ' need RSI fetch (skipping ' + (positions.length - needsRsi.length) + ' — threshold/new)', 'info');
+
+  // ── 4. Batch fetch RSI for symbols that need it (parallel with 2s timeout) ──
+  const rsiMap = {};
+  if (polyKey && needsRsi.length > 0) {
+    const rsiPromises = needsRsi.map(async (symbol) => {
+      const data = await raceFetchFast('https://api.polygon.io/v1/indicators/rsi/' + symbol + '?timespan=hour&adjusted=true&window=14&series_type=close&order=desc&limit=1&apiKey=' + polyKey);
+      return { symbol, rsi: data?.results?.values?.[0]?.value || null };
+    });
+    const rsiResults = await Promise.all(rsiPromises);
+    for (const r of rsiResults) {
+      rsiMap[r.symbol] = r.rsi;
+    }
+  }
+
+  let closed = 0, held = 0, trailUpdated = 0;
+
+  // ── 5. Evaluate each position ──────────────────────────────────────────────
+  for (const pd of positionData) {
+    const { symbol, currentPrice, entryPrice, qty, unrealizedPct, side, stateKey, posTrack, entryDate, daysHeld } = pd;
 
     if (!currentPrice || !entryPrice) {
       pushLog('POS_MGMT_SKIP_NODATA: ' + symbol, 'warn');
@@ -3150,51 +3201,18 @@ async function manageOpenPositions() {
       continue;
     }
 
-    // Fetch fresh RSI and MACD for this symbol
-    let rsi = 50, macdHist = 0, macdHistPrev = 0;
-    if (polyKey) {
-      try {
-        const [rsiData, macdData] = await Promise.all([
-          raceFetch('https://api.polygon.io/v1/indicators/rsi/' + symbol + '?timespan=hour&adjusted=true&window=14&series_type=close&order=desc&limit=1&apiKey=' + polyKey),
-          raceFetch('https://api.polygon.io/v1/indicators/macd/' + symbol + '?timespan=hour&adjusted=true&short_window=12&long_window=26&signal_window=9&series_type=close&order=desc&limit=3&apiKey=' + polyKey),
-        ]);
-        rsi          = rsiData?.results?.values?.[0]?.value || 50;
-        macdHist     = macdData?.results?.values?.[0]?.histogram || 0;
-        macdHistPrev = macdData?.results?.values?.[1]?.histogram || 0;
-      } catch { /* use defaults */ }
-    }
-
-    // Read position tracking state from Supabase
-    let posTrack = null;
-    const stateKey = 'position_' + symbol;
-    try {
-      const sbUrl = process.env.SUPABASE_URL;
-      const sbHdrs = _sbHeaders();
-      if (sbUrl && sbHdrs) {
-        const ctrl = new AbortController();
-        const t = setTimeout(() => ctrl.abort(), 3000);
-        let sr;
-        try { sr = await fetch(`${sbUrl}/rest/v1/bot_state?key=eq.${encodeURIComponent(stateKey)}&select=value`, { headers: sbHdrs, signal: ctrl.signal }); }
-        finally { clearTimeout(t); }
-        if (sr.ok) {
-          const rows = await sr.json().catch(() => []);
-          if (Array.isArray(rows) && rows.length && rows[0].value) {
-            posTrack = JSON.parse(rows[0].value);
-          }
-        }
-      }
-    } catch { /* no tracking data */ }
+    // Use fetched RSI or fall back to P&L-based decision
+    const rsi = rsiMap[symbol] ?? 50;
+    const hasRealRsi = rsiMap[symbol] != null;
+    const macdHist = 0; // Skip MACD fetch to save time — use RSI + P&L only
+    const macdHistPrev = 0;
 
     // Initialize or update tracking data
     const highestPrice = posTrack ? Math.max(posTrack.highestPrice || currentPrice, currentPrice) : currentPrice;
     const lowestPrice  = posTrack ? Math.min(posTrack.lowestPrice || currentPrice, currentPrice) : currentPrice;
-    const entryDate    = posTrack?.entryDate || new Date().toISOString().split('T')[0];
-    const entryMacdPositive = posTrack?.entryMacdPositive ?? (macdHist > 0);
+    const entryMacdPositive = posTrack?.entryMacdPositive ?? false;
 
-    // Calculate days held
-    const daysHeld = Math.max(0, Math.floor((Date.now() - new Date(entryDate).getTime()) / 86400000));
-
-    // Persist updated tracking data
+    // Persist updated tracking data (fire-and-forget)
     writeBotState(stateKey, JSON.stringify({
       entryPrice, entryDate, highestPrice, lowestPrice,
       lastRsi: rsi, lastMacd: macdHist, entryMacdPositive,
@@ -3210,28 +3228,26 @@ async function manageOpenPositions() {
       action = 'CLOSE'; reason = 'PROFIT_TARGET: +' + (unrealizedPct * 100).toFixed(1) + '% (>=8%)';
     } else if (unrealizedPct <= -0.04) {
       action = 'CLOSE'; reason = 'STOP_LOSS: ' + (unrealizedPct * 100).toFixed(1) + '% (<=-4%)';
-    } else if (rsi >= 75 && unrealizedPct > 0) {
+    } else if (hasRealRsi && rsi >= 75 && unrealizedPct > 0) {
       action = 'CLOSE'; reason = 'OVERBOUGHT_PROFIT: RSI=' + rsi.toFixed(1) + ' pnl=+' + (unrealizedPct * 100).toFixed(1) + '%';
-    } else if (rsi <= 25 && unrealizedPct < 0) {
+    } else if (hasRealRsi && rsi <= 25 && unrealizedPct < 0) {
       action = 'CLOSE'; reason = 'OVERSOLD_LOSING: RSI=' + rsi.toFixed(1) + ' pnl=' + (unrealizedPct * 100).toFixed(1) + '%';
-    } else if (macdHist < 0 && entryMacdPositive && unrealizedPct > 0.02) {
-      action = 'CLOSE'; reason = 'MOMENTUM_REVERSAL: MACD flipped negative, locking +' + (unrealizedPct * 100).toFixed(1) + '%';
     } else if (daysHeld > 7 && unrealizedPct > 0) {
       action = 'CLOSE'; reason = 'TIME_LIMIT_PROFIT: held ' + daysHeld + 'd with +' + (unrealizedPct * 100).toFixed(1) + '%';
     } else if (daysHeld > 3 && unrealizedPct < -0.02) {
       action = 'CLOSE'; reason = 'UNDERPERFORMER_CUT: held ' + daysHeld + 'd at ' + (unrealizedPct * 100).toFixed(1) + '%';
     }
 
-    // --- HOLD conditions (skip trail stop check) ---
+    // --- HOLD conditions ---
     if (action === 'HOLD') {
       if (daysHeld < 1) {
         reason = 'NEW_POSITION: held <1d, giving time';
-      } else if (rsi >= 50 && rsi <= 70 && macdHist > 0 && unrealizedPct > 0) {
-        reason = 'MOMENTUM_INTACT: RSI=' + rsi.toFixed(1) + ' MACD_H=+' + macdHist.toFixed(3) + ' pnl=+' + (unrealizedPct * 100).toFixed(1) + '%';
-      } else if (unrealizedPct > 0.02 && unrealizedPct < 0.08 && macdHist > 0) {
+      } else if (hasRealRsi && rsi >= 50 && rsi <= 70 && unrealizedPct > 0) {
+        reason = 'MOMENTUM_INTACT: RSI=' + rsi.toFixed(1) + ' pnl=+' + (unrealizedPct * 100).toFixed(1) + '%';
+      } else if (unrealizedPct > 0.02 && unrealizedPct < 0.08) {
         reason = 'WINNER_RUNNING: +' + (unrealizedPct * 100).toFixed(1) + '% with positive momentum';
       } else {
-        reason = 'DEFAULT_HOLD: pnl=' + (unrealizedPct * 100).toFixed(1) + '% RSI=' + rsi.toFixed(1) + ' MACD_H=' + macdHist.toFixed(3);
+        reason = 'DEFAULT_HOLD: pnl=' + (unrealizedPct * 100).toFixed(1) + '% RSI=' + rsi.toFixed(1) + (hasRealRsi ? '' : '(est)');
       }
     }
 
@@ -3241,32 +3257,22 @@ async function manageOpenPositions() {
       let trailLabel = '';
 
       if (unrealizedPct >= 0.15) {
-        // At +15%: trail at highest - 1%
         trailStop = +(highestPrice * (1 - 0.01)).toFixed(2);
         trailLabel = 'TRAIL_1PCT';
       } else if (unrealizedPct >= 0.12) {
-        // At +12%: trail at highest - 1.5%
         trailStop = +(highestPrice * (1 - 0.015)).toFixed(2);
         trailLabel = 'TRAIL_1.5PCT';
       } else if (unrealizedPct >= 0.08) {
-        // At +8%: trail at highest - 2%
         trailStop = +(highestPrice * (1 - 0.02)).toFixed(2);
         trailLabel = 'TRAIL_2PCT';
       } else {
-        // At +5%: move stop to breakeven
         trailStop = entryPrice;
         trailLabel = 'BREAKEVEN';
       }
 
       if (currentPrice <= trailStop) {
-        // Don't cut winner if momentum still positive (MACD histogram > 0)
-        if (unrealizedPct >= 0.08 && macdHist > 0) {
-          pushLog('TRAIL_HOLD_MOMENTUM: ' + symbol + ' price=$' + currentPrice.toFixed(2) + ' hit trail=$' + trailStop + ' but MACD_H=' + macdHist.toFixed(3) + ' positive — holding', 'info');
-          trailUpdated++;
-        } else {
-          action = 'CLOSE';
-          reason = trailLabel + '_HIT: price $' + currentPrice.toFixed(2) + ' <= trail $' + trailStop + ' (high=$' + highestPrice.toFixed(2) + ' pnl=' + (unrealizedPct * 100).toFixed(1) + '%)';
-        }
+        action = 'CLOSE';
+        reason = trailLabel + '_HIT: price $' + currentPrice.toFixed(2) + ' <= trail $' + trailStop + ' (high=$' + highestPrice.toFixed(2) + ' pnl=' + (unrealizedPct * 100).toFixed(1) + '%)';
       } else {
         pushLog('TRAIL_STOP_UPDATE: ' + symbol + ' ' + trailLabel + ' stop=$' + trailStop + ' high=$' + highestPrice.toFixed(2) + ' price=$' + currentPrice.toFixed(2) + ' pnl=+' + (unrealizedPct * 100).toFixed(1) + '%', 'info');
         trailUpdated++;
@@ -3342,11 +3348,11 @@ async function manageOpenPositions() {
     }
   }
 
-  // ── 7. Cancel stale open orders (> 30 minutes old) ─────────────────────────
+  // ── 6. Cancel stale open orders (> 30 minutes old) ─────────────────────────
   let staleOrdersCancelled = 0;
   try {
     const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), 5000);
+    const t = setTimeout(() => ctrl.abort(), 3000);
     let ordResp;
     try { ordResp = await fetch(`${ALPACA_BASE}/v2/orders?status=open`, { headers: alpacaHeaders, signal: ctrl.signal }); }
     finally { clearTimeout(t); }
@@ -3360,7 +3366,7 @@ async function manageOpenPositions() {
           if (submittedAt < thirtyMinAgo) {
             try {
               const cancelCtrl = new AbortController();
-              const cancelTimer = setTimeout(() => cancelCtrl.abort(), 4000);
+              const cancelTimer = setTimeout(() => cancelCtrl.abort(), 2000);
               try {
                 await fetch(`${ALPACA_BASE}/v2/orders/${order.id}`, { method: 'DELETE', headers: alpacaHeaders, signal: cancelCtrl.signal });
               } finally { clearTimeout(cancelTimer); }
@@ -4238,8 +4244,12 @@ module.exports = async function handler(req, res) {
   // TYPE-BASED ROUTES — checked FIRST, before any action or status catch-all
   // ══════════════════════════════════════════════════════════════════════════════
 
-  // ── FULL SCAN (synchronous — 20s budget, 25 symbols/cycle rotation) ────────
+  // ── FULL SCAN (synchronous — 20s budget, 15 symbols/cycle rotation) ────────
   if (type === 'scan') {
+    if (global.scanInProgress) {
+      return res.json({ success: true, message: 'Scan already in progress', skipped: true });
+    }
+    global.scanInProgress = true;
     console.log('[BOT] SCAN route matched');
     const startTime = Date.now();
     const capital = capitalAmount && capitalAmount > 0 ? capitalAmount : await getCapital();
@@ -4261,16 +4271,28 @@ module.exports = async function handler(req, res) {
 
     if (!isMarketOpen) {
       pushLog('MARKET_CLOSED: ' + etHour + ':' + String(etMinute).padStart(2,'0') + ' ET', 'info');
+      global.scanInProgress = false;
       return res.status(200).json({ success: true, message: 'Market closed', symbolsScanned: 0, signalsPassed: 0, tradesPlaced: 0, duration: '0ms' });
     }
 
     pushLog('SCAN_UNIVERSE_SIZE: ' + SCAN_UNIVERSE.length + ' symbols', 'info');
     pushLog('SCAN_STARTED: capital=$' + capital + ' day=$' + dayAlloc + ' swing=$' + swingAlloc + ' universe=' + SCAN_UNIVERSE.length + ' ET=' + etHour + ':' + String(etMinute).padStart(2,'0'), 'info');
 
-    // ── Dynamic position management — runs FIRST every cycle ─────────────────
+    // ── Dynamic position management — runs FIRST every cycle (8s hard limit) ──
     let posMgmt = { positionsManaged: 0, closed: 0, held: 0, trailUpdated: 0, staleOrdersCancelled: 0, openCount: 0, totalUnrealizedPct: 0, newEntriesAllowed: true };
     try {
-      posMgmt = await manageOpenPositions();
+      let mgmtTimedOut = false;
+      const mgmtResult = await Promise.race([
+        manageOpenPositions(),
+        new Promise(resolve => {
+          setTimeout(() => {
+            mgmtTimedOut = true;
+            pushLog('MGMT_TIMEOUT: position management cut short at 8s, proceeding to scan', 'warn');
+            resolve(null);
+          }, 8000);
+        })
+      ]);
+      if (mgmtResult) posMgmt = mgmtResult;
     } catch(e) {
       pushLog('POS_MGMT_ERROR: ' + e.message, 'warn');
     }
@@ -4287,7 +4309,7 @@ module.exports = async function handler(req, res) {
     const apiKey = process.env.POLYGON_API_KEY;
     const raceFetch = (url) => Promise.race([
       fetch(url).then(r => r.json()),
-      new Promise(resolve => setTimeout(() => resolve(null), 2000))
+      new Promise(resolve => setTimeout(() => resolve(null), 1500))
     ]).catch(() => null);
 
     // ── SPY benchmark tracking (#1, #2) ────────────────────────────────────────
@@ -4543,7 +4565,7 @@ module.exports = async function handler(req, res) {
     }
 
     // ── Scan rotation: scan 25 symbols per cycle, rotating through universe ──
-    const SYMBOLS_PER_CYCLE = 25;
+    const SYMBOLS_PER_CYCLE = 15;
     let scanStartIndex = 0;
     try {
       const sbUrl  = process.env.SUPABASE_URL;
@@ -4629,6 +4651,7 @@ module.exports = async function handler(req, res) {
       writeBotState('next_scan', new Date(Date.now() + 15 * 60 * 1000).toISOString());
     } catch(_) {}
 
+    global.scanInProgress = false;
     return res.status(200).json({
       success: true,
       symbolsScanned,
