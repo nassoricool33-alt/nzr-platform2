@@ -1046,16 +1046,20 @@ async function handleAutoScan(polyKey, anthropicKey) {
       results.push(signal);
 
       // Score with PDUFA proximity boost: +0.15 if within 7 days of catalyst
-      let adjustedScore = signal.combinedScore || 0;
+      const rawScore = signal.combinedScore || 0;
       const daysAway = signal.catalystInfo?.daysAway;
-      if (daysAway !== null && daysAway !== undefined && daysAway >= 0 && daysAway <= 7) {
-        adjustedScore = Math.min(1, adjustedScore + 0.15);
-      }
-      const score = Math.round(adjustedScore * 100);
-      if (score >= 52 && (signal.signal === 'BUY' || signal.signal === 'SELL')) {
+      const hasCatalyst = daysAway !== null && daysAway !== undefined && daysAway >= 0 && daysAway <= 7;
+
+      // Execution gate: score >= 0.52 AND PDUFA within 7 days
+      if (rawScore >= 0.52 && hasCatalyst && (signal.signal === 'BUY' || signal.signal === 'SELL')) {
         signalsFound++;
 
-        if (!isMarketOpen) continue; // pre-score but don't trade
+        if (!isMarketOpen) {
+          // Pre-market signal — log for next open
+          console.log('[PHARMA] PREMARKET_SIGNAL: ' + signal.symbol + ' score=' + rawScore.toFixed(2) + ' PDUFA in ' + daysAway + ' days');
+          signal.execResult = { skip: true, reason: 'PHARMA_PREMARKET_SIGNAL: ' + signal.symbol + ' score=' + rawScore.toFixed(2) + ' PDUFA in ' + daysAway + ' days — will trade at market open' };
+          continue;
+        }
 
         const execResult = await executePharmaSignal(signal.symbol, signal, capitalAmount);
         if (execResult && !execResult.skip && execResult.placed) {
