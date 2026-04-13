@@ -4238,7 +4238,7 @@ module.exports = async function handler(req, res) {
   // TYPE-BASED ROUTES — checked FIRST, before any action or status catch-all
   // ══════════════════════════════════════════════════════════════════════════════
 
-  // ── FULL SCAN (synchronous — 25s budget, batched in groups of 5) ───────────
+  // ── FULL SCAN (synchronous — 20s budget, 25 symbols/cycle rotation) ────────
   if (type === 'scan') {
     console.log('[BOT] SCAN route matched');
     const startTime = Date.now();
@@ -4287,7 +4287,7 @@ module.exports = async function handler(req, res) {
     const apiKey = process.env.POLYGON_API_KEY;
     const raceFetch = (url) => Promise.race([
       fetch(url).then(r => r.json()),
-      new Promise(resolve => setTimeout(() => resolve(null), 3000))
+      new Promise(resolve => setTimeout(() => resolve(null), 2000))
     ]).catch(() => null);
 
     // ── SPY benchmark tracking (#1, #2) ────────────────────────────────────────
@@ -4542,14 +4542,38 @@ module.exports = async function handler(req, res) {
       }
     }
 
+    // ── Scan rotation: scan 25 symbols per cycle, rotating through universe ──
+    const SYMBOLS_PER_CYCLE = 25;
+    let scanStartIndex = 0;
+    try {
+      const sbUrl  = process.env.SUPABASE_URL;
+      const sbHdrs = _sbHeaders();
+      if (sbUrl && sbHdrs) {
+        const idxResp = await fetch(`${sbUrl}/rest/v1/bot_state?key=eq.last_scan_index&select=value`, { headers: sbHdrs });
+        const idxRows = await idxResp.json().catch(() => []);
+        if (Array.isArray(idxRows) && idxRows.length) {
+          scanStartIndex = parseInt(idxRows[0].value, 10) || 0;
+          if (scanStartIndex >= SCAN_UNIVERSE.length) scanStartIndex = 0;
+        }
+      }
+    } catch(_) {}
+
+    const scanEndIndex = Math.min(scanStartIndex + SYMBOLS_PER_CYCLE, SCAN_UNIVERSE.length);
+    const scanSlice = SCAN_UNIVERSE.slice(scanStartIndex, scanEndIndex);
+    pushLog('ROTATING_SCAN: symbols ' + scanStartIndex + '-' + (scanEndIndex - 1) + ' of ' + SCAN_UNIVERSE.length, 'info');
+
+    // Save next scan index for next cycle
+    const nextIndex = scanEndIndex >= SCAN_UNIVERSE.length ? 0 : scanEndIndex;
+    writeBotState('last_scan_index', String(nextIndex));
+
     // ── Process symbols in parallel batches of 5 ─────────────────────────────
     const BATCH_SIZE = 5;
-    for (let i = 0; i < SCAN_UNIVERSE.length; i += BATCH_SIZE) {
-      if (Date.now() - startTime > 25000) {
-        pushLog('TIME_BUDGET: stopping early at batch starting ' + SCAN_UNIVERSE[i] + ' (' + (Date.now() - startTime) + 'ms elapsed)', 'warn');
+    for (let i = 0; i < scanSlice.length; i += BATCH_SIZE) {
+      if (Date.now() - startTime > 20000) {
+        pushLog('TIME_BUDGET: stopping early at batch starting ' + scanSlice[i] + ' (' + (Date.now() - startTime) + 'ms elapsed)', 'warn');
         break;
       }
-      const batch = SCAN_UNIVERSE.slice(i, i + BATCH_SIZE);
+      const batch = scanSlice.slice(i, i + BATCH_SIZE);
       pushLog('BATCH ' + (Math.floor(i / BATCH_SIZE) + 1) + ': ' + batch.join(','), 'info');
       await Promise.all(batch.map(symbol => evaluateSymbol(symbol)));
     }
@@ -4589,7 +4613,7 @@ module.exports = async function handler(req, res) {
     }
 
     const duration = Date.now() - startTime;
-    pushLog('SCAN_DONE: ' + symbolsScanned + '/' + SCAN_UNIVERSE.length + ' scanned, ' + signalsFound + ' signals, ' + tradesPlaced + ' trades, ' + duration + 'ms', 'info');
+    pushLog('SCAN_DONE: ' + symbolsScanned + '/' + scanSlice.length + ' scanned (rotation ' + scanStartIndex + '-' + (scanEndIndex - 1) + ' of ' + SCAN_UNIVERSE.length + '), ' + signalsFound + ' signals, ' + tradesPlaced + ' trades, ' + duration + 'ms', 'info');
 
     // Save result to Supabase for scanresult poll
     try {
