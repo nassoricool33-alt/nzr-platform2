@@ -3209,25 +3209,41 @@ async function manageOpenPositions() {
       }
     }
 
-    // --- TRAIL STOP (only when holding and profitable enough) ---
+    // --- TRAIL STOP — progressive trailing for bigger winners (#7) ---
     if (action === 'HOLD' && unrealizedPct >= 0.05) {
-      if (unrealizedPct >= 0.06) {
-        // Trail at highest price - 1.5%
-        const trailStop = +(highestPrice * (1 - 0.015)).toFixed(2);
-        if (currentPrice <= trailStop) {
-          action = 'CLOSE'; reason = 'TRAIL_STOP_HIT: price $' + currentPrice.toFixed(2) + ' <= trail $' + trailStop + ' (high=$' + highestPrice.toFixed(2) + ')';
-        } else {
-          pushLog('TRAIL_STOP_UPDATE: ' + symbol + ' new_stop=$' + trailStop + ' high=$' + highestPrice.toFixed(2) + ' price=$' + currentPrice.toFixed(2), 'info');
+      let trailStop = 0;
+      let trailLabel = '';
+
+      if (unrealizedPct >= 0.15) {
+        // At +15%: trail at highest - 1%
+        trailStop = +(highestPrice * (1 - 0.01)).toFixed(2);
+        trailLabel = 'TRAIL_1PCT';
+      } else if (unrealizedPct >= 0.12) {
+        // At +12%: trail at highest - 1.5%
+        trailStop = +(highestPrice * (1 - 0.015)).toFixed(2);
+        trailLabel = 'TRAIL_1.5PCT';
+      } else if (unrealizedPct >= 0.08) {
+        // At +8%: trail at highest - 2%
+        trailStop = +(highestPrice * (1 - 0.02)).toFixed(2);
+        trailLabel = 'TRAIL_2PCT';
+      } else {
+        // At +5%: move stop to breakeven
+        trailStop = entryPrice;
+        trailLabel = 'BREAKEVEN';
+      }
+
+      if (currentPrice <= trailStop) {
+        // Don't cut winner if momentum still positive (MACD histogram > 0)
+        if (unrealizedPct >= 0.08 && macdHist > 0) {
+          pushLog('TRAIL_HOLD_MOMENTUM: ' + symbol + ' price=$' + currentPrice.toFixed(2) + ' hit trail=$' + trailStop + ' but MACD_H=' + macdHist.toFixed(3) + ' positive — holding', 'info');
           trailUpdated++;
+        } else {
+          action = 'CLOSE';
+          reason = trailLabel + '_HIT: price $' + currentPrice.toFixed(2) + ' <= trail $' + trailStop + ' (high=$' + highestPrice.toFixed(2) + ' pnl=' + (unrealizedPct * 100).toFixed(1) + '%)';
         }
       } else {
-        // Trail at breakeven (entry price)
-        if (currentPrice <= entryPrice) {
-          action = 'CLOSE'; reason = 'BREAKEVEN_STOP: price $' + currentPrice.toFixed(2) + ' hit entry $' + entryPrice.toFixed(2);
-        } else {
-          pushLog('TRAIL_STOP_UPDATE: ' + symbol + ' breakeven_stop=$' + entryPrice.toFixed(2) + ' price=$' + currentPrice.toFixed(2), 'info');
-          trailUpdated++;
-        }
+        pushLog('TRAIL_STOP_UPDATE: ' + symbol + ' ' + trailLabel + ' stop=$' + trailStop + ' high=$' + highestPrice.toFixed(2) + ' price=$' + currentPrice.toFixed(2) + ' pnl=+' + (unrealizedPct * 100).toFixed(1) + '%', 'info');
+        trailUpdated++;
       }
     }
 
@@ -4109,6 +4125,75 @@ module.exports = async function handler(req, res) {
     return res.json({ success: true, message: 'P&L update complete — check journal' });
   }
 
+  // ── BENCHMARK COMPARISON ──────────────────────────────────────────────────
+  if (req.query.type === 'benchmark') {
+    try {
+      // Read SPY benchmark from bot_state
+      const sbUrl  = process.env.SUPABASE_URL;
+      const sbHdrs = _sbHeaders();
+      let spyReturn = 0, startDate = null;
+      if (sbUrl && sbHdrs) {
+        const spyResp = await fetch(`${sbUrl}/rest/v1/bot_state?key=eq.spy_benchmark&select=value`, { headers: sbHdrs });
+        const spyRows = await spyResp.json().catch(() => []);
+        if (Array.isArray(spyRows) && spyRows.length) {
+          const spyData = JSON.parse(spyRows[0].value);
+          spyReturn = spyData.totalReturn || 0;
+          startDate = spyData.date || null;
+        }
+      }
+
+      // Calculate NZR return from journal
+      const { data: closedTrades } = await supabase
+        .from('journal')
+        .select('pnl_pct, entry_price, trade_date')
+        .not('pnl_pct', 'is', null)
+        .order('trade_date', { ascending: true });
+
+      const trades = closedTrades || [];
+      const totalTrades = trades.length;
+      const wins = trades.filter(t => parseFloat(t.pnl_pct) > 0);
+      const losses = trades.filter(t => parseFloat(t.pnl_pct) < 0);
+      const winRate = totalTrades > 0 ? parseFloat((wins.length / totalTrades * 100).toFixed(1)) : 0;
+      const avgWin = wins.length > 0 ? parseFloat((wins.reduce((s, t) => s + parseFloat(t.pnl_pct), 0) / wins.length).toFixed(2)) : 0;
+      const avgLoss = losses.length > 0 ? parseFloat((losses.reduce((s, t) => s + parseFloat(t.pnl_pct), 0) / losses.length).toFixed(2)) : 0;
+      const profitFactor = avgLoss !== 0 ? parseFloat((avgWin / Math.abs(avgLoss)).toFixed(2)) : 0;
+
+      // NZR return = sum of all pnl_pct weighted by entry_price / starting capital
+      const cap = capitalAmount || await getCapital() || 10000;
+      let totalPnlDollars = 0;
+      for (const t of trades) {
+        const ep = parseFloat(t.entry_price) || 0;
+        const pnl = parseFloat(t.pnl_pct) || 0;
+        totalPnlDollars += ep * (pnl / 100);
+      }
+      const nzrReturn = parseFloat((totalPnlDollars / cap * 100).toFixed(2));
+      const alpha = parseFloat((nzrReturn - spyReturn).toFixed(2));
+
+      // Approximate Sharpe ratio (annualized)
+      const pnlArr = trades.map(t => parseFloat(t.pnl_pct) || 0);
+      const meanPnl = pnlArr.length > 0 ? pnlArr.reduce((a, b) => a + b, 0) / pnlArr.length : 0;
+      const variance = pnlArr.length > 1 ? pnlArr.reduce((s, p) => s + Math.pow(p - meanPnl, 2), 0) / (pnlArr.length - 1) : 0;
+      const stdDev = Math.sqrt(variance);
+      const sharpeRatio = stdDev > 0 ? parseFloat(((meanPnl / stdDev) * Math.sqrt(252)).toFixed(2)) : 0;
+
+      return res.json({
+        spyReturn,
+        nzrReturn,
+        alpha,
+        outperforming: nzrReturn > spyReturn,
+        startDate: startDate || (trades.length > 0 ? trades[0].trade_date : null),
+        totalTrades,
+        winRate,
+        avgWin,
+        avgLoss,
+        profitFactor,
+        sharpeRatio
+      });
+    } catch(e) {
+      return res.json({ error: e.message });
+    }
+  }
+
   // ── LOAD CAPITAL FROM SUPABASE ON EVERY REQUEST ─────────────────────────────
   if (!capitalAmount || capitalAmount <= 0) {
     try {
@@ -4170,6 +4255,7 @@ module.exports = async function handler(req, res) {
     let signalsFound = 0;
     let tradesPlaced = 0;
     let signalResults = [];
+    let candidateSignals = []; // Collect candidates, execute top 5 after scan
 
     const apiKey = process.env.POLYGON_API_KEY;
     const raceFetch = (url) => Promise.race([
@@ -4177,18 +4263,133 @@ module.exports = async function handler(req, res) {
       new Promise(resolve => setTimeout(() => resolve(null), 3000))
     ]).catch(() => null);
 
+    // ── SPY benchmark tracking (#1, #2) ────────────────────────────────────────
+    let spyDayChangePct = 0;
+    try {
+      const spySnap = await raceFetch('https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers/SPY?apiKey=' + apiKey);
+      const spyPrice = spySnap?.ticker?.day?.c || spySnap?.ticker?.lastTrade?.p || 0;
+      const spyPrevClose = spySnap?.ticker?.prevDay?.c || 0;
+      if (spyPrice > 0 && spyPrevClose > 0) {
+        spyDayChangePct = ((spyPrice - spyPrevClose) / spyPrevClose) * 100;
+      }
+
+      if (spyPrice > 0) {
+        // Read existing benchmark to preserve startPrice
+        const sbUrl  = process.env.SUPABASE_URL;
+        const sbHdrs = _sbHeaders();
+        let startPrice = spyPrice;
+        if (sbUrl && sbHdrs) {
+          const existResp = await fetch(`${sbUrl}/rest/v1/bot_state?key=eq.spy_benchmark&select=value`, { headers: sbHdrs });
+          const existRows = await existResp.json().catch(() => []);
+          if (Array.isArray(existRows) && existRows.length) {
+            const prev = JSON.parse(existRows[0].value);
+            if (prev.startPrice > 0) startPrice = prev.startPrice;
+          }
+        }
+        const totalReturn = parseFloat(((spyPrice - startPrice) / startPrice * 100).toFixed(2));
+        writeBotState('spy_benchmark', JSON.stringify({
+          price: spyPrice, date: new Date().toISOString().split('T')[0],
+          startPrice, totalReturn
+        }));
+
+        // Alpha tracking (#2)
+        const cap = capital || 10000;
+        const { data: closedForAlpha } = await supabase
+          .from('journal').select('entry_price, pnl_pct').not('pnl_pct', 'is', null);
+        let nzrPnlDollars = 0;
+        for (const t of (closedForAlpha || [])) {
+          nzrPnlDollars += (parseFloat(t.entry_price) || 0) * ((parseFloat(t.pnl_pct) || 0) / 100);
+        }
+        const nzrReturn = parseFloat((nzrPnlDollars / cap * 100).toFixed(2));
+        writeBotState('nzr_alpha', JSON.stringify({
+          nzrReturn, spyReturn: totalReturn,
+          alpha: parseFloat((nzrReturn - totalReturn).toFixed(2)),
+          date: new Date().toISOString().split('T')[0]
+        }));
+
+        pushLog('SPY_BENCHMARK: price=$' + spyPrice.toFixed(2) + ' dayChg=' + spyDayChangePct.toFixed(2) + '% totalReturn=' + totalReturn + '% alpha=' + (nzrReturn - totalReturn).toFixed(2) + '%', 'info');
+      }
+    } catch(spyErr) {
+      pushLog('SPY_BENCHMARK_ERROR: ' + spyErr.message, 'warn');
+    }
+
+    // ── Weekly P&L reset tracker (#8) ──────────────────────────────────────────
+    try {
+      const mondayDate = (() => {
+        const d = new Date(nowET);
+        const day = d.getDay();
+        const diff = d.getDate() - day + (day === 0 ? -6 : 1);
+        d.setDate(diff);
+        return d.toISOString().split('T')[0];
+      })();
+      const weeklyKey = 'weekly_pnl';
+      const sbUrl  = process.env.SUPABASE_URL;
+      const sbHdrs = _sbHeaders();
+      let weeklyData = { weekStart: mondayDate, weekPnl: 0, weekTrades: 0, weekWins: 0 };
+      if (sbUrl && sbHdrs) {
+        const wResp = await fetch(`${sbUrl}/rest/v1/bot_state?key=eq.${weeklyKey}&select=value`, { headers: sbHdrs });
+        const wRows = await wResp.json().catch(() => []);
+        if (Array.isArray(wRows) && wRows.length) {
+          const prev = JSON.parse(wRows[0].value);
+          if (prev.weekStart === mondayDate) {
+            weeklyData = prev;
+          } else {
+            pushLog('WEEKLY_RESET: new week starting ' + mondayDate + ' (prev=' + prev.weekStart + ' pnl=' + prev.weekPnl + '% trades=' + prev.weekTrades + ')', 'info');
+          }
+        }
+      }
+      // Recalculate from journal for this week
+      const { data: weekTrades } = await supabase.from('journal')
+        .select('pnl_pct').gte('trade_date', mondayDate).not('pnl_pct', 'is', null);
+      if (weekTrades && weekTrades.length > 0) {
+        const wPnl = weekTrades.reduce((s, t) => s + (parseFloat(t.pnl_pct) || 0), 0);
+        const wWins = weekTrades.filter(t => parseFloat(t.pnl_pct) > 0).length;
+        weeklyData = {
+          weekStart: mondayDate,
+          weekPnl: parseFloat(wPnl.toFixed(2)),
+          weekTrades: weekTrades.length,
+          weekWinRate: weekTrades.length > 0 ? parseFloat((wWins / weekTrades.length * 100).toFixed(1)) : 0
+        };
+      }
+      writeBotState(weeklyKey, JSON.stringify(weeklyData));
+    } catch(weekErr) {
+      pushLog('WEEKLY_PNL_ERROR: ' + weekErr.message, 'warn');
+    }
+
+    // ── Pre-fetch sector ETF snapshots for sector momentum filter (#4) ────────
+    const sectorEtfCache = {};
+    try {
+      const etfs = ['QQQ', 'XLF', 'XLY', 'XLK', 'XLV', 'XLE', 'XLI'];
+      const etfSnaps = await Promise.all(etfs.map(etf =>
+        raceFetch('https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers/' + etf + '?apiKey=' + apiKey)
+      ));
+      etfs.forEach((etf, i) => {
+        const snap = etfSnaps[i];
+        const cur = snap?.ticker?.day?.c || snap?.ticker?.lastTrade?.p || 0;
+        const prev = snap?.ticker?.prevDay?.c || 0;
+        sectorEtfCache[etf] = (cur > 0 && prev > 0) ? ((cur - prev) / prev * 100) : 0;
+      });
+      pushLog('SECTOR_ETFS: ' + etfs.map(e => e + '=' + (sectorEtfCache[e] || 0).toFixed(2) + '%').join(' '), 'info');
+    } catch(sectorErr) {
+      pushLog('SECTOR_ETF_ERROR: ' + sectorErr.message, 'warn');
+    }
+
     // ── evaluateSymbol — self-contained per-symbol evaluation ────────────────
     async function evaluateSymbol(symbol) {
       try {
         symbolsScanned++;
 
-        // Fetch snapshot + 4 indicators in parallel
-        const [snapRes, rsiData, macdData, ema50Data, ema200Data] = await Promise.all([
+        // Fetch snapshot + 5 indicators in parallel (added EMA60 for golden cross)
+        const [snapRes, rsiData, macdData, ema50Data, ema200Data, ema60Data, volData] = await Promise.all([
           raceFetch('https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers/' + symbol + '?apiKey=' + apiKey),
           raceFetch('https://api.polygon.io/v1/indicators/rsi/' + symbol + '?timespan=hour&adjusted=true&window=14&series_type=close&order=desc&limit=3&apiKey=' + apiKey),
           raceFetch('https://api.polygon.io/v1/indicators/macd/' + symbol + '?timespan=hour&adjusted=true&short_window=12&long_window=26&signal_window=9&series_type=close&order=desc&limit=3&apiKey=' + apiKey),
           raceFetch('https://api.polygon.io/v1/indicators/ema/' + symbol + '?timespan=day&adjusted=true&window=50&series_type=close&order=desc&limit=1&apiKey=' + apiKey),
           raceFetch('https://api.polygon.io/v1/indicators/ema/' + symbol + '?timespan=day&adjusted=true&window=200&series_type=close&order=desc&limit=1&apiKey=' + apiKey),
+          raceFetch('https://api.polygon.io/v1/indicators/ema/' + symbol + '?timespan=day&adjusted=true&window=60&series_type=close&order=desc&limit=1&apiKey=' + apiKey),
+          raceFetch('https://api.polygon.io/v2/aggs/ticker/' + symbol + '/range/1/day/' +
+            new Date(Date.now() - 30 * 86400000).toISOString().split('T')[0] + '/' +
+            new Date().toISOString().split('T')[0] + '?adjusted=true&sort=desc&limit=20&apiKey=' + apiKey),
         ]);
 
         const price = snapRes?.ticker?.day?.c || snapRes?.ticker?.lastTrade?.p || snapRes?.ticker?.prevDay?.c || null;
@@ -4206,6 +4407,13 @@ module.exports = async function handler(req, res) {
         const macdHistPrev = macdData?.results?.values?.[1]?.histogram || 0;
         const ema50        = ema50Data?.results?.values?.[0]?.value || 0;
         const ema200       = ema200Data?.results?.values?.[0]?.value || 0;
+        const ema60        = ema60Data?.results?.values?.[0]?.value || 0;
+
+        // Volume: current vs 20-day average (#3e)
+        const volBars = volData?.results || [];
+        const currentVol = volBars.length > 0 ? (volBars[0].v || 0) : 0;
+        const avgVol = volBars.length > 1 ? volBars.slice(1).reduce((s, b) => s + (b.v || 0), 0) / Math.max(1, volBars.length - 1) : 0;
+        const volAboveAvg = avgVol > 0 ? currentVol > avgVol : true; // default true if no data
 
         // Calculate NZR score
         let nrzScore = 40;
@@ -4237,33 +4445,60 @@ module.exports = async function handler(req, res) {
         // Determine direction
         const direction = (macdValue > macdSig && rsiValue > 45) ? 'LONG' : 'SHORT';
 
-        pushLog(symbol + ' RSI=' + rsiValue.toFixed(1) + ' MACD_HIST=' + macdHist.toFixed(3) + ' EMA_TREND=' + (ema50 > ema200 ? 'BULL' : 'BEAR') + ' SCORE=' + nrzScore, nrzScore >= 70 ? 'pass' : 'info');
+        pushLog(symbol + ' RSI=' + rsiValue.toFixed(1) + ' MACD_HIST=' + macdHist.toFixed(3) + ' EMA_TREND=' + (ema50 > ema200 ? 'BULL' : 'BEAR') + ' EMA60/200=' + (ema60 > ema200 ? 'GOLDEN' : 'DEATH') + ' VOL=' + (volAboveAvg ? 'ABOVE' : 'BELOW') + ' SCORE=' + nrzScore, nrzScore >= 75 ? 'pass' : 'info');
 
-        signalResults.push({ symbol, price, nrzScore, direction, rsi: rsiValue, macdHist, emaTrend: ema50 > ema200 ? 'BULL' : 'BEAR', status: nrzScore >= 70 ? 'SIGNAL' : 'FILTERED' });
+        signalResults.push({ symbol, price, nrzScore, direction, rsi: rsiValue, macdHist, emaTrend: ema50 > ema200 ? 'BULL' : 'BEAR', ema60, ema200, volAboveAvg, status: nrzScore >= 75 ? 'SIGNAL' : 'FILTERED' });
 
-        if (nrzScore >= 70) {
+        // ── Improved signal quality gate (#3) — all conditions must pass ──────
+        if (nrzScore >= 75) {
           signalsFound++;
-          pushLog('SIGNAL: ' + symbol + ' ' + direction + ' score=' + nrzScore, 'pass');
-          if (!posMgmt.newEntriesAllowed) {
-            pushLog('SIGNAL_BLOCKED: ' + symbol + ' — new entries paused (positions=' + posMgmt.openCount + ' drawdown=' + posMgmt.totalUnrealizedPct + '%)', 'warn');
-          } else try {
-            const execResult = await executeSignal({
-              symbol, direction, mode: 'day', strategy: 'COMBINED',
-              nrzScore, entryPrice: price, price, atr: price * 0.015,
-              positionSize: dayAlloc * 0.10,
-              rsi: rsiValue,
-              macdHist: macdHist,
-              emaTrend: ema50 > ema200 ? 'BULL' : 'BEAR',
-            });
-            if (execResult.executed) {
-              tradesPlaced++;
-              pushLog('TRADE_EXECUTED: ' + symbol + ' ' + direction + ' @ $' + price, 'pass');
-            } else {
-              pushLog('TRADE_SKIPPED: ' + symbol + ' — ' + (execResult.reason || 'no reason'), 'info');
-            }
-          } catch(execErr) {
-            pushLog('EXEC_ERROR: ' + symbol + ' — ' + execErr.message, 'warn');
+
+          // #3b: RSI between 45 and 68 (avoid overbought)
+          if (rsiValue < 45 || rsiValue > 68) {
+            pushLog('FILTER_RSI: ' + symbol + ' RSI=' + rsiValue.toFixed(1) + ' outside 45-68 range', 'info');
+            return;
           }
+          // #3c: MACD histogram must be positive
+          if (macdHist <= 0) {
+            pushLog('FILTER_MACD: ' + symbol + ' MACD_HIST=' + macdHist.toFixed(3) + ' not positive', 'info');
+            return;
+          }
+          // #3d: EMA60 > EMA200 (golden cross active)
+          if (ema60 > 0 && ema200 > 0 && ema60 <= ema200) {
+            pushLog('FILTER_EMA: ' + symbol + ' EMA60=' + ema60.toFixed(2) + ' <= EMA200=' + ema200.toFixed(2) + ' no golden cross', 'info');
+            return;
+          }
+          // #3e: Volume above 20-day average
+          if (!volAboveAvg) {
+            pushLog('FILTER_VOL: ' + symbol + ' volume below 20-day avg (cur=' + currentVol + ' avg=' + Math.round(avgVol) + ')', 'info');
+            return;
+          }
+          // #3f: SPY not down more than 1.5% today
+          if (spyDayChangePct < -1.5) {
+            pushLog('FILTER_SPY: ' + symbol + ' skipped — SPY down ' + spyDayChangePct.toFixed(2) + '% (limit -1.5%)', 'warn');
+            return;
+          }
+
+          pushLog('SIGNAL: ' + symbol + ' ' + direction + ' score=' + nrzScore + ' (passed all quality filters)', 'pass');
+
+          // #4: Sector momentum filter — check sector ETF
+          const sectorEtf = sectorMap[symbol] || null;
+          let sectorPositive = true;
+          let sectorSizeMultiplier = 1.0;
+          if (sectorEtf && sectorEtfCache[sectorEtf] !== undefined) {
+            sectorPositive = sectorEtfCache[sectorEtf] >= 0;
+            if (!sectorPositive) {
+              sectorSizeMultiplier = 0.5;
+              pushLog('SECTOR_FILTER: ' + symbol + ' sector ' + sectorEtf + ' negative (' + sectorEtfCache[sectorEtf].toFixed(2) + '%) — reducing size 50%', 'warn');
+            }
+          }
+
+          // Collect as candidate for top-5 ranking (#5)
+          candidateSignals.push({
+            symbol, direction, nrzScore, price, rsiValue, macdHist,
+            emaTrend: ema50 > ema200 ? 'BULL' : 'BEAR',
+            sectorSizeMultiplier
+          });
         }
 
       } catch(err) {
@@ -4281,6 +4516,39 @@ module.exports = async function handler(req, res) {
       const batch = SCAN_UNIVERSE.slice(i, i + BATCH_SIZE);
       pushLog('BATCH ' + (Math.floor(i / BATCH_SIZE) + 1) + ': ' + batch.join(','), 'info');
       await Promise.all(batch.map(symbol => evaluateSymbol(symbol)));
+    }
+
+    // ── Execute top 5 signals by NZR score (#5) ─────────────────────────────
+    candidateSignals.sort((a, b) => b.nrzScore - a.nrzScore);
+    const topSignals = candidateSignals.slice(0, 5);
+    if (candidateSignals.length > 5) {
+      pushLog('RANK_FILTER: ' + candidateSignals.length + ' candidates, trading top 5: ' + topSignals.map(s => s.symbol + '(' + s.nrzScore + ')').join(', '), 'info');
+    }
+
+    for (const sig of topSignals) {
+      if (!posMgmt.newEntriesAllowed) {
+        pushLog('SIGNAL_BLOCKED: ' + sig.symbol + ' — new entries paused (positions=' + posMgmt.openCount + ' drawdown=' + posMgmt.totalUnrealizedPct + '%)', 'warn');
+        continue;
+      }
+      try {
+        const posSize = dayAlloc * 0.10 * sig.sectorSizeMultiplier;
+        const execResult = await executeSignal({
+          symbol: sig.symbol, direction: sig.direction, mode: 'day', strategy: 'COMBINED',
+          nrzScore: sig.nrzScore, entryPrice: sig.price, price: sig.price, atr: sig.price * 0.015,
+          positionSize: posSize,
+          rsi: sig.rsiValue,
+          macdHist: sig.macdHist,
+          emaTrend: sig.emaTrend,
+        });
+        if (execResult.executed) {
+          tradesPlaced++;
+          pushLog('TRADE_EXECUTED: ' + sig.symbol + ' ' + sig.direction + ' @ $' + sig.price + ' (rank #' + (topSignals.indexOf(sig) + 1) + '/' + candidateSignals.length + ' sectorMult=' + sig.sectorSizeMultiplier + ')', 'pass');
+        } else {
+          pushLog('TRADE_SKIPPED: ' + sig.symbol + ' — ' + (execResult.reason || 'no reason'), 'info');
+        }
+      } catch(execErr) {
+        pushLog('EXEC_ERROR: ' + sig.symbol + ' — ' + execErr.message, 'warn');
+      }
     }
 
     const duration = Date.now() - startTime;
@@ -4647,39 +4915,68 @@ module.exports = async function handler(req, res) {
       });
     }
 
+    // Progressive trailing stop logic (#7)
     if (direction === 'LONG') {
       highestPrice = Math.max(highestPrice, currentPrice);
-      if (stage === 1 && highestPrice >= target1) {
-        stage     = 2;
-        stopPrice = roundLimitPrice(entryPrice); // move to breakeven
-        moved     = true;
-        console.log(`[bot] TRAIL ${sym}: stage 1→2 (breakeven) stop=$${stopPrice}`);
-      }
-      if (stage >= 2 && highestPrice >= target2) {
-        stage     = 3;
-        stopPrice = roundLimitPrice(highestPrice - atr);
-        moved     = true;
-        console.log(`[bot] TRAIL ${sym}: stage 2→3 (trailing) stop=$${stopPrice}`);
-      } else if (stage === 3) {
-        const newStop = roundLimitPrice(highestPrice - atr);
-        if (newStop > stopPrice) { stopPrice = newStop; moved = true; }
-      }
-    } else { // SHORT
-      lowestPrice = Math.min(lowestPrice, currentPrice);
-      if (stage === 1 && lowestPrice <= target1) {
-        stage     = 2;
+      const gainPct = entryPrice > 0 ? ((highestPrice - entryPrice) / entryPrice * 100) : 0;
+
+      if (gainPct >= 15) {
+        // At +15%: trail at highest - 1%
+        const newStop = roundLimitPrice(highestPrice * 0.99);
+        if (newStop > stopPrice) { stopPrice = newStop; moved = true; stage = 5; }
+        if (moved) console.log(`[bot] TRAIL ${sym}: stage 5 (1% trail) stop=$${stopPrice} gain=${gainPct.toFixed(1)}%`);
+      } else if (gainPct >= 12) {
+        // At +12%: trail at highest - 1.5%
+        const newStop = roundLimitPrice(highestPrice * 0.985);
+        if (newStop > stopPrice) { stopPrice = newStop; moved = true; stage = 4; }
+        if (moved) console.log(`[bot] TRAIL ${sym}: stage 4 (1.5% trail) stop=$${stopPrice} gain=${gainPct.toFixed(1)}%`);
+      } else if (gainPct >= 8) {
+        // At +8%: trail at highest - 2%
+        const newStop = roundLimitPrice(highestPrice * 0.98);
+        if (newStop > stopPrice) { stopPrice = newStop; moved = true; stage = 3; }
+        if (moved) console.log(`[bot] TRAIL ${sym}: stage 3 (2% trail) stop=$${stopPrice} gain=${gainPct.toFixed(1)}%`);
+      } else if (gainPct >= 5) {
+        // At +5%: move to breakeven
+        if (stage < 2) {
+          stage = 2;
+          stopPrice = roundLimitPrice(entryPrice);
+          moved = true;
+          console.log(`[bot] TRAIL ${sym}: stage 2 (breakeven) stop=$${stopPrice} gain=${gainPct.toFixed(1)}%`);
+        }
+      } else if (stage === 1 && highestPrice >= target1) {
+        stage = 2;
         stopPrice = roundLimitPrice(entryPrice);
-        moved     = true;
-        console.log(`[bot] TRAIL ${sym}: stage 1→2 (breakeven) stop=$${stopPrice}`);
+        moved = true;
+        console.log(`[bot] TRAIL ${sym}: stage 1→2 (breakeven at target1) stop=$${stopPrice}`);
       }
-      if (stage >= 2 && lowestPrice <= target2) {
-        stage     = 3;
-        stopPrice = roundLimitPrice(lowestPrice + atr);
-        moved     = true;
-        console.log(`[bot] TRAIL ${sym}: stage 2→3 (trailing) stop=$${stopPrice}`);
-      } else if (stage === 3) {
-        const newStop = roundLimitPrice(lowestPrice + atr);
-        if (newStop < stopPrice) { stopPrice = newStop; moved = true; }
+    } else { // SHORT — progressive trailing
+      lowestPrice = Math.min(lowestPrice, currentPrice);
+      const gainPct = entryPrice > 0 ? ((entryPrice - lowestPrice) / entryPrice * 100) : 0;
+
+      if (gainPct >= 15) {
+        const newStop = roundLimitPrice(lowestPrice * 1.01);
+        if (newStop < stopPrice) { stopPrice = newStop; moved = true; stage = 5; }
+        if (moved) console.log(`[bot] TRAIL ${sym}: stage 5 (1% trail) stop=$${stopPrice} gain=${gainPct.toFixed(1)}%`);
+      } else if (gainPct >= 12) {
+        const newStop = roundLimitPrice(lowestPrice * 1.015);
+        if (newStop < stopPrice) { stopPrice = newStop; moved = true; stage = 4; }
+        if (moved) console.log(`[bot] TRAIL ${sym}: stage 4 (1.5% trail) stop=$${stopPrice} gain=${gainPct.toFixed(1)}%`);
+      } else if (gainPct >= 8) {
+        const newStop = roundLimitPrice(lowestPrice * 1.02);
+        if (newStop < stopPrice) { stopPrice = newStop; moved = true; stage = 3; }
+        if (moved) console.log(`[bot] TRAIL ${sym}: stage 3 (2% trail) stop=$${stopPrice} gain=${gainPct.toFixed(1)}%`);
+      } else if (gainPct >= 5) {
+        if (stage < 2) {
+          stage = 2;
+          stopPrice = roundLimitPrice(entryPrice);
+          moved = true;
+          console.log(`[bot] TRAIL ${sym}: stage 2 (breakeven) stop=$${stopPrice} gain=${gainPct.toFixed(1)}%`);
+        }
+      } else if (stage === 1 && lowestPrice <= target1) {
+        stage = 2;
+        stopPrice = roundLimitPrice(entryPrice);
+        moved = true;
+        console.log(`[bot] TRAIL ${sym}: stage 1→2 (breakeven at target1) stop=$${stopPrice}`);
       }
     }
 
