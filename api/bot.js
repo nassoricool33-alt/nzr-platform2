@@ -3580,6 +3580,9 @@ async function executeSignal(signal, newsContext = null) {
   const positionSize = parseFloat(signal.positionSize) || 0;
   const atr         = parseFloat(signal.atr) || entryPrice * 0.015;
 
+  console.log('[EXECUTE] Starting for', signal.symbol, 'score=', signal.nrzScore, 'dir=', signal.direction, 'price=', entryPrice, 'posSize=', positionSize);
+  pushLog('EXEC_START: ' + signal.symbol + ' score=' + (signal.nrzScore || 0) + ' price=$' + entryPrice + ' posSize=$' + positionSize, 'info');
+
   if (!entryPrice || entryPrice <= 0) {
     pushLog('EXEC_SKIP: ' + signal.symbol + ' — invalid entry price: ' + signal.entryPrice, 'warn');
     return { executed: false, reason: 'invalid_entry_price' };
@@ -3596,16 +3599,19 @@ async function executeSignal(signal, newsContext = null) {
     : signal.direction === 'LONG' ? entryPrice + (2 * atr) : entryPrice - (2 * atr);
 
   // Gate: paper-mode when BOT_LIVE_TRADING is not explicitly enabled
+  console.log('[EXECUTE] BOT_LIVE_TRADING=', process.env.BOT_LIVE_TRADING, 'parsed=', BOT_LIVE_TRADING);
+  pushLog('EXEC_GATE: ' + signal.symbol + ' BOT_LIVE_TRADING=' + process.env.BOT_LIVE_TRADING + ' killSwitch=' + killSwitch, 'info');
   if (!BOT_LIVE_TRADING) {
-    pushLog(`PAPER_MODE: live trading disabled, signal logged only — ${signal.symbol}`, 'info');
+    pushLog('PAPER_MODE: live trading disabled (BOT_LIVE_TRADING=' + process.env.BOT_LIVE_TRADING + '), signal logged only — ' + signal.symbol, 'warn');
     return { executed: false, reason: 'paper_mode' };
   }
 
   // Market hours gate: 9:31 AM – 3:44 PM ET only
   const etMinNow = getETMinuteOfDay();
+  const etHH = Math.floor(etMinNow / 60), etMM = String(etMinNow % 60).padStart(2, '0');
+  pushLog('EXEC_HOURS: ' + signal.symbol + ' ET=' + etHH + ':' + etMM + ' (min=' + etMinNow + ', need 571-944)', 'info');
   if (etMinNow < 9 * 60 + 31 || etMinNow > 15 * 60 + 44) {
-    const hh = Math.floor(etMinNow / 60), mm = String(etMinNow % 60).padStart(2, '0');
-    pushLog(`EXEC_SKIP: ${signal.symbol} outside market hours (ET ${hh}:${mm})`, 'warn');
+    pushLog(`EXEC_SKIP: ${signal.symbol} outside market hours (ET ${etHH}:${etMM})`, 'warn');
     return { executed: false, reason: 'outside_market_hours' };
   }
 
@@ -3631,12 +3637,15 @@ async function executeSignal(signal, newsContext = null) {
 
   // 1. Calculate share quantity
   const qty = Math.floor(positionSize / entryPrice);
+  console.log('[EXECUTE] Capital=', capitalAmount, 'qty=', qty, 'posSize=', positionSize, 'price=', entryPrice);
+  pushLog('EXEC_QTY: ' + signal.symbol + ' qty=' + qty + ' (posSize=$' + positionSize.toFixed(2) + ' / price=$' + entryPrice.toFixed(2) + ')', 'info');
   if (qty < 1) {
     pushLog(`EXEC_SKIP: ${signal.symbol} qty=${qty} too small (posSize=${positionSize} price=${entryPrice})`, 'warn');
     return { executed: false, reason: 'qty_too_small' };
   }
 
   // 2. Check for an existing open Alpaca position in the same direction
+  pushLog('EXEC_CHECK_POS: ' + signal.symbol + ' checking existing position...', 'info');
   try {
     const ctrl  = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 8000);
@@ -3651,17 +3660,20 @@ async function executeSignal(signal, newsContext = null) {
     if (posResp.status === 200) {
       const pos = await posResp.json();
       const existingDir = pos.side === 'long' ? 'LONG' : 'SHORT';
+      pushLog('EXEC_POS_FOUND: ' + signal.symbol + ' has ' + pos.side + ' position, signal=' + signal.direction, 'info');
       if (existingDir === signal.direction) {
         pushLog(`EXEC_SKIP: ${signal.symbol} position already open (${pos.side})`, 'warn');
         return { executed: false, reason: 'position_exists' };
       }
+    } else {
+      pushLog('EXEC_POS_CLEAR: ' + signal.symbol + ' no existing position (status=' + posResp.status + ')', 'info');
     }
-    // 404 → no position, continue; other non-2xx → log and continue (fail-open)
   } catch (err) {
-    console.warn(`[bot] executeSignal: position check for ${signal.symbol}:`, err.message);
+    pushLog('EXEC_POS_CHECK_ERR: ' + signal.symbol + ' ' + err.message + ' (proceeding)', 'warn');
   }
 
   // 3. Buying power check
+  pushLog('EXEC_CHECK_BP: ' + signal.symbol + ' checking buying power...', 'info');
   try {
     const ctrl  = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 8000);
@@ -3674,14 +3686,16 @@ async function executeSignal(signal, newsContext = null) {
       const acct = await acctResp.json().catch(() => ({}));
       const buyingPower  = parseFloat(acct.buying_power ?? acct.cash ?? '0');
       const orderValue   = qty * entryPrice;
+      pushLog('EXEC_BP: ' + signal.symbol + ' buyingPower=$' + buyingPower.toFixed(2) + ' orderValue=$' + orderValue.toFixed(2) + ' (' + (orderValue / buyingPower * 100).toFixed(1) + '%)', 'info');
       if (isFinite(buyingPower) && buyingPower > 0 && orderValue > buyingPower * 0.95) {
         pushLog(`BUYING_POWER_SKIP: ${signal.symbol} order $${orderValue.toFixed(2)} > 95% of buying power $${buyingPower.toFixed(2)}`, 'warn');
         return { executed: false, reason: 'insufficient_buying_power', orderValue, buyingPower };
       }
+    } else {
+      pushLog('EXEC_BP_FAIL: ' + signal.symbol + ' account fetch status=' + acctResp.status + ' (proceeding)', 'warn');
     }
   } catch (err) {
-    console.warn(`[bot] executeSignal: buying power check for ${signal.symbol}:`, err.message);
-    // fail-open: proceed if account check errors
+    pushLog('EXEC_BP_ERR: ' + signal.symbol + ' ' + err.message + ' (proceeding)', 'warn');
   }
 
   // 4. Submit bracket limit order
@@ -3702,6 +3716,9 @@ async function executeSignal(signal, newsContext = null) {
     client_order_id: clientOrderId,
   };
 
+  console.log('[EXECUTE] Order body=', JSON.stringify(orderBody));
+  pushLog('EXEC_ORDER: ' + signal.symbol + ' ' + side + ' ' + qty + ' @ $' + entryPrice.toFixed(2) + ' stop=$' + stopPrice.toFixed(2) + ' target=$' + target1.toFixed(2) + ' tif=' + orderBody.time_in_force, 'info');
+
   try {
     const ctrl  = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 12000);
@@ -3716,6 +3733,10 @@ async function executeSignal(signal, newsContext = null) {
     } finally { clearTimeout(timer); }
 
     const orderData = await orderResp.json().catch(() => ({}));
+
+    console.log('[EXECUTE] Alpaca response status=', orderResp.status);
+    console.log('[EXECUTE] Alpaca response=', JSON.stringify(orderData));
+    pushLog('EXEC_RESPONSE: ' + signal.symbol + ' status=' + orderResp.status + ' id=' + (orderData.id || 'none') + ' msg=' + (orderData.message || 'ok'), orderResp.status <= 201 ? 'pass' : 'warn');
 
     // 5. Handle success
     if (orderResp.status === 200 || orderResp.status === 201) {
