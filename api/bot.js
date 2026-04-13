@@ -205,9 +205,15 @@ const BOT_LOG_MAX  = 200;
  * type: 'pass' | 'block' | 'warn' | 'info'
  */
 function pushLog(message, type = 'info') {
-  botLogBuffer.unshift({ timestamp: new Date().toISOString(), message, type });
-  if (botLogBuffer.length > BOT_LOG_MAX) botLogBuffer.pop();
-  console.log(`[bot/${type}] ${message}`);
+  const entry = { timestamp: new Date().toISOString(), message, type };
+  botLogBuffer.unshift(entry);
+  if (botLogBuffer.length > 200) botLogBuffer.pop();
+  console.log('[BOT]', type.toUpperCase(), message);
+
+  // Persist to Supabase non-blocking
+  if (supabase && message) {
+    supabase.from('bot_logs').insert({ message, type }).then(() => {}).catch(() => {});
+  }
 }
 
 // ─── SAFE NOTIFICATION INSERT ────────────────────────────────────────────────
@@ -3594,38 +3600,42 @@ async function executeSignal(signal, newsContext = null) {
         ` stop=${stopPrice.toFixed(2)} target=${target1.toFixed(2)} id=${orderId}`,
         'pass'
       );
-      // Write to journal
-      const journalEntry = {
-        symbol: signal.symbol,
-        entry_price: entryPrice,
-        exit_price: null,
-        pnl_pct: null,
-        trade_date: new Date().toISOString().split('T')[0],
-        notes: 'Bot: COMBINED | NZR=' + signal.nrzScore +
-               ' | Dir=' + signal.direction.toUpperCase() +
-               ' | RSI=' + (signal.rsi ? Number(signal.rsi).toFixed(1) : 'n/a') +
-               ' | MACD=' + (signal.macdHist ? Number(signal.macdHist).toFixed(3) : 'n/a') +
-               ' | EMA=' + (signal.emaTrend || 'n/a') +
-               ' | Stop=$' + stopPrice.toFixed(2) +
-               ' | Target=$' + target1.toFixed(2) +
-               ' | Qty=' + qty +
-               ' | OrderID=' + orderData.id
-      };
+      // Write to journal with full error logging
+      try {
+        const journalPayload = {
+          symbol: signal.symbol,
+          entry_price: parseFloat(entryPrice) || 0,
+          exit_price: null,
+          pnl_pct: null,
+          trade_date: new Date().toISOString().split('T')[0],
+          notes: 'Bot: COMBINED | NZR=' + (signal.nrzScore || 0) +
+                 ' | Dir=' + (signal.direction || 'long').toUpperCase() +
+                 ' | RSI=' + (signal.rsi ? Number(signal.rsi).toFixed(1) : 'n/a') +
+                 ' | MACD=' + (signal.macdHist ? Number(signal.macdHist).toFixed(3) : 'n/a') +
+                 ' | EMA=' + (signal.emaTrend || 'n/a') +
+                 ' | Stop=$' + (stopPrice ? stopPrice.toFixed(2) : '0') +
+                 ' | Target=$' + (target1 ? target1.toFixed(2) : '0') +
+                 ' | Qty=' + (qty || 0) +
+                 ' | OrderID=' + (orderData.id || 'unknown')
+        };
 
-      pushLog('JOURNAL_ATTEMPT: writing trade for ' + signal.symbol, 'info');
+        console.log('[JOURNAL] Attempting insert:', JSON.stringify(journalPayload));
 
-      if (!supabase) {
-        pushLog('JOURNAL_SKIP: Supabase not configured', 'warn');
-      } else {
         const { data: journalData, error: journalError } = await supabase
           .from('journal')
-          .insert(journalEntry);
+          .insert(journalPayload)
+          .select();
 
         if (journalError) {
-          pushLog('JOURNAL_ERROR: ' + JSON.stringify(journalError), 'warn');
+          console.error('[JOURNAL] Insert error:', JSON.stringify(journalError));
+          pushLog('JOURNAL_ERROR: ' + signal.symbol + ' — code=' + journalError.code + ' msg=' + journalError.message, 'warn');
         } else {
-          pushLog('JOURNAL_SUCCESS: ' + signal.symbol + ' trade logged', 'pass');
+          console.log('[JOURNAL] Insert success:', JSON.stringify(journalData));
+          pushLog('JOURNAL_SUCCESS: ' + signal.symbol + ' trade logged id=' + (journalData?.[0]?.id || 'unknown'), 'pass');
         }
+      } catch(je) {
+        console.error('[JOURNAL] Exception:', je.message);
+        pushLog('JOURNAL_EXCEPTION: ' + je.message, 'warn');
       }
 
       return { executed: true, orderId, qty };
@@ -3909,6 +3919,42 @@ module.exports = async function handler(req, res) {
     return res.json({ data, error });
   }
 
+  // ── TEST JOURNAL INSERT v2 (diagnostic) ────────────────────────────────────
+  if (type === 'testjournal2') {
+    const testPayload = {
+      symbol: 'TEST',
+      entry_price: 100.00,
+      trade_date: new Date().toISOString().split('T')[0],
+      notes: 'Diagnostic test entry'
+    };
+    const { data, error } = await supabase.from('journal').insert(testPayload).select();
+    return res.json({
+      success: !error,
+      data,
+      error: error ? { code: error.code, message: error.message, details: error.details } : null,
+      supabaseConnected: !!supabase,
+      envVars: { url: !!process.env.SUPABASE_URL, key: !!process.env.SUPABASE_ANON_KEY }
+    });
+  }
+
+  // ── INIT DB (create bot_logs table) ────────────────────────────────────────
+  if (type === 'initdb') {
+    try {
+      const { data, error } = await supabase.rpc('exec_sql', {
+        query: `CREATE TABLE IF NOT EXISTS bot_logs (
+          id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+          timestamp timestamptz DEFAULT now(),
+          message text,
+          type text DEFAULT 'info',
+          created_at timestamptz DEFAULT now()
+        );`
+      });
+      return res.json({ success: !error, data, error });
+    } catch(e) {
+      return res.json({ success: false, error: e.message, hint: 'Run this SQL manually in Supabase SQL Editor if rpc exec_sql is not available.' });
+    }
+  }
+
   // ── LOAD CAPITAL FROM SUPABASE ON EVERY REQUEST ─────────────────────────────
   if (!capitalAmount || capitalAmount <= 0) {
     try {
@@ -4139,11 +4185,17 @@ module.exports = async function handler(req, res) {
   // ── BOT LOG ──────────────────────────────────────────────────────────────────
   if (type === 'log') {
     console.log('[BOT] LOG route matched');
-    const since = req.query.since ? new Date(req.query.since).getTime() : 0;
-    const logs  = since
-      ? botLogBuffer.filter(e => new Date(e.timestamp).getTime() > since)
-      : [...botLogBuffer];
-    return res.status(200).json({ logs, count: logs.length });
+    try {
+      const since = req.query.since;
+      let query = supabase.from('bot_logs').select('*').order('created_at', { ascending: false }).limit(100);
+      if (since) query = query.gt('created_at', since);
+      const { data: logs, error } = await query;
+      if (error) throw error;
+      const combined = [...botLogBuffer, ...(logs || [])].slice(0, 200);
+      return res.json({ logs: combined, count: combined.length });
+    } catch(e) {
+      return res.json({ logs: botLogBuffer, count: botLogBuffer.length });
+    }
   }
 
   // ── CRON SETUP INSTRUCTIONS ────────────────────────────────────────────────
