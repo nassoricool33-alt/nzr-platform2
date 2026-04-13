@@ -130,13 +130,13 @@ module.exports = async function handler(req, res) {
 
     // ── GET orders ────────────────────────────────────────────────────────────
     if (action === 'orders' && req.method === 'GET') {
-      const status = String(req.query.status || 'open').replace(/[^a-z]/g, '');
+      const status = String(req.query.status || 'all').replace(/[^a-z]/g, '');
       const after  = req.query.after || '';
-      const limit  = Math.min(parseInt(req.query.limit || '500', 10), 500);
-      let path = `/v2/orders?status=${encodeURIComponent(status)}&limit=${limit}`;
+      const limit  = Math.min(parseInt(req.query.limit || '200', 10), 500);
+      let path = `/v2/orders?status=${encodeURIComponent(status)}&limit=${limit}&direction=desc`;
       if (after) path += `&after=${encodeURIComponent(after)}`;
       const data = await alpacaFetch(path);
-      return res.status(200).json(data);
+      return res.status(200).json(Array.isArray(data) ? data : []);
     }
 
     // ── DELETE cancel single order ────────────────────────────────────────────

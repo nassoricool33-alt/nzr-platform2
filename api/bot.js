@@ -4068,6 +4068,13 @@ module.exports = async function handler(req, res) {
     }
   }
 
+  // ── MANUAL P&L UPDATE ──────────────────────────────────────────────────────
+  if (req.query.type === 'updatepnl') {
+    pushLog('MANUAL_PNL_UPDATE: starting', 'info');
+    await updateClosedTrades();
+    return res.json({ success: true, message: 'P&L update complete — check journal' });
+  }
+
   // ── LOAD CAPITAL FROM SUPABASE ON EVERY REQUEST ─────────────────────────────
   if (!capitalAmount || capitalAmount <= 0) {
     try {
