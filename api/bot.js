@@ -3955,6 +3955,107 @@ module.exports = async function handler(req, res) {
     }
   }
 
+  // ── BACKFILL HISTORICAL TRADES FROM ALPACA ─────────────────────────────────
+  if (req.query.type === 'backfill') {
+    try {
+      pushLog('BACKFILL: starting historical trade import', 'info');
+
+      // Fetch all closed orders from Alpaca
+      const ordersRes = await fetch('https://paper-api.alpaca.markets/v2/orders?status=closed&limit=500&direction=desc', {
+        headers: {
+          'APCA-API-KEY-ID': process.env.ALPACA_API_KEY,
+          'APCA-API-SECRET-KEY': process.env.ALPACA_SECRET_KEY
+        }
+      });
+      const orders = await ordersRes.json();
+
+      if (!Array.isArray(orders)) {
+        return res.json({ error: 'Failed to fetch orders', raw: orders });
+      }
+
+      pushLog('BACKFILL: found ' + orders.length + ' closed orders', 'info');
+
+      // Get filled buy orders only
+      const buyOrders = orders.filter(o =>
+        o.side === 'buy' &&
+        o.status === 'filled' &&
+        o.filled_avg_price &&
+        parseFloat(o.filled_avg_price) > 0
+      );
+
+      pushLog('BACKFILL: ' + buyOrders.length + ' filled buy orders to import', 'info');
+
+      let imported = 0;
+      let skipped = 0;
+
+      for (const order of buyOrders) {
+        try {
+          // Check if already in journal
+          const { data: existing } = await supabase
+            .from('journal')
+            .select('id')
+            .eq('symbol', order.symbol)
+            .eq('trade_date', order.filled_at ? order.filled_at.split('T')[0] : order.submitted_at.split('T')[0])
+            .limit(1);
+
+          if (existing && existing.length > 0) {
+            skipped++;
+            continue;
+          }
+
+          // Find matching sell order for this symbol after this buy
+          const matchingSell = orders.find(o =>
+            o.side === 'sell' &&
+            o.status === 'filled' &&
+            o.symbol === order.symbol &&
+            o.filled_at > order.filled_at &&
+            o.filled_avg_price
+          );
+
+          const entryPrice = parseFloat(order.filled_avg_price);
+          const exitPrice = matchingSell ? parseFloat(matchingSell.filled_avg_price) : null;
+          const pnlPct = exitPrice ? ((exitPrice - entryPrice) / entryPrice * 100) : null;
+          const tradeDate = (order.filled_at || order.submitted_at).split('T')[0];
+
+          const { error } = await supabase.from('journal').insert({
+            symbol: order.symbol,
+            entry_price: entryPrice,
+            exit_price: exitPrice,
+            pnl_pct: pnlPct ? parseFloat(pnlPct.toFixed(2)) : null,
+            trade_date: tradeDate,
+            notes: 'Backfilled: qty=' + order.filled_qty +
+                   ' | OrderID=' + order.id +
+                   (matchingSell ? ' | Closed=' + exitPrice + ' | PnL=' + (pnlPct ? pnlPct.toFixed(2) + '%' : 'n/a') : ' | Status=Open')
+          });
+
+          if (!error) {
+            imported++;
+            pushLog('BACKFILL_IMPORTED: ' + order.symbol + ' @ $' + entryPrice + (pnlPct ? ' pnl=' + pnlPct.toFixed(2) + '%' : ' open'), 'pass');
+          } else {
+            pushLog('BACKFILL_ERROR: ' + order.symbol + ' — ' + error.message, 'warn');
+          }
+        } catch(e) {
+          pushLog('BACKFILL_SKIP: ' + order.symbol + ' — ' + e.message, 'warn');
+        }
+      }
+
+      pushLog('BACKFILL_DONE: imported=' + imported + ' skipped=' + skipped, 'info');
+
+      return res.json({
+        success: true,
+        totalOrders: orders.length,
+        buyOrders: buyOrders.length,
+        imported,
+        skipped,
+        message: 'Backfill complete — ' + imported + ' trades imported to journal'
+      });
+
+    } catch(e) {
+      pushLog('BACKFILL_FATAL: ' + e.message, 'warn');
+      return res.json({ error: e.message });
+    }
+  }
+
   // ── LOAD CAPITAL FROM SUPABASE ON EVERY REQUEST ─────────────────────────────
   if (!capitalAmount || capitalAmount <= 0) {
     try {
