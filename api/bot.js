@@ -26,14 +26,35 @@ const ALLOWED_ORIGINS = ['https://nzr-platform2.vercel.app', 'http://localhost:3
 // ─── SCAN UNIVERSE ────────────────────────────────────────────────────────────
 // 30 liquid symbols — scanned in parallel batches within the 25s budget.
 // Supabase watchlist symbols are appended at scan time.
-const SCAN_UNIVERSE = [
-  'AAPL','MSFT','NVDA','AMD','TSLA',
-  'META','GOOGL','AMZN','SPY','QQQ',
-  'PLTR','COIN','NFLX','JPM','ARM',
-  'MSTR','SOFI','HOOD','UPST','DKNG',
-  'RBLX','UBER','SHOP','ORCL','CRM',
-  'MELI','SNOW','CRWD','SQ','PYPL',
-];
+const SCAN_UNIVERSE = [...new Set([
+  // MEGA CAP TECH
+  'AAPL', 'MSFT', 'NVDA', 'AMD', 'TSLA', 'META', 'GOOGL', 'AMZN',
+  'ARM', 'PLTR', 'COIN', 'MSTR', 'NFLX', 'CRM', 'ORCL', 'SNOW',
+
+  // HIGH BETA GROWTH
+  'CRWD', 'DKNG', 'RBLX', 'UBER', 'SHOP', 'SQ', 'PYPL', 'SOFI',
+  'HOOD', 'UPST', 'MELI', 'DASH', 'ABNB', 'LYFT', 'RIVN', 'LCID',
+
+  // SEMICONDUCTORS
+  'AVGO', 'QCOM', 'MU', 'INTC', 'AMAT', 'LRCX', 'KLAC', 'ASML',
+  'TSM', 'SMCI', 'ON', 'MRVL',
+
+  // AI & CLOUD
+  'MSFT', 'GOOGL', 'AMZN', 'ORCL', 'NOW', 'DDOG', 'NET', 'ZS',
+  'PANW', 'MDB', 'GTLB',
+
+  // FINANCIALS
+  'JPM', 'GS', 'MS', 'BAC', 'V', 'MA', 'PYPL', 'SQ',
+
+  // ENERGY & COMMODITIES
+  'XOM', 'CVX', 'OXY', 'SLB', 'FCX', 'NEM',
+
+  // ETFs
+  'SPY', 'QQQ', 'IWM', 'XLK', 'XLF', 'ARKK',
+
+  // BIOTECH
+  'MRNA', 'BNTX', 'REGN', 'VRTX', 'GILD', 'AMGN',
+])];
 
 // Auto-scan interval tracker
 let lastScanTime = 0;
@@ -52,22 +73,27 @@ const sectorMap = {
   AAPL:'XLK', MSFT:'XLK', NVDA:'XLK', AMD:'XLK', TSLA:'XLK',
   META:'XLK', GOOGL:'XLK', AMZN:'XLK', CRM:'XLK', ORCL:'XLK',
   INTC:'XLK', QCOM:'XLK', AVGO:'XLK', MU:'XLK', SMCI:'XLK',
+  NOW:'XLK', DDOG:'XLK', NET:'XLK', ZS:'XLK', PANW:'XLK', MDB:'XLK', GTLB:'XLK',
+  AMAT:'XLK', LRCX:'XLK', KLAC:'XLK', ASML:'XLK', TSM:'XLK', ON:'XLK', MRVL:'XLK',
+  ARM:'XLK', PLTR:'XLK', SNOW:'XLK', CRWD:'XLK',
   // XLF — Financials
   JPM:'XLF', BAC:'XLF', GS:'XLF', MS:'XLF', WFC:'XLF',
   C:'XLF', BLK:'XLF', AXP:'XLF', V:'XLF', MA:'XLF',
-  // XLV — Health Care
+  COIN:'XLF', SOFI:'XLF', HOOD:'XLF', SQ:'XLF', PYPL:'XLF',
+  // XLV — Health Care / Biotech
   JNJ:'XLV', UNH:'XLV', PFE:'XLV', ABBV:'XLV', MRK:'XLV',
   LLY:'XLV', BMY:'XLV', AMGN:'XLV', GILD:'XLV',
-  // XLE — Energy
+  MRNA:'XLV', BNTX:'XLV', REGN:'XLV', VRTX:'XLV',
+  // XLE — Energy & Commodities
   XOM:'XLE', CVX:'XLE', COP:'XLE', SLB:'XLE', OXY:'XLE', MPC:'XLE', PSX:'XLE',
+  FCX:'XLE', NEM:'XLE',
   // XLI — Industrials
   BA:'XLI', CAT:'XLI', GE:'XLI', HON:'XLI', UPS:'XLI', FDX:'XLI', RTX:'XLI', LMT:'XLI',
-  // XLB — Materials
-  // XLU — Utilities
-  // XLRE — Real Estate
-  // XLP — Consumer Staples
-  // XLY — Consumer Discretionary
+  // XLY — Consumer Discretionary / High Beta Growth
   NKE:'XLY', SBUX:'XLY', MCD:'XLY', TGT:'XLY', HD:'XLY', LOW:'XLY', F:'XLY', GM:'XLY',
+  DKNG:'XLY', RBLX:'XLY', UBER:'XLY', SHOP:'XLY', DASH:'XLY', ABNB:'XLY',
+  LYFT:'XLY', RIVN:'XLY', LCID:'XLY', UPST:'XLY', MELI:'XLY',
+  NFLX:'XLY', MSTR:'XLY',
   // XLC — Communication Services
 };
 
@@ -4238,6 +4264,7 @@ module.exports = async function handler(req, res) {
       return res.status(200).json({ success: true, message: 'Market closed', symbolsScanned: 0, signalsPassed: 0, tradesPlaced: 0, duration: '0ms' });
     }
 
+    pushLog('SCAN_UNIVERSE_SIZE: ' + SCAN_UNIVERSE.length + ' symbols', 'info');
     pushLog('SCAN_STARTED: capital=$' + capital + ' day=$' + dayAlloc + ' swing=$' + swingAlloc + ' universe=' + SCAN_UNIVERSE.length + ' ET=' + etHour + ':' + String(etMinute).padStart(2,'0'), 'info');
 
     // ── Dynamic position management — runs FIRST every cycle ─────────────────
@@ -4374,15 +4401,34 @@ module.exports = async function handler(req, res) {
       pushLog('SECTOR_ETF_ERROR: ' + sectorErr.message, 'warn');
     }
 
-    // ── evaluateSymbol — self-contained per-symbol evaluation ────────────────
+    // ── evaluateSymbol — two-phase: RSI pre-filter then full analysis ─────────
+    let preFilterSkipped = 0;
+
     async function evaluateSymbol(symbol) {
       try {
         symbolsScanned++;
+        const sector = sectorMap[symbol] || 'OTHER';
 
-        // Fetch snapshot + 5 indicators in parallel (added EMA60 for golden cross)
-        const [snapRes, rsiData, macdData, ema50Data, ema200Data, ema60Data, volData] = await Promise.all([
+        // ── PHASE 1: Quick RSI pre-filter (saves API calls on 75-symbol universe) ──
+        const [snapRes, rsiData] = await Promise.all([
           raceFetch('https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers/' + symbol + '?apiKey=' + apiKey),
           raceFetch('https://api.polygon.io/v1/indicators/rsi/' + symbol + '?timespan=hour&adjusted=true&window=14&series_type=close&order=desc&limit=3&apiKey=' + apiKey),
+        ]);
+
+        const price = snapRes?.ticker?.day?.c || snapRes?.ticker?.lastTrade?.p || snapRes?.ticker?.prevDay?.c || null;
+        if (!price) { pushLog('SKIP ' + symbol + ': no price', 'warn'); return; }
+
+        const rsiValue = rsiData?.results?.values?.[0]?.value || 50;
+
+        // Quick filter: skip full analysis if RSI is clearly out of range
+        if (rsiValue < 40 || rsiValue > 75) {
+          preFilterSkipped++;
+          signalResults.push({ symbol, price, nrzScore: 0, direction: 'N/A', rsi: rsiValue, macdHist: 0, emaTrend: 'N/A', sector, status: 'PRE_FILTERED' });
+          return;
+        }
+
+        // ── PHASE 2: Full indicator fetch for symbols that pass pre-filter ──────
+        const [macdData, ema50Data, ema200Data, ema60Data, volData] = await Promise.all([
           raceFetch('https://api.polygon.io/v1/indicators/macd/' + symbol + '?timespan=hour&adjusted=true&short_window=12&long_window=26&signal_window=9&series_type=close&order=desc&limit=3&apiKey=' + apiKey),
           raceFetch('https://api.polygon.io/v1/indicators/ema/' + symbol + '?timespan=day&adjusted=true&window=50&series_type=close&order=desc&limit=1&apiKey=' + apiKey),
           raceFetch('https://api.polygon.io/v1/indicators/ema/' + symbol + '?timespan=day&adjusted=true&window=200&series_type=close&order=desc&limit=1&apiKey=' + apiKey),
@@ -4392,15 +4438,7 @@ module.exports = async function handler(req, res) {
             new Date().toISOString().split('T')[0] + '?adjusted=true&sort=desc&limit=20&apiKey=' + apiKey),
         ]);
 
-        const price = snapRes?.ticker?.day?.c || snapRes?.ticker?.lastTrade?.p || snapRes?.ticker?.prevDay?.c || null;
-
-        if (!price) {
-          pushLog('SKIP ' + symbol + ': no price', 'warn');
-          return;
-        }
-
         // Extract indicator values
-        const rsiValue     = rsiData?.results?.values?.[0]?.value || 50;
         const macdValue    = macdData?.results?.values?.[0]?.value || 0;
         const macdSig      = macdData?.results?.values?.[0]?.signal || 0;
         const macdHist     = macdData?.results?.values?.[0]?.histogram || 0;
@@ -4409,11 +4447,11 @@ module.exports = async function handler(req, res) {
         const ema200       = ema200Data?.results?.values?.[0]?.value || 0;
         const ema60        = ema60Data?.results?.values?.[0]?.value || 0;
 
-        // Volume: current vs 20-day average (#3e)
+        // Volume: current vs 20-day average
         const volBars = volData?.results || [];
         const currentVol = volBars.length > 0 ? (volBars[0].v || 0) : 0;
         const avgVol = volBars.length > 1 ? volBars.slice(1).reduce((s, b) => s + (b.v || 0), 0) / Math.max(1, volBars.length - 1) : 0;
-        const volAboveAvg = avgVol > 0 ? currentVol > avgVol : true; // default true if no data
+        const volAboveAvg = avgVol > 0 ? currentVol > avgVol : true;
 
         // Calculate NZR score
         let nrzScore = 40;
@@ -4445,59 +4483,57 @@ module.exports = async function handler(req, res) {
         // Determine direction
         const direction = (macdValue > macdSig && rsiValue > 45) ? 'LONG' : 'SHORT';
 
-        pushLog(symbol + ' RSI=' + rsiValue.toFixed(1) + ' MACD_HIST=' + macdHist.toFixed(3) + ' EMA_TREND=' + (ema50 > ema200 ? 'BULL' : 'BEAR') + ' EMA60/200=' + (ema60 > ema200 ? 'GOLDEN' : 'DEATH') + ' VOL=' + (volAboveAvg ? 'ABOVE' : 'BELOW') + ' SCORE=' + nrzScore, nrzScore >= 75 ? 'pass' : 'info');
+        pushLog(symbol + ' [' + sector + '] RSI=' + rsiValue.toFixed(1) + ' MACD_HIST=' + macdHist.toFixed(3) + ' EMA_TREND=' + (ema50 > ema200 ? 'BULL' : 'BEAR') + ' EMA60/200=' + (ema60 > ema200 ? 'GOLDEN' : 'DEATH') + ' VOL=' + (volAboveAvg ? 'ABOVE' : 'BELOW') + ' SCORE=' + nrzScore, nrzScore >= 75 ? 'pass' : 'info');
 
-        signalResults.push({ symbol, price, nrzScore, direction, rsi: rsiValue, macdHist, emaTrend: ema50 > ema200 ? 'BULL' : 'BEAR', ema60, ema200, volAboveAvg, status: nrzScore >= 75 ? 'SIGNAL' : 'FILTERED' });
+        signalResults.push({ symbol, price, nrzScore, direction, rsi: rsiValue, macdHist, emaTrend: ema50 > ema200 ? 'BULL' : 'BEAR', ema60, ema200, volAboveAvg, sector, status: nrzScore >= 75 ? 'SIGNAL' : 'FILTERED' });
 
-        // ── Improved signal quality gate (#3) — all conditions must pass ──────
+        // ── Improved signal quality gate — all conditions must pass ──────────
         if (nrzScore >= 75) {
           signalsFound++;
 
-          // #3b: RSI between 45 and 68 (avoid overbought)
+          // RSI between 45 and 68 (avoid overbought)
           if (rsiValue < 45 || rsiValue > 68) {
             pushLog('FILTER_RSI: ' + symbol + ' RSI=' + rsiValue.toFixed(1) + ' outside 45-68 range', 'info');
             return;
           }
-          // #3c: MACD histogram must be positive
+          // MACD histogram must be positive
           if (macdHist <= 0) {
             pushLog('FILTER_MACD: ' + symbol + ' MACD_HIST=' + macdHist.toFixed(3) + ' not positive', 'info');
             return;
           }
-          // #3d: EMA60 > EMA200 (golden cross active)
+          // EMA60 > EMA200 (golden cross active)
           if (ema60 > 0 && ema200 > 0 && ema60 <= ema200) {
             pushLog('FILTER_EMA: ' + symbol + ' EMA60=' + ema60.toFixed(2) + ' <= EMA200=' + ema200.toFixed(2) + ' no golden cross', 'info');
             return;
           }
-          // #3e: Volume above 20-day average
+          // Volume above 20-day average
           if (!volAboveAvg) {
             pushLog('FILTER_VOL: ' + symbol + ' volume below 20-day avg (cur=' + currentVol + ' avg=' + Math.round(avgVol) + ')', 'info');
             return;
           }
-          // #3f: SPY not down more than 1.5% today
+          // SPY not down more than 1.5% today
           if (spyDayChangePct < -1.5) {
             pushLog('FILTER_SPY: ' + symbol + ' skipped — SPY down ' + spyDayChangePct.toFixed(2) + '% (limit -1.5%)', 'warn');
             return;
           }
 
-          pushLog('SIGNAL: ' + symbol + ' ' + direction + ' score=' + nrzScore + ' (passed all quality filters)', 'pass');
+          pushLog('SIGNAL: ' + symbol + ' [' + sector + '] ' + direction + ' score=' + nrzScore + ' (passed all quality filters)', 'pass');
 
-          // #4: Sector momentum filter — check sector ETF
+          // Sector momentum filter — check sector ETF
           const sectorEtf = sectorMap[symbol] || null;
-          let sectorPositive = true;
           let sectorSizeMultiplier = 1.0;
           if (sectorEtf && sectorEtfCache[sectorEtf] !== undefined) {
-            sectorPositive = sectorEtfCache[sectorEtf] >= 0;
-            if (!sectorPositive) {
+            if (sectorEtfCache[sectorEtf] < 0) {
               sectorSizeMultiplier = 0.5;
               pushLog('SECTOR_FILTER: ' + symbol + ' sector ' + sectorEtf + ' negative (' + sectorEtfCache[sectorEtf].toFixed(2) + '%) — reducing size 50%', 'warn');
             }
           }
 
-          // Collect as candidate for top-5 ranking (#5)
+          // Collect as candidate for top-5 ranking
           candidateSignals.push({
             symbol, direction, nrzScore, price, rsiValue, macdHist,
             emaTrend: ema50 > ema200 ? 'BULL' : 'BEAR',
-            sectorSizeMultiplier
+            sector, sectorSizeMultiplier
           });
         }
 
@@ -4517,6 +4553,7 @@ module.exports = async function handler(req, res) {
       pushLog('BATCH ' + (Math.floor(i / BATCH_SIZE) + 1) + ': ' + batch.join(','), 'info');
       await Promise.all(batch.map(symbol => evaluateSymbol(symbol)));
     }
+    pushLog('PRE_FILTER: ' + preFilterSkipped + '/' + symbolsScanned + ' symbols skipped by RSI pre-filter (saved ~' + (preFilterSkipped * 5) + ' API calls)', 'info');
 
     // ── Execute top 5 signals by NZR score (#5) ─────────────────────────────
     candidateSignals.sort((a, b) => b.nrzScore - a.nrzScore);
