@@ -6059,7 +6059,19 @@ async function pharmaBotRefreshStatus() {
       startBtn.style.display = '';
       stopBtn.style.display  = 'none';
     }
-    document.getElementById('pharma-stat-positions').textContent = d.positionCount ?? 0;
+    // Fetch real pharma position count from Alpaca
+    const PHARMA_SYMS = new Set(['MRNA','BIIB','NVAX','VRTX','REGN','LLY','PFE','ABBV','GILD','AMGN','SRPT','BMRN','CRSP','BEAM','NVO','ALNY','EXAS','ARWR']);
+    let pharmaPositionCount = d.positionCount ?? 0;
+    try {
+      const posResp = await fetch('/api/alpaca?type=positions');
+      if (posResp.ok) {
+        const allPos = await posResp.json();
+        if (Array.isArray(allPos)) {
+          pharmaPositionCount = allPos.filter(p => PHARMA_SYMS.has(p.symbol)).length;
+        }
+      }
+    } catch {}
+    document.getElementById('pharma-stat-positions').textContent = pharmaPositionCount;
     document.getElementById('pharma-stat-wins').textContent = d.stats?.wins ?? 0;
     document.getElementById('pharma-stat-losses').textContent = d.stats?.losses ?? 0;
     const pnl = d.stats?.totalPnl ?? 0;
@@ -6391,6 +6403,17 @@ function classifyTradeEntry(notes) {
   return 'equity';
 }
 
+const HALAL_VERIFIED = ['AAPL','MSFT','NVDA','AMD','GOOGL','AMZN','META','TSLA','PLTR','NFLX','CRM','SNOW','CRWD','SHOP','MELI','AVGO','QCOM','TSM','NET','ZS','PANW','DDOG','SPY','QQQ','MRNA','LLY','PFE','GILD','AMGN','VRTX','BIIB'];
+
+function parseQty(notes) {
+  if (!notes) return '--';
+  const match1 = notes.match(/Qty=(\d+)/i);
+  if (match1) return match1[1];
+  const match2 = notes.match(/qty=([0-9.]+)/i);
+  if (match2) return String(Math.round(parseFloat(match2[1])));
+  return '--';
+}
+
 function renderTradeLog(data) {
   const tbody = document.getElementById('pharma-log-tbody');
   const countEl = document.getElementById('pharma-log-count');
@@ -6407,22 +6430,19 @@ function renderTradeLog(data) {
 
   if (countEl) countEl.textContent = filtered.length + ' trade(s)';
 
-  const HALAL_SYMBOLS = ['AAPL','MSFT','NVDA','GOOGL','AMZN','META','TSLA','V','MA','JNJ','PFE','UNH','ABBV','MRK','LLY','BMY','AMGN','GILD','REGN','VRTX','MRNA','BNTX','HD','LOW','CAT','HON','BA','GE','RTX','LMT','NKE','MCD','SBUX','TGT'];
-
   tbody.innerHTML = filtered.map(entry => {
     const ts = entry.created_at ? new Date(entry.created_at).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '—';
     const action = entry.exit_price ? 'CLOSED' : 'OPEN';
     const isExit = action === 'CLOSED';
     const notes = entry.notes || '';
-    const qtyMatch = notes.match(/Qty=(\d+)/);
-    const qty = qtyMatch ? qtyMatch[1] : '--';
+    const qty = parseQty(notes);
     const entryPrice = entry.entry_price != null ? parseFloat(entry.entry_price) : null;
     const exitPrice = entry.exit_price != null ? parseFloat(entry.exit_price) : null;
     const pnlPct = entry.pnl_pct != null ? parseFloat(entry.pnl_pct) : null;
     const pnlColor = pnlPct == null ? 'var(--text3)' : pnlPct >= 0 ? '#26a69a' : '#ef5350';
     const pnlStr = pnlPct != null ? (pnlPct >= 0 ? '+' : '') + pnlPct.toFixed(2) + '%' : 'Open';
     const reason = notes.length > 50 ? notes.slice(0, 50) + '…' : (notes || '—');
-    const isHalal = HALAL_SYMBOLS.includes(entry.symbol) || /halal/i.test(notes);
+    const isHalal = HALAL_VERIFIED.includes(entry.symbol);
 
     return `<tr style="border-bottom:1px solid var(--border)">
       <td style="padding:9px 16px;font-size:11px;color:var(--text3);white-space:nowrap">${ts}</td>

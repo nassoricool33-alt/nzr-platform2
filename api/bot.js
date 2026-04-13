@@ -477,8 +477,14 @@ async function loadStateFromSupabase() {
 }
 
 /** Ensures state has been loaded from Supabase at least once per warm instance. */
+let _testCleanupDone = false;
 async function ensureStateLoaded() {
   if (!_stateLoaded) await loadStateFromSupabase();
+  // One-time cleanup of TEST entries from journal
+  if (!_testCleanupDone && supabase) {
+    _testCleanupDone = true;
+    try { await supabase.from('journal').delete().eq('symbol', 'TEST'); } catch {}
+  }
 }
 
 /** Marks a symbol as stopped-out for 2 hours and increments consecutive loss counter. */
