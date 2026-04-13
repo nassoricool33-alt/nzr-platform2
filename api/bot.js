@@ -4395,6 +4395,21 @@ module.exports = async function handler(req, res) {
     // Update P&L for any closed trades before scanning
     try { await updateClosedTrades(); } catch(e) { pushLog('CLOSED_TRADES_ERR: ' + e.message, 'warn'); }
 
+    // ── Fetch fresh position list AFTER management (for accurate buy gating) ──
+    let openPositions = [];
+    try {
+      const posResp = await Promise.race([
+        fetch(`${ALPACA_BASE}/v2/positions`, {
+          headers: { 'APCA-API-KEY-ID': process.env.ALPACA_API_KEY, 'APCA-API-SECRET-KEY': process.env.ALPACA_SECRET_KEY }
+        }).then(r => r.ok ? r.json() : []),
+        new Promise(resolve => setTimeout(() => resolve([]), 3000))
+      ]);
+      openPositions = Array.isArray(posResp) ? posResp : [];
+    } catch { openPositions = []; }
+    const currentOpenCount = openPositions.length;
+    const ownedSymbols = new Set(openPositions.map(p => p.symbol));
+    pushLog('POST_MGMT_POSITIONS: ' + currentOpenCount + ' open (' + [...ownedSymbols].slice(0, 10).join(',') + (currentOpenCount > 10 ? '...' : '') + ')', 'info');
+
     let symbolsScanned = 0;
     let signalsFound = 0;
     let tradesPlaced = 0;
@@ -4696,23 +4711,40 @@ module.exports = async function handler(req, res) {
     }
     pushLog('PRE_FILTER: ' + preFilterSkipped + '/' + symbolsScanned + ' symbols skipped by RSI pre-filter (saved ~' + (preFilterSkipped * 5) + ' API calls)', 'info');
 
-    // ── Execute top 5 signals by NZR score (#5) ─────────────────────────────
+    // ── Execute signals — score-sorted, buy-gated by live position count ─────
     candidateSignals.sort((a, b) => b.nrzScore - a.nrzScore);
     const topSignals = candidateSignals.slice(0, 5);
     if (candidateSignals.length > 5) {
       pushLog('RANK_FILTER: ' + candidateSignals.length + ' candidates, trading top 5: ' + topSignals.map(s => s.symbol + '(' + s.nrzScore + ')').join(', '), 'info');
     }
 
+    let liveOpenCount = currentOpenCount; // track as we buy
+
     for (const sig of topSignals) {
-      if (!posMgmt.newEntriesAllowed) {
-        // High conviction override: score >= 90 and under hard cap of 30 positions
-        if (sig.nrzScore >= 90 && posMgmt.openCount < 30) {
-          pushLog('HIGH_CONVICTION_OVERRIDE: ' + sig.symbol + ' score=' + sig.nrzScore + ' forcing entry despite max positions', 'pass');
-        } else {
-          pushLog('SIGNAL_BLOCKED: ' + sig.symbol + ' — new entries paused (positions=' + posMgmt.openCount + ' drawdown=' + posMgmt.totalUnrealizedPct + '%)', 'warn');
-          continue;
-        }
+      // Check 1: already own this symbol?
+      if (ownedSymbols.has(sig.symbol)) {
+        pushLog('ALREADY_OWNED: ' + sig.symbol + ' skipping', 'info');
+        continue;
       }
+
+      // Check 2: drawdown gate (unchanged — hard block, no override)
+      if (posMgmt.totalUnrealizedPct < -5) {
+        pushLog('SIGNAL_BLOCKED: ' + sig.symbol + ' — drawdown ' + posMgmt.totalUnrealizedPct + '% too deep', 'warn');
+        continue;
+      }
+
+      // Check 3: position count gate — scored AFTER scan, not before
+      if (sig.nrzScore >= 90 && liveOpenCount < 30) {
+        // High conviction: buy up to hard cap 30
+        pushLog('HIGH_CONVICTION_OVERRIDE: ' + sig.symbol + ' score=' + sig.nrzScore + ' positions=' + liveOpenCount + '/30 — forcing entry', 'pass');
+      } else if (sig.nrzScore >= 75 && liveOpenCount < 25) {
+        // Standard signal: buy under soft cap 25
+        pushLog('SIGNAL_ENTRY: ' + sig.symbol + ' score=' + sig.nrzScore + ' positions=' + liveOpenCount + '/25', 'info');
+      } else {
+        pushLog('SIGNAL_BLOCKED: ' + sig.symbol + ' score=' + sig.nrzScore + ' — positions=' + liveOpenCount + ' (need <' + (sig.nrzScore >= 90 ? '30' : '25') + ')', 'warn');
+        continue;
+      }
+
       try {
         const posSize = dayAlloc * 0.10 * sig.sectorSizeMultiplier;
         const execResult = await executeSignal({
@@ -4725,7 +4757,9 @@ module.exports = async function handler(req, res) {
         });
         if (execResult.executed) {
           tradesPlaced++;
-          pushLog('TRADE_EXECUTED: ' + sig.symbol + ' ' + sig.direction + ' @ $' + sig.price + ' (rank #' + (topSignals.indexOf(sig) + 1) + '/' + candidateSignals.length + ' sectorMult=' + sig.sectorSizeMultiplier + ')', 'pass');
+          liveOpenCount++;
+          ownedSymbols.add(sig.symbol);
+          pushLog('TRADE_EXECUTED: ' + sig.symbol + ' ' + sig.direction + ' @ $' + sig.price + ' (rank #' + (topSignals.indexOf(sig) + 1) + '/' + candidateSignals.length + ' sectorMult=' + sig.sectorSizeMultiplier + ' positions=' + liveOpenCount + ')', 'pass');
         } else {
           pushLog('TRADE_SKIPPED: ' + sig.symbol + ' — ' + (execResult.reason || 'no reason'), 'info');
         }
