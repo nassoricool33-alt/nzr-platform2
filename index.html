@@ -311,6 +311,10 @@ nav{position:sticky;top:0;z-index:200;backdrop-filter:blur(24px);-webkit-backdro
 .heat-dn{background:#4a1018}
 .heat-strong-dn{background:#5a0a10}
 
+/* ─── PHARMA COLLAPSIBLE ──────────────────────────── */
+details[open] .pharma-chevron{transform:rotate(90deg)}
+details summary::-webkit-details-marker{display:none}
+
 /* ─── OPTIONS FLOW TABLE ───────────────────────────── */
 .flow-table-wrap{overflow-x:auto;margin-bottom:8px}
 .flow-table{width:100%;border-collapse:collapse;font-family:var(--font-mono);font-size:12px}
@@ -1893,10 +1897,10 @@ footer{border-top:1px solid var(--border);padding:32px 0;margin-top:80px}
     </div>
   </div>
 
-  <!-- FDA Catalyst Calendar -->
+  <!-- FDA PDUFA Calendar -->
   <div class="section-header sec-fade" style="margin-top:48px;animation-delay:100ms">
     <div class="section-eyebrow">Catalysts</div>
-    <div class="section-title">FDA <span>Calendar</span></div>
+    <div class="section-title">FDA <span>PDUFA Calendar</span></div>
   </div>
   <div class="stat-card sec-fade" style="animation-delay:120ms;padding:0;overflow:hidden">
     <div style="padding:16px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px">
@@ -2021,56 +2025,57 @@ footer{border-top:1px solid var(--border);padding:32px 0;margin-top:80px}
     </div>
   </div>
 
-  <!-- Pharma Watchlist / Screener -->
-  <div class="section-header sec-fade" style="margin-top:48px;animation-delay:220ms">
-    <div class="section-eyebrow">Screener</div>
-    <div class="section-title">Pharma <span>Watchlist</span></div>
-  </div>
-  <div class="stat-card sec-fade" style="animation-delay:240ms;padding:0;overflow:hidden">
-    <div style="padding:16px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-      <button class="btn-secondary" onclick="pharmaLoadScan()" style="padding:7px 16px;font-size:12px">Scan 30 Symbols</button>
-      <span id="pharma-scan-status" style="font-size:12px;color:var(--text3)">Sorted by volume + volatility score</span>
-      <div style="flex:1"></div>
-      <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text3);cursor:pointer">
-        <input type="checkbox" id="pharma-halal-filter" onchange="pharmaFilterScan()" style="accent-color:var(--accent)">
-        Show Halal Only
-      </label>
+  <!-- Pharma Screener — collapsible -->
+  <details class="sec-fade" style="margin-top:48px;animation-delay:220ms">
+    <summary style="cursor:pointer;list-style:none;display:flex;align-items:center;gap:10px;padding:12px 0">
+      <span style="font-family:var(--font-mono);font-size:11px;color:var(--text3);transition:transform .2s" class="pharma-chevron">&#9654;</span>
+      <div>
+        <div style="font-family:var(--font-mono);font-size:9px;letter-spacing:1.2px;text-transform:uppercase;color:var(--text3)">Screener</div>
+        <div style="font-family:var(--font-display);font-size:20px;font-weight:700;color:var(--text)">Pharma Screener — <span style="color:var(--accent)">All Healthcare</span></div>
+      </div>
+    </summary>
+    <div class="stat-card" style="padding:0;overflow:hidden;margin-top:8px">
+      <div style="padding:16px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+        <button class="btn-secondary" onclick="pharmaLoadScan()" style="padding:7px 16px;font-size:12px">Scan 30 Symbols</button>
+        <span id="pharma-scan-status" style="font-size:12px;color:var(--text3)">Sorted by volume + volatility score</span>
+        <div style="flex:1"></div>
+        <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text3);cursor:pointer">
+          <input type="checkbox" id="pharma-halal-filter" onchange="pharmaFilterScan()" style="accent-color:var(--accent)">
+          Show Halal Only
+        </label>
+      </div>
+      <div style="overflow-x:auto">
+        <table style="width:100%;border-collapse:collapse;font-size:13px">
+          <thead>
+            <tr style="border-bottom:1px solid var(--border)">
+              <th style="padding:10px 16px;text-align:left;color:var(--text3);font-weight:600">#</th>
+              <th style="padding:10px 16px;text-align:left;color:var(--text3);font-weight:600">Symbol</th>
+              <th style="padding:10px 16px;text-align:right;color:var(--text3);font-weight:600">Price</th>
+              <th style="padding:10px 16px;text-align:right;color:var(--text3);font-weight:600">Change</th>
+              <th style="padding:10px 16px;text-align:right;color:var(--text3);font-weight:600">Volume</th>
+              <th style="padding:10px 16px;text-align:right;color:var(--text3);font-weight:600">Rel Vol</th>
+              <th style="padding:10px 16px;text-align:right;color:var(--text3);font-weight:600">Range %</th>
+              <th style="padding:10px 16px;text-align:left;color:var(--text3);font-weight:600">Halal</th>
+              <th style="padding:10px 16px;text-align:left;color:var(--text3);font-weight:600">Catalyst</th>
+            </tr>
+          </thead>
+          <tbody id="pharma-scan-tbody">
+            <tr><td colspan="9" style="padding:24px;text-align:center;color:var(--text3)">No data loaded</td></tr>
+          </tbody>
+        </table>
+      </div>
     </div>
-    <div style="overflow-x:auto">
-      <table style="width:100%;border-collapse:collapse;font-size:13px">
-        <thead>
-          <tr style="border-bottom:1px solid var(--border)">
-            <th style="padding:10px 16px;text-align:left;color:var(--text3);font-weight:600">#</th>
-            <th style="padding:10px 16px;text-align:left;color:var(--text3);font-weight:600">Symbol</th>
-            <th style="padding:10px 16px;text-align:right;color:var(--text3);font-weight:600">Price</th>
-            <th style="padding:10px 16px;text-align:right;color:var(--text3);font-weight:600">Change</th>
-            <th style="padding:10px 16px;text-align:right;color:var(--text3);font-weight:600">Volume</th>
-            <th style="padding:10px 16px;text-align:right;color:var(--text3);font-weight:600">Rel Vol</th>
-            <th style="padding:10px 16px;text-align:right;color:var(--text3);font-weight:600">Range %</th>
-            <th style="padding:10px 16px;text-align:left;color:var(--text3);font-weight:600">Halal</th>
-            <th style="padding:10px 16px;text-align:left;color:var(--text3);font-weight:600">Catalyst</th>
-          </tr>
-        </thead>
-        <tbody id="pharma-scan-tbody">
-          <tr><td colspan="9" style="padding:24px;text-align:center;color:var(--text3)">No data loaded</td></tr>
-        </tbody>
-      </table>
-    </div>
-  </div>
+  </details>
 
-  <!-- Trade Log -->
+  <!-- Pharma Trade Log -->
   <div class="section-header sec-fade" style="margin-top:48px;animation-delay:260ms">
     <div class="section-eyebrow">History</div>
-    <div class="section-title">Trade <span>Log</span></div>
+    <div class="section-title">Pharma <span>Trade Log</span></div>
   </div>
   <div class="stat-card sec-fade" style="animation-delay:280ms;padding:0;overflow:hidden">
     <div style="padding:16px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px;flex-wrap:wrap">
       <button class="btn-secondary" onclick="pharmaLoadTradeLog()" style="padding:7px 16px;font-size:12px">Refresh Log</button>
-      <div style="display:flex;gap:4px" id="trade-log-tabs">
-        <button onclick="setTradeLogFilter('equity')" class="trade-log-tab active" data-filter="equity" style="padding:5px 12px;font-size:10px;font-family:var(--font-mono);border:1px solid var(--border);border-radius:4px;background:var(--accent);color:#fff;cursor:pointer;letter-spacing:.3px">EQUITY BOT</button>
-        <button onclick="setTradeLogFilter('options')" class="trade-log-tab" data-filter="options" style="padding:5px 12px;font-size:10px;font-family:var(--font-mono);border:1px solid var(--border);border-radius:4px;background:var(--surface2);color:var(--text3);cursor:pointer;letter-spacing:.3px">OPTIONS</button>
-        <button onclick="setTradeLogFilter('pharma')" class="trade-log-tab" data-filter="pharma" style="padding:5px 12px;font-size:10px;font-family:var(--font-mono);border:1px solid var(--border);border-radius:4px;background:var(--surface2);color:var(--text3);cursor:pointer;letter-spacing:.3px">PHARMA</button>
-      </div>
+      <span style="font-family:var(--font-mono);font-size:10px;padding:4px 10px;border-radius:4px;background:rgba(33,150,243,.12);color:#42a5f5;letter-spacing:.3px">PHARMA ONLY</span>
       <span id="pharma-log-count" style="font-size:12px;color:var(--text3)">0 trades</span>
     </div>
     <div style="overflow-x:auto">
@@ -6461,6 +6466,9 @@ function renderTradeLog(data) {
 async function pharmaLoadTradeLog() {
   const tbody = document.getElementById('pharma-log-tbody');
   if (!tbody) return;
+
+  // On the pharma page, always show pharma trades only
+  _tradeLogFilter = 'pharma';
 
   tbody.innerHTML = '<tr><td colspan="9" style="padding:24px;text-align:center;color:var(--text3)">Loading trades…</td></tr>';
 
