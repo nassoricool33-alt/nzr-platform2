@@ -33,41 +33,47 @@ module.exports = async function handler(req, res) {
 
   try {
     const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), 12000)
+    const timeout = setTimeout(() => controller.abort(), 6000)
 
-    const prevUrl = `https://api.polygon.io/v2/aggs/ticker/${symbol}/prev?adjusted=true&apiKey=${apiKey}`
-    const prevRes = await fetch(prevUrl, { signal: controller.signal })
+    // Use snapshot endpoint for real-time prices during market hours
+    const snapUrl = `https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers/${symbol}?apiKey=${apiKey}`
+    const snapRes = await fetch(snapUrl, { signal: controller.signal })
     clearTimeout(timeout)
 
-    if (!prevRes.ok) {
-      console.error('[quote] Polygon prev error:', prevRes.status, 'for', symbol)
+    if (!snapRes.ok) {
+      console.error('[quote] Polygon snapshot error:', snapRes.status, 'for', symbol)
       return res.status(200).json({ symbol, price: null, error: 'Quote unavailable' })
     }
 
-    const prevData = await prevRes.json()
-    console.log('[quote] Polygon status:', prevData.status, 'resultsCount:', prevData.resultsCount, 'for', symbol)
+    const snapData = await snapRes.json()
+    const ticker = snapData.ticker
 
-    if (!prevData.results || prevData.results.length === 0) {
+    if (!ticker) {
       return res.status(200).json({ symbol, price: null, error: 'No data available' })
     }
 
-    const bar = prevData.results[0]
-    const price = bar.c
-    const prevClose = bar.o
-    const change = price - prevClose
-    const changePercent = (change / prevClose) * 100
+    const price = ticker.lastTrade?.p || ticker.day?.c || ticker.prevDay?.c || 0;
+    const open = ticker.day?.o || ticker.prevDay?.c || 0;
+    const high = ticker.day?.h || 0;
+    const low = ticker.day?.l || 0;
+    const prevClose = ticker.prevDay?.c || 0;
+    const change = price - prevClose;
+    const changePercent = prevClose ? (change / prevClose * 100) : 0;
+    const volume = ticker.day?.v || 0;
+
+    console.log('[quote]', symbol, 'price=', price, 'prevClose=', prevClose, 'change=', change.toFixed(2))
 
     return res.status(200).json({
       symbol,
       price: parseFloat(price.toFixed(2)),
-      open: parseFloat(bar.o.toFixed(2)),
-      high: parseFloat(bar.h.toFixed(2)),
-      low: parseFloat(bar.l.toFixed(2)),
-      prevClose: parseFloat(bar.o.toFixed(2)),
+      open: parseFloat(open.toFixed(2)),
+      high: high ? parseFloat(high.toFixed(2)) : null,
+      low: low ? parseFloat(low.toFixed(2)) : null,
+      prevClose: parseFloat(prevClose.toFixed(2)),
       change: parseFloat(change.toFixed(2)),
       changePercent: parseFloat(changePercent.toFixed(2)),
-      volume: bar.v,
-      timestamp: bar.t
+      volume,
+      timestamp: Date.now()
     })
   } catch (err) {
     console.error('[quote] Error for', symbol, ':', err.message)
