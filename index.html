@@ -3102,12 +3102,21 @@ async function buildFlowTable(sym){
   const note=document.getElementById('flow-note');
   if(!tbody)return;
   tbody.innerHTML=`<tr><td colspan="9" style="text-align:center;padding:24px;font-family:var(--font-mono);font-size:11px;color:var(--text3)">Loading options flow…</td></tr>`;
+  // Clean up indicator panel from previous symbol scan
+  const oldPanel=document.getElementById('flow-indicator-panel');
+  if(oldPanel)oldPanel.remove();
+  // Restore original table headers
+  const thead=tbody.parentElement.querySelector('thead tr');
+  if(thead)thead.innerHTML='<th>Time</th><th>Ticker</th><th>Type</th><th>Strike</th><th>Expiry</th><th>Premium</th><th>Vol</th><th>OI</th><th>Tag</th>';
+
+  // Try real options data first
+  let optionsLoaded=false;
   try{
     const r=await fetch('/api/polygon?type=options&symbol='+encodeURIComponent(sym));
     if(!r.ok)throw new Error();
     const data=await r.json();
     const items=data.options||[];
-    if(!items.length)throw new Error();
+    if(!items.length)throw new Error('no_data');
     tbody.innerHTML=items.map(f=>{
       const isUnusual=f.volume!=null&&f.open_interest!=null&&f.volume>2*f.open_interest;
       return`
@@ -3128,13 +3137,106 @@ async function buildFlowTable(sym){
     }).join('');
     const ts=new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
     if(note)note.innerHTML=`<span style="font-family:var(--font-mono);font-size:9px;padding:2px 8px;border-radius:99px;background:var(--green-dim);color:var(--green);border:1px solid rgba(0,229,155,.2);margin-right:8px">● LIVE</span>Options data · Polygon.io · Last updated: ${ts}`;
-  }catch{
+    optionsLoaded=true;
+  }catch(e){
+    optionsLoaded=false;
+  }
+
+  if(optionsLoaded)return;
+
+  // If user typed a specific symbol, show technical analysis fallback
+  if(sym!=='SPY'&&sym!==''){
+    try{
+      tbody.innerHTML=`<tr><td colspan="9" style="text-align:center;padding:24px;font-family:var(--font-mono);font-size:11px;color:var(--text3)">Options data unavailable for ${sym} — loading technical indicators…</td></tr>`;
+      const ir=await fetch('/api/indicators?symbol='+encodeURIComponent(sym));
+      const idata=await ir.json();
+      if(idata&&!idata.error){
+        const rsiVal=idata.rsi!=null?Number(idata.rsi):null;
+        const rsiColor=rsiVal==null?'var(--text3)':rsiVal>=70?'var(--red)':rsiVal<=30?'var(--green)':'var(--text)';
+        const rsiLabel=rsiVal==null?'--':rsiVal>=70?'Overbought':rsiVal<=30?'Oversold':'Neutral';
+        const macdVal=idata.macd!=null?Number(idata.macd):null;
+        const macdSig=idata.macdSignal!=null?Number(idata.macdSignal):null;
+        const macdHist=idata.macdHistogram!=null?Number(idata.macdHistogram):null;
+        const macdColor=macdHist==null?'var(--text3)':macdHist>0?'var(--green)':'var(--red)';
+        const ema20=idata.ema20!=null?Number(idata.ema20).toFixed(2):'--';
+        const ema60=idata.ema60!=null?Number(idata.ema60).toFixed(2):'--';
+        const ema200=idata.ema200!=null?Number(idata.ema200).toFixed(2):'--';
+        const signal=rsiVal!=null&&macdHist!=null?(rsiVal<65&&macdHist>0?'BULLISH':rsiVal>70||macdHist<0?'BEARISH':'NEUTRAL'):'--';
+        const sigColor=signal==='BULLISH'?'var(--green)':signal==='BEARISH'?'var(--red)':'var(--text3)';
+
+        tbody.innerHTML='';
+        const wrap=tbody.parentElement.parentElement;
+        const panel=document.createElement('div');
+        panel.id='flow-indicator-panel';
+        panel.style.cssText='padding:20px 24px;font-family:var(--font-mono);font-size:12px';
+        panel.innerHTML=`
+          <div style="font-size:11px;color:var(--gold);margin-bottom:16px">Options contract data requires Polygon Options add-on. Showing technical analysis for <b>${sym}</b> instead.</div>
+          <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:14px;margin-bottom:16px">
+            <div style="background:var(--bg2);border-radius:8px;padding:14px">
+              <div style="font-size:9px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">RSI (14)</div>
+              <div style="font-size:20px;font-weight:700;color:${rsiColor}">${rsiVal!=null?rsiVal.toFixed(1):'--'}</div>
+              <div style="font-size:10px;color:${rsiColor};margin-top:2px">${rsiLabel}</div>
+            </div>
+            <div style="background:var(--bg2);border-radius:8px;padding:14px">
+              <div style="font-size:9px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">MACD Histogram</div>
+              <div style="font-size:20px;font-weight:700;color:${macdColor}">${macdHist!=null?macdHist.toFixed(3):'--'}</div>
+              <div style="font-size:10px;color:var(--text3);margin-top:2px">MACD: ${macdVal!=null?macdVal.toFixed(3):'--'} / Sig: ${macdSig!=null?macdSig.toFixed(3):'--'}</div>
+            </div>
+            <div style="background:var(--bg2);border-radius:8px;padding:14px">
+              <div style="font-size:9px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">EMA Trend</div>
+              <div style="font-size:14px;font-weight:700;color:var(--text);margin-top:4px">20: $${ema20}</div>
+              <div style="font-size:11px;color:var(--text2);margin-top:2px">60: $${ema60} · 200: $${ema200}</div>
+            </div>
+            <div style="background:var(--bg2);border-radius:8px;padding:14px">
+              <div style="font-size:9px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">Signal</div>
+              <div style="font-size:20px;font-weight:700;color:${sigColor}">${signal}</div>
+              <div style="font-size:10px;color:var(--text3);margin-top:2px">Based on RSI + MACD</div>
+            </div>
+          </div>`;
+        // Remove old panel if present
+        const old=document.getElementById('flow-indicator-panel');
+        if(old)old.remove();
+        wrap.insertBefore(panel,wrap.querySelector('.flow-table-wrap'));
+        if(note)note.innerHTML='<span style="color:var(--gold);font-size:10px">Upgrade Polygon plan to see full options chain data including strikes, premiums, and open interest</span>';
+        return;
+      }
+    }catch(ie){}
+  }
+
+  // Fallback: show unusual volume movers as proxy for options flow
+  try{
+    tbody.innerHTML=`<tr><td colspan="9" style="text-align:center;padding:24px;font-family:var(--font-mono);font-size:11px;color:var(--text3)">Loading unusual volume data…</td></tr>`;
+    const mr=await fetch('/api/polygon?type=movers');
+    const mdata=await mr.json();
+    const gainers=mdata.gainers||[];
+    const losers=mdata.losers||[];
+    const all=[...gainers.map(g=>({...g,direction:'BULLISH'})),...losers.map(l=>({...l,direction:'BEARISH'}))];
+    if(!all.length)throw new Error('no movers');
+
+    // Rebuild header for movers view
+    const thead=tbody.parentElement.querySelector('thead tr');
+    if(thead)thead.innerHTML='<th style="padding:8px 14px;text-align:left;color:var(--text3);font-weight:500;font-size:10px">Symbol</th><th style="padding:8px 10px;text-align:right;color:var(--text3);font-weight:500;font-size:10px">Price</th><th style="padding:8px 10px;text-align:right;color:var(--text3);font-weight:500;font-size:10px">Change %</th><th style="padding:8px 10px;text-align:center;color:var(--text3);font-weight:500;font-size:10px">Signal</th>';
+
+    tbody.innerHTML=all.map(m=>{
+      const chg=m.changePercent!=null?Number(m.changePercent):0;
+      const chgColor=chg>=0?'var(--green)':'var(--red)';
+      const sigColor=m.direction==='BULLISH'?'var(--green)':'var(--red)';
+      const sigBg=m.direction==='BULLISH'?'var(--green-dim)':'var(--red-dim)';
+      return`<tr style="border-bottom:1px solid var(--border)">
+        <td style="padding:10px 14px;font-weight:700;color:var(--text);font-family:var(--font-mono)">${m.symbol||'--'}</td>
+        <td style="padding:10px 10px;text-align:right;color:var(--text2);font-family:var(--font-mono)">${m.price!=null?'$'+Number(m.price).toFixed(2):'--'}</td>
+        <td style="padding:10px 10px;text-align:right;font-weight:600;color:${chgColor};font-family:var(--font-mono)">${chg>=0?'+':''}${chg.toFixed(2)}%</td>
+        <td style="padding:10px 10px;text-align:center"><span style="font-size:9px;font-weight:700;padding:3px 10px;border-radius:99px;background:${sigBg};color:${sigColor};letter-spacing:.3px">${m.direction}</span></td>
+      </tr>`;
+    }).join('');
+    if(note)note.innerHTML='<span style="color:var(--gold);font-size:10px">Options contract data requires Polygon Options add-on. Showing unusual volume data instead.</span><br><span style="color:var(--text3);font-size:10px;margin-top:4px;display:inline-block">Upgrade Polygon plan to see full options chain data including strikes, premiums, and open interest</span>';
+  }catch(me){
     tbody.innerHTML=`<tr><td colspan="9"><div class="empty-state" style="padding:36px 0">
-      <div class="empty-icon">📉</div>
-      <div class="empty-title">Data unavailable</div>
-      <div class="empty-desc">Data unavailable — market may be closed or rate limit reached.</div>
+      <div class="empty-title" style="font-family:var(--font-mono);font-size:12px;color:var(--text3)">Options contract data requires Polygon Options add-on</div>
+      <div class="empty-desc" style="font-family:var(--font-body);font-size:12px;color:var(--text3);margin-top:8px">Showing unusual volume data instead — but movers data is also currently unavailable.</div>
+      <div style="font-family:var(--font-mono);font-size:10px;color:var(--gold);margin-top:12px">Upgrade Polygon plan to see full options chain data including strikes, premiums, and open interest</div>
     </div></td></tr>`;
-    if(note)note.textContent='Options data unavailable.';
+    if(note)note.textContent='';
   }
 }
 buildFlowTable('SPY');
