@@ -2061,11 +2061,16 @@ footer{border-top:1px solid var(--border);padding:32px 0;margin-top:80px}
   <!-- Trade Log -->
   <div class="section-header sec-fade" style="margin-top:48px;animation-delay:260ms">
     <div class="section-eyebrow">History</div>
-    <div class="section-title">Bot <span>Trade Log</span></div>
+    <div class="section-title">Trade <span>Log</span></div>
   </div>
   <div class="stat-card sec-fade" style="animation-delay:280ms;padding:0;overflow:hidden">
-    <div style="padding:16px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px">
+    <div style="padding:16px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px;flex-wrap:wrap">
       <button class="btn-secondary" onclick="pharmaLoadTradeLog()" style="padding:7px 16px;font-size:12px">Refresh Log</button>
+      <div style="display:flex;gap:4px" id="trade-log-tabs">
+        <button onclick="setTradeLogFilter('equity')" class="trade-log-tab active" data-filter="equity" style="padding:5px 12px;font-size:10px;font-family:var(--font-mono);border:1px solid var(--border);border-radius:4px;background:var(--accent);color:#fff;cursor:pointer;letter-spacing:.3px">EQUITY BOT</button>
+        <button onclick="setTradeLogFilter('options')" class="trade-log-tab" data-filter="options" style="padding:5px 12px;font-size:10px;font-family:var(--font-mono);border:1px solid var(--border);border-radius:4px;background:var(--surface2);color:var(--text3);cursor:pointer;letter-spacing:.3px">OPTIONS</button>
+        <button onclick="setTradeLogFilter('pharma')" class="trade-log-tab" data-filter="pharma" style="padding:5px 12px;font-size:10px;font-family:var(--font-mono);border:1px solid var(--border);border-radius:4px;background:var(--surface2);color:var(--text3);cursor:pointer;letter-spacing:.3px">PHARMA</button>
+      </div>
       <span id="pharma-log-count" style="font-size:12px;color:var(--text3)">0 trades</span>
     </div>
     <div style="overflow-x:auto">
@@ -2338,6 +2343,7 @@ function showPage(id){
     pharmaLoadCalendar();
     pharmaLoadScan();
     pharmaLoadShorts();
+    pharmaLoadTradeLog();
   }
   if(id==='bot'&&!_attrLoaded){ loadAttribution(); }
   if(id==='bot'){ startBotLogPolling(); loadStrategyWeights(); pollStatus(); }
@@ -6363,63 +6369,101 @@ function pharmaRenderScan(symbols) {
 }
 
 // ── Pharma: Trade Log ─────────────────────────────────────────────
-async function pharmaLoadTradeLog() {
+let _tradeLogCache = null;
+let _tradeLogFilter = 'equity';
+
+function setTradeLogFilter(filter) {
+  _tradeLogFilter = filter;
+  document.querySelectorAll('.trade-log-tab').forEach(b => {
+    const isActive = b.dataset.filter === filter;
+    b.style.background = isActive ? 'var(--accent)' : 'var(--surface2)';
+    b.style.color = isActive ? '#fff' : 'var(--text3)';
+  });
+  if (_tradeLogCache) renderTradeLog(_tradeLogCache);
+  else pharmaLoadTradeLog();
+}
+
+function classifyTradeEntry(notes) {
+  if (!notes) return 'equity';
+  const n = notes.toLowerCase();
+  if (n.includes('options bot') || n.includes('options-bot')) return 'options';
+  if (n.includes('pharma') || n.includes('nzr-pharma') || n.includes('pdufa')) return 'pharma';
+  return 'equity';
+}
+
+function renderTradeLog(data) {
   const tbody = document.getElementById('pharma-log-tbody');
   const countEl = document.getElementById('pharma-log-count');
+  if (!tbody) return;
+
+  const filtered = data.filter(entry => classifyTradeEntry(entry.notes) === _tradeLogFilter);
+
+  if (!filtered.length) {
+    const labels = { equity: 'equity bot', options: 'options bot', pharma: 'pharma bot' };
+    tbody.innerHTML = '<tr><td colspan="9" style="padding:24px;text-align:center;color:var(--text3)">No ' + (labels[_tradeLogFilter] || '') + ' trades yet</td></tr>';
+    if (countEl) countEl.textContent = '0 trades';
+    return;
+  }
+
+  if (countEl) countEl.textContent = filtered.length + ' trade(s)';
+
+  const HALAL_SYMBOLS = ['AAPL','MSFT','NVDA','GOOGL','AMZN','META','TSLA','V','MA','JNJ','PFE','UNH','ABBV','MRK','LLY','BMY','AMGN','GILD','REGN','VRTX','MRNA','BNTX','HD','LOW','CAT','HON','BA','GE','RTX','LMT','NKE','MCD','SBUX','TGT'];
+
+  tbody.innerHTML = filtered.map(entry => {
+    const ts = entry.created_at ? new Date(entry.created_at).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '—';
+    const action = entry.exit_price ? 'CLOSED' : 'OPEN';
+    const isExit = action === 'CLOSED';
+    const notes = entry.notes || '';
+    const qtyMatch = notes.match(/Qty=(\d+)/);
+    const qty = qtyMatch ? qtyMatch[1] : '--';
+    const entryPrice = entry.entry_price != null ? parseFloat(entry.entry_price) : null;
+    const exitPrice = entry.exit_price != null ? parseFloat(entry.exit_price) : null;
+    const pnlPct = entry.pnl_pct != null ? parseFloat(entry.pnl_pct) : null;
+    const pnlColor = pnlPct == null ? 'var(--text3)' : pnlPct >= 0 ? '#26a69a' : '#ef5350';
+    const pnlStr = pnlPct != null ? (pnlPct >= 0 ? '+' : '') + pnlPct.toFixed(2) + '%' : 'Open';
+    const reason = notes.length > 50 ? notes.slice(0, 50) + '…' : (notes || '—');
+    const isHalal = HALAL_SYMBOLS.includes(entry.symbol) || /halal/i.test(notes);
+
+    return `<tr style="border-bottom:1px solid var(--border)">
+      <td style="padding:9px 16px;font-size:11px;color:var(--text3);white-space:nowrap">${ts}</td>
+      <td style="padding:9px 16px;font-weight:600;color:var(--accent)">${entry.symbol || '—'}</td>
+      <td style="padding:9px 16px"><span style="font-size:10px;font-weight:700;padding:2px 7px;border-radius:4px;background:${isExit ? 'rgba(239,83,80,.15)' : 'rgba(38,166,154,.15)'};color:${isExit ? '#ef5350' : '#26a69a'}">${action}</span></td>
+      <td style="padding:9px 16px;text-align:right;color:var(--text2)">${qty}</td>
+      <td style="padding:9px 16px;text-align:right;color:var(--text2)">${entryPrice != null ? '$' + entryPrice.toFixed(2) : '—'}</td>
+      <td style="padding:9px 16px;text-align:right;color:var(--text2)">${exitPrice != null ? '$' + exitPrice.toFixed(2) : '—'}</td>
+      <td style="padding:9px 16px;text-align:right;font-weight:600;color:${pnlColor}">${pnlStr}</td>
+      <td style="padding:9px 16px;font-size:12px;color:var(--text3);max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${reason}</td>
+      <td style="padding:9px 16px;font-size:11px;color:${isHalal ? '#26a69a' : 'var(--text3)'}">${isHalal ? '✓' : '--'}</td>
+    </tr>`;
+  }).join('');
+}
+
+async function pharmaLoadTradeLog() {
+  const tbody = document.getElementById('pharma-log-tbody');
   if (!tbody) return;
 
   tbody.innerHTML = '<tr><td colspan="9" style="padding:24px;text-align:center;color:var(--text3)">Loading trades…</td></tr>';
 
   try {
-    // Fetch journal entries directly from Supabase
     if (!supabaseClient) { await pharmaBotRefreshStatus(); return; }
     const { data, error } = await supabaseClient
       .from('journal')
       .select('*')
       .order('created_at', { ascending: false })
-      .limit(50);
+      .limit(100);
 
     if (error) throw error;
     if (!data || data.length === 0) {
+      _tradeLogCache = [];
       tbody.innerHTML = '<tr><td colspan="9" style="padding:24px;text-align:center;color:var(--text3)">No trades yet</td></tr>';
-      if (countEl) countEl.textContent = '0 trades';
+      document.getElementById('pharma-log-count').textContent = '0 trades';
       return;
     }
 
-    if (countEl) countEl.textContent = `${data.length} trade(s)`;
-
-    const HALAL_SYMBOLS = ['AAPL','MSFT','NVDA','GOOGL','AMZN','META','TSLA','V','MA','JNJ','PFE','UNH','ABBV','MRK','LLY','BMY','AMGN','GILD','REGN','VRTX','MRNA','BNTX','HD','LOW','CAT','HON','BA','GE','RTX','LMT','NKE','MCD','SBUX','TGT'];
-
-    tbody.innerHTML = data.map(entry => {
-      const ts = entry.created_at ? new Date(entry.created_at).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '—';
-      const action = entry.exit_price ? 'CLOSED' : 'OPEN';
-      const isExit = action === 'CLOSED';
-      const notes = entry.notes || '';
-      const qtyMatch = notes.match(/qty[:\s]*(\d+\.?\d*)/i);
-      const qty = qtyMatch ? qtyMatch[1] : '—';
-      const entryPrice = entry.entry_price != null ? parseFloat(entry.entry_price) : null;
-      const exitPrice = entry.exit_price != null ? parseFloat(entry.exit_price) : null;
-      const pnlPct = entry.pnl_pct != null ? parseFloat(entry.pnl_pct) : null;
-      const pnlColor = pnlPct == null ? 'var(--text3)' : pnlPct >= 0 ? '#26a69a' : '#ef5350';
-      const pnlStr = pnlPct != null ? (pnlPct >= 0 ? '+' : '') + pnlPct.toFixed(2) + '%' : 'Open';
-      const reason = notes.length > 50 ? notes.slice(0, 50) + '…' : (notes || '—');
-      const isHalal = HALAL_SYMBOLS.includes(entry.symbol) || /halal/i.test(notes);
-
-      return `<tr style="border-bottom:1px solid var(--border)">
-        <td style="padding:9px 16px;font-size:11px;color:var(--text3);white-space:nowrap">${ts}</td>
-        <td style="padding:9px 16px;font-weight:600;color:var(--accent)">${entry.symbol || '—'}</td>
-        <td style="padding:9px 16px"><span style="font-size:10px;font-weight:700;padding:2px 7px;border-radius:4px;background:${isExit ? 'rgba(239,83,80,.15)' : 'rgba(38,166,154,.15)'};color:${isExit ? '#ef5350' : '#26a69a'}">${action}</span></td>
-        <td style="padding:9px 16px;text-align:right;color:var(--text2)">${qty}</td>
-        <td style="padding:9px 16px;text-align:right;color:var(--text2)">${entryPrice != null ? '$' + entryPrice.toFixed(2) : '—'}</td>
-        <td style="padding:9px 16px;text-align:right;color:var(--text2)">${exitPrice != null ? '$' + exitPrice.toFixed(2) : '—'}</td>
-        <td style="padding:9px 16px;text-align:right;font-weight:600;color:${pnlColor}">${pnlStr}</td>
-        <td style="padding:9px 16px;font-size:12px;color:var(--text3);max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${reason}</td>
-        <td style="padding:9px 16px;font-size:11px;color:${isHalal ? '#26a69a' : 'var(--text3)'}">${isHalal ? '✓' : '--'}</td>
-      </tr>`;
-    }).join('');
+    _tradeLogCache = data;
+    renderTradeLog(data);
   } catch (err) {
     console.error('[tradeLog] error:', err.message);
-    // Fallback to pharma bot status endpoint
     await pharmaBotRefreshStatus();
   }
 }
