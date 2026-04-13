@@ -2516,14 +2516,16 @@ async function loadPerfSummary() {
 const Q={};
 
 function fmt$(p){
-  if(p==null||isNaN(p))return '--';
-  return p>=1000
-    ? p.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})
-    : p.toFixed(2);
+  const n=parseFloat(p);
+  if(p==null||isNaN(n))return '--';
+  return n>=1000
+    ? n.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})
+    : n.toFixed(2);
 }
 function fmtChg(c){
-  if(c==null||isNaN(c))return '--';
-  return(c>=0?'+':'')+c.toFixed(2)+'%';
+  const n=parseFloat(c);
+  if(c==null||isNaN(n))return '--';
+  return(n>=0?'+':'')+n.toFixed(2)+'%';
 }
 
 // ── fetchWithRetry: 504-safe fetch for all widget loaders ─────────────────────
@@ -2771,7 +2773,7 @@ async function renderTopMoversPolygon(){
     const losers=data.losers||[];
     if(!gainers.length&&!losers.length)throw new Error();
     const row=(e,label)=>{
-      const pct=e.changePercent;
+      const pct=e.changePercent!=null?parseFloat(e.changePercent):null;
       return`
       <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border)">
         <div style="display:flex;align-items:center;gap:10px">
@@ -2779,7 +2781,7 @@ async function renderTopMoversPolygon(){
           <span style="font-family:var(--font-mono);font-weight:700;font-size:12px;color:var(--gold);min-width:48px">${e.symbol}</span>
           <span style="font-family:var(--font-mono);font-size:12px;color:var(--text)">${e.price!=null?fmt$(e.price):'--'}</span>
         </div>
-        <span style="font-family:var(--font-mono);font-size:12px;font-weight:700;color:${label==='G'?'var(--green)':'var(--red)'}">${pct!=null?(pct>=0?'+':'')+pct.toFixed(2)+'%':'--'}</span>
+        <span style="font-family:var(--font-mono);font-size:12px;font-weight:700;color:${label==='G'?'var(--green)':'var(--red)'}">${pct!=null&&!isNaN(pct)?(pct>=0?'+':'')+pct.toFixed(2)+'%':'--'}</span>
       </div>`;
     };
     const ts=new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
@@ -2906,10 +2908,11 @@ const SECTOR_ETFS=[
 function buildHeatMap(){
   document.getElementById('heat-grid').innerHTML=SECTOR_ETFS.map(e=>{
     const q=Q[e.sym];
-    const v=q?q.change:null;
-    const vStr=v!=null?(v>=0?'+':'')+v.toFixed(2)+'%':'--';
+    const raw=q?q.change:null;
+    const v=raw!=null?parseFloat(raw):null;
+    const vStr=v!=null&&!isNaN(v)?(v>=0?'+':'')+v.toFixed(2)+'%':'--';
     let cls='heat-flat';
-    if(v!=null){
+    if(v!=null&&!isNaN(v)){
       if(v>1.5)cls='heat-strong-up';
       else if(v>0.5)cls='heat-up';
       else if(v>0)cls='heat-slight-up';
@@ -2962,7 +2965,9 @@ function renderEconTable(el,allItems){
   };
   const fmtVal=(v,unit)=>{
     if(v==null||v==='')return'--';
-    return Number(v).toFixed(2)+(unit&&unit!=='%'?' '+unit:unit||'');
+    const n=parseFloat(v);
+    if(isNaN(n))return'--';
+    return n.toFixed(2)+(unit&&unit!=='%'?' '+unit:unit||'');
   };
   el.innerHTML=`
     <div style="padding:14px 20px 12px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--border);flex-wrap:wrap;gap:8px">
@@ -3228,8 +3233,8 @@ async function buildFlowTable(sym){
       const volStr=vol>=1e6?(vol/1e6).toFixed(1)+'M':vol>=1e3?(vol/1e3).toFixed(0)+'K':vol.toString();
       return`<tr style="border-bottom:1px solid var(--border)">
         <td style="padding:10px 14px;font-weight:700;color:var(--text);font-family:var(--font-mono)">${m.symbol||'--'}</td>
-        <td style="padding:10px 10px;text-align:right;color:var(--text2);font-family:var(--font-mono)">${m.price!=null?'$'+Number(m.price).toFixed(2):'--'}</td>
-        <td style="padding:10px 10px;text-align:right;font-weight:600;color:${chgColor};font-family:var(--font-mono)">${chg>=0?'+':''}${chg.toFixed(2)}%</td>
+        <td style="padding:10px 10px;text-align:right;color:var(--text2);font-family:var(--font-mono)">${m.price!=null&&!isNaN(parseFloat(m.price))?'$'+(parseFloat(m.price)).toFixed(2):'--'}</td>
+        <td style="padding:10px 10px;text-align:right;font-weight:600;color:${chgColor};font-family:var(--font-mono)">${chg>=0?'+':''}${(parseFloat(chg)||0).toFixed(2)}%</td>
         <td style="padding:10px 10px;text-align:right;color:var(--text2);font-family:var(--font-mono)">${volStr}</td>
         <td style="padding:10px 10px;text-align:center"><span style="font-size:9px;font-weight:700;padding:3px 10px;border-radius:99px;background:${sigBg};color:${sigColor};letter-spacing:.3px">${m.direction}</span></td>
       </tr>`;
@@ -6359,7 +6364,64 @@ function pharmaRenderScan(symbols) {
 
 // ── Pharma: Trade Log ─────────────────────────────────────────────
 async function pharmaLoadTradeLog() {
-  await pharmaBotRefreshStatus();
+  const tbody = document.getElementById('pharma-log-tbody');
+  const countEl = document.getElementById('pharma-log-count');
+  if (!tbody) return;
+
+  tbody.innerHTML = '<tr><td colspan="9" style="padding:24px;text-align:center;color:var(--text3)">Loading trades…</td></tr>';
+
+  try {
+    // Fetch journal entries directly from Supabase
+    if (!supabaseClient) { await pharmaBotRefreshStatus(); return; }
+    const { data, error } = await supabaseClient
+      .from('journal')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(50);
+
+    if (error) throw error;
+    if (!data || data.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="9" style="padding:24px;text-align:center;color:var(--text3)">No trades yet</td></tr>';
+      if (countEl) countEl.textContent = '0 trades';
+      return;
+    }
+
+    if (countEl) countEl.textContent = `${data.length} trade(s)`;
+
+    const HALAL_SYMBOLS = ['AAPL','MSFT','NVDA','GOOGL','AMZN','META','TSLA','V','MA','JNJ','PFE','UNH','ABBV','MRK','LLY','BMY','AMGN','GILD','REGN','VRTX','MRNA','BNTX','HD','LOW','CAT','HON','BA','GE','RTX','LMT','NKE','MCD','SBUX','TGT'];
+
+    tbody.innerHTML = data.map(entry => {
+      const ts = entry.created_at ? new Date(entry.created_at).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '—';
+      const action = entry.exit_price ? 'CLOSED' : 'OPEN';
+      const isExit = action === 'CLOSED';
+      const notes = entry.notes || '';
+      const qtyMatch = notes.match(/qty[:\s]*(\d+\.?\d*)/i);
+      const qty = qtyMatch ? qtyMatch[1] : '—';
+      const entryPrice = entry.entry_price != null ? parseFloat(entry.entry_price) : null;
+      const exitPrice = entry.exit_price != null ? parseFloat(entry.exit_price) : null;
+      const pnlPct = entry.pnl_pct != null ? parseFloat(entry.pnl_pct) : null;
+      const pnlColor = pnlPct == null ? 'var(--text3)' : pnlPct >= 0 ? '#26a69a' : '#ef5350';
+      const pnlStr = pnlPct != null ? (pnlPct >= 0 ? '+' : '') + pnlPct.toFixed(2) + '%' : 'Open';
+      const reason = notes.length > 50 ? notes.slice(0, 50) + '…' : (notes || '—');
+      const isHalal = HALAL_SYMBOLS.includes(entry.symbol) || /halal/i.test(notes);
+
+      return `<tr style="border-bottom:1px solid var(--border)">
+        <td style="padding:9px 16px;font-size:11px;color:var(--text3);white-space:nowrap">${ts}</td>
+        <td style="padding:9px 16px;font-weight:600;color:var(--accent)">${entry.symbol || '—'}</td>
+        <td style="padding:9px 16px"><span style="font-size:10px;font-weight:700;padding:2px 7px;border-radius:4px;background:${isExit ? 'rgba(239,83,80,.15)' : 'rgba(38,166,154,.15)'};color:${isExit ? '#ef5350' : '#26a69a'}">${action}</span></td>
+        <td style="padding:9px 16px;text-align:right;color:var(--text2)">${qty}</td>
+        <td style="padding:9px 16px;text-align:right;color:var(--text2)">${entryPrice != null ? '$' + entryPrice.toFixed(2) : '—'}</td>
+        <td style="padding:9px 16px;text-align:right;color:var(--text2)">${exitPrice != null ? '$' + exitPrice.toFixed(2) : '—'}</td>
+        <td style="padding:9px 16px;text-align:right;font-weight:600;color:${pnlColor}">${pnlStr}</td>
+        <td style="padding:9px 16px;font-size:12px;color:var(--text3);max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${reason}</td>
+        <td style="padding:9px 16px;font-size:11px;color:${isHalal ? '#26a69a' : 'var(--text3)'}">${isHalal ? '✓' : '--'}</td>
+      </tr>`;
+    }).join('');
+  } catch (err) {
+    console.error('[tradeLog] error:', err.message);
+    // Fallback to pharma bot status endpoint
+    await pharmaBotRefreshStatus();
+  }
 }
 
 function pharmaRenderTradeLog(trades) {
