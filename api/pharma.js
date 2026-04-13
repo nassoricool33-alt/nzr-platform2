@@ -7,9 +7,17 @@
  */
 
 const https = require('https');
+const { createClient } = require('@supabase/supabase-js');
 
 const ALLOWED_ORIGINS = ['https://nzr-platform2.vercel.app', 'http://localhost:3000'];
 const DEFAULT_ALPACA  = 'https://paper-api.alpaca.markets';
+
+let supabase = null;
+try {
+  if (process.env.SUPABASE_URL && process.env.SUPABASE_ANON_KEY) {
+    supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
+  }
+} catch(e) { console.error('[pharma] Supabase init failed:', e.message); }
 
 function withTimeout(promise, ms = 8000, fallback = null) {
   return Promise.race([
@@ -980,9 +988,41 @@ async function executePharmaSignal(symbol, signal, capitalAmount) {
       client_order_id: 'NZR-PHARMA-' + sym + '-' + Date.now()
     });
 
+    // Helper: write pharma trade to journal
+    const catalystInfo = signal.catalystInfo || {};
+    async function writePharmaJournal(orderId) {
+      try {
+        if (supabase) {
+          const { error: journalError } = await supabase.from('journal').insert({
+            symbol: sym,
+            entry_price: parseFloat(price) || 0,
+            exit_price: null,
+            pnl_pct: null,
+            trade_date: new Date().toISOString().split('T')[0],
+            notes: 'NZR-PHARMA | Drug=' + (catalystInfo.drug || 'unknown') +
+                   ' | Indication=' + (catalystInfo.indication || 'unknown') +
+                   ' | PDUFA=' + (catalystInfo.date || 'unknown') +
+                   ' | DaysAway=' + (days || 0) +
+                   ' | Score=' + (signal.combinedScore || 0) +
+                   ' | Qty=' + (qty || 0) +
+                   ' | Halal=' + (halalCheck.halalStatus || 'UNVERIFIED') +
+                   ' | OrderID=' + (orderId || 'unknown')
+          });
+          if (journalError) {
+            console.error('[PHARMA] Journal error:', journalError.message);
+          } else {
+            console.log('[PHARMA] Journal write success for', sym);
+          }
+        }
+      } catch(je) {
+        console.error('[PHARMA] Journal exception:', je.message);
+      }
+    }
+
     if (orderRes.status === 200 || orderRes.status === 201) {
       pharmaOrdersTracked.symbols.add(sym);
       console.log('[pharma/exec] ORDER_PLACED: ' + sym + ' ' + side + ' ' + qty + ' @ $' + price + ' SL=$' + stopLoss + ' TP=$' + takeProfit);
+      await writePharmaJournal(orderRes.body?.id);
       return {
         skip: false,
         placed: true,
@@ -1011,6 +1051,7 @@ async function executePharmaSignal(symbol, signal, capitalAmount) {
       if (simpleRes.status === 200 || simpleRes.status === 201) {
         pharmaOrdersTracked.symbols.add(sym);
         console.log('[pharma/exec] SIMPLE_ORDER_PLACED: ' + sym + ' ' + side + ' ' + qty + ' @ $' + price);
+        await writePharmaJournal(simpleRes.body?.id);
         return {
           skip: false,
           placed: true,
@@ -1057,18 +1098,20 @@ async function handleAutoScan(polyKey, anthropicKey) {
 
   let symbolsScanned = 0, signalsFound = 0, ordersPlaced = 0;
   const results = [];
+  let scanTimedOut = false;
 
-  // Scan PDUFA calendar symbols
+  // Scan PDUFA calendar symbols (20s hard budget, 3s per-symbol timeout)
   for (let i = 0; i < PDUFA_SCAN_SYMBOLS.length; i += 3) {
-    if (Date.now() - startTime > 25000) {
-      console.log('[pharma/autoscan] TIME_BUDGET: stopping early');
+    if (Date.now() - startTime > 20000) {
+      console.log('[pharma/autoscan] TIME_BUDGET: stopping early at ' + (Date.now() - startTime) + 'ms');
+      scanTimedOut = true;
       break;
     }
     const batch = PDUFA_SCAN_SYMBOLS.slice(i, i + 3);
     const batchResults = await Promise.all(batch.map(async (sym) => {
       symbolsScanned++;
       try {
-        return await handleSignal(sym, polyKey, anthropicKey);
+        return await withTimeout(handleSignal(sym, polyKey, anthropicKey), 3000, { symbol: sym, error: 'timeout' });
       } catch (e) {
         return { symbol: sym, error: e.message };
       }
@@ -1114,12 +1157,14 @@ async function handleAutoScan(polyKey, anthropicKey) {
   }
 
   const duration = Date.now() - startTime;
+  console.log('[pharma/autoscan] DONE: ' + symbolsScanned + ' scanned, ' + signalsFound + ' signals, ' + ordersPlaced + ' orders, ' + duration + 'ms' + (scanTimedOut ? ' (PARTIAL — timed out)' : ''));
   return {
     success: true,
     isMarketOpen,
     symbolsScanned,
     signalsFound,
     ordersPlaced,
+    partial: scanTimedOut,
     duration: duration + 'ms',
     results: results.map(r => ({
       symbol: r.symbol,
