@@ -4640,37 +4640,70 @@ module.exports = async function handler(req, res) {
 
         signalResults.push({ symbol, price, nrzScore, direction, rsi: rsiValue, macdHist, emaTrend: ema50 > ema200 ? 'BULL' : 'BEAR', ema60, ema200, volAboveAvg, sector, status: nrzScore >= 75 ? 'SIGNAL' : 'FILTERED' });
 
-        // ── Improved signal quality gate — all conditions must pass ──────────
+        // ── Signal quality gate — filters reduce score or hard-reject ─────────
         if (nrzScore >= 75) {
           signalsFound++;
+          const isHighConviction = nrzScore >= 90;
+          let filtered = false;
+          let filterReasons = [];
 
-          // RSI between 45 and 68 (avoid overbought)
+          // RSI between 45 and 68 (avoid overbought) — hard reject for standard, score penalty for high conviction
           if (rsiValue < 45 || rsiValue > 68) {
-            pushLog('FILTER_RSI: ' + symbol + ' RSI=' + rsiValue.toFixed(1) + ' outside 45-68 range', 'info');
-            return;
+            if (isHighConviction) {
+              nrzScore = Math.max(0, nrzScore - 10);
+              filterReasons.push('RSI=' + rsiValue.toFixed(1) + '(penalty -10)');
+            } else {
+              pushLog('FILTER_RSI: ' + symbol + ' RSI=' + rsiValue.toFixed(1) + ' outside 45-68 range', 'info');
+              filtered = true;
+            }
           }
-          // MACD histogram must be positive
-          if (macdHist <= 0) {
-            pushLog('FILTER_MACD: ' + symbol + ' MACD_HIST=' + macdHist.toFixed(3) + ' not positive', 'info');
-            return;
+          // MACD histogram must be positive — hard reject for standard, score penalty for high conviction
+          if (!filtered && macdHist <= 0) {
+            if (isHighConviction) {
+              nrzScore = Math.max(0, nrzScore - 10);
+              filterReasons.push('MACD=' + macdHist.toFixed(3) + '(penalty -10)');
+            } else {
+              pushLog('FILTER_MACD: ' + symbol + ' MACD_HIST=' + macdHist.toFixed(3) + ' not positive', 'info');
+              filtered = true;
+            }
           }
-          // EMA60 > EMA200 (golden cross active)
-          if (ema60 > 0 && ema200 > 0 && ema60 <= ema200) {
-            pushLog('FILTER_EMA: ' + symbol + ' EMA60=' + ema60.toFixed(2) + ' <= EMA200=' + ema200.toFixed(2) + ' no golden cross', 'info');
-            return;
+          // EMA60 > EMA200 (golden cross) — score penalty only, never hard reject
+          if (!filtered && ema60 > 0 && ema200 > 0 && ema60 <= ema200) {
+            nrzScore = Math.max(0, nrzScore - 20);
+            pushLog('FILTER_EMA: ' + symbol + ' EMA60=' + ema60.toFixed(2) + ' <= EMA200=' + ema200.toFixed(2) + ' no golden cross (score -20, now=' + nrzScore + ')', 'info');
+            filterReasons.push('EMA_DEATH(penalty -20)');
           }
-          // Volume above 20-day average
-          if (!volAboveAvg) {
-            pushLog('FILTER_VOL: ' + symbol + ' volume below 20-day avg (cur=' + currentVol + ' avg=' + Math.round(avgVol) + ')', 'info');
-            return;
+          // Volume above 20-day average — hard reject for standard, ignore for high conviction
+          if (!filtered && !volAboveAvg) {
+            if (isHighConviction) {
+              filterReasons.push('LOW_VOL(bypassed)');
+            } else {
+              pushLog('FILTER_VOL: ' + symbol + ' volume below 20-day avg (cur=' + currentVol + ' avg=' + Math.round(avgVol) + ')', 'info');
+              filtered = true;
+            }
           }
-          // SPY not down more than 1.5% today
-          if (spyDayChangePct < -1.5) {
+          // SPY not down more than 1.5% today — hard block for all
+          if (!filtered && spyDayChangePct < -1.5) {
             pushLog('FILTER_SPY: ' + symbol + ' skipped — SPY down ' + spyDayChangePct.toFixed(2) + '% (limit -1.5%)', 'warn');
+            filtered = true;
+          }
+
+          if (filtered) {
+            // Re-check score after penalties — might still be >= 75
+            // (filtered = true means hard-rejected by a non-bypassable filter)
             return;
           }
 
-          pushLog('SIGNAL: ' + symbol + ' [' + sector + '] ' + direction + ' score=' + nrzScore + ' (passed all quality filters)', 'pass');
+          // Re-cap after penalties
+          nrzScore = Math.max(0, Math.min(100, nrzScore));
+
+          // After penalties, still need >= 75 to be a candidate
+          if (nrzScore < 75) {
+            pushLog('FILTER_SCORE_DROP: ' + symbol + ' score dropped to ' + nrzScore + ' after penalties (' + filterReasons.join(', ') + ') — below 75 threshold', 'info');
+            return;
+          }
+
+          pushLog('SIGNAL: ' + symbol + ' [' + sector + '] ' + direction + ' score=' + nrzScore + (filterReasons.length ? ' (adjustments: ' + filterReasons.join(', ') + ')' : ' (passed all quality filters)'), 'pass');
 
           // Sector momentum filter — check sector ETF
           const sectorEtf = sectorMap[symbol] || null;
@@ -4688,6 +4721,7 @@ module.exports = async function handler(req, res) {
             emaTrend: ema50 > ema200 ? 'BULL' : 'BEAR',
             sector, sectorSizeMultiplier
           });
+          pushLog('CANDIDATE_ADDED: ' + symbol + ' score=' + nrzScore + ' (total candidates=' + candidateSignals.length + ')', 'info');
         }
 
       } catch(err) {
@@ -4733,7 +4767,11 @@ module.exports = async function handler(req, res) {
     pushLog('PRE_FILTER: ' + preFilterSkipped + '/' + symbolsScanned + ' symbols skipped by RSI pre-filter (saved ~' + (preFilterSkipped * 5) + ' API calls)', 'info');
 
     // ── Execute signals — score-sorted, buy-gated by live position count ─────
+    pushLog('EXECUTION_PHASE: ' + candidateSignals.length + ' candidates collected, ' + signalsFound + ' signals found, entering execution', 'info');
     candidateSignals.sort((a, b) => b.nrzScore - a.nrzScore);
+    if (candidateSignals.length > 0) {
+      pushLog('TOP_CANDIDATES: ' + candidateSignals.map(s => s.symbol + '(' + s.nrzScore + ')').join(', '), 'pass');
+    }
     const topSignals = candidateSignals.slice(0, 5);
     if (candidateSignals.length > 5) {
       pushLog('RANK_FILTER: ' + candidateSignals.length + ' candidates, trading top 5: ' + topSignals.map(s => s.symbol + '(' + s.nrzScore + ')').join(', '), 'info');
