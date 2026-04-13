@@ -1560,8 +1560,30 @@ footer{border-top:1px solid var(--border);padding:32px 0;margin-top:80px}
 
   <!-- signed-in content -->
   <div id="pf-content" style="display:none">
+    <!-- Alpaca Live Positions -->
+    <div id="pf-alpaca-summary" class="stat-card sec-fade" style="padding:20px 24px;margin-bottom:16px;display:none">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+        <div style="font-family:var(--font-mono);font-size:10px;color:var(--text3);letter-spacing:1px;text-transform:uppercase">Alpaca Live Positions</div>
+        <button id="pf-refresh-btn" onclick="loadAlpacaPositions()" style="font-size:10px;padding:4px 12px;background:var(--surface2);color:var(--text2);border:1px solid var(--border);border-radius:4px;cursor:pointer;font-family:var(--font-mono)">Refresh</button>
+      </div>
+      <div style="display:flex;gap:24px;flex-wrap:wrap;font-family:var(--font-mono)">
+        <div><div style="font-size:9px;color:var(--text3);text-transform:uppercase;margin-bottom:2px">Portfolio Value</div><div id="pf-total-value" style="font-size:18px;font-weight:700;color:var(--text)">—</div></div>
+        <div><div style="font-size:9px;color:var(--text3);text-transform:uppercase;margin-bottom:2px">Unrealized P&amp;L</div><div id="pf-total-pnl" style="font-size:18px;font-weight:700">—</div></div>
+        <div><div style="font-size:9px;color:var(--text3);text-transform:uppercase;margin-bottom:2px">P&amp;L %</div><div id="pf-total-pnl-pct" style="font-size:18px;font-weight:700">—</div></div>
+        <div><div style="font-size:9px;color:var(--text3);text-transform:uppercase;margin-bottom:2px">Positions</div><div id="pf-pos-count" style="font-size:18px;font-weight:700;color:var(--text)">—</div></div>
+        <div><div style="font-size:9px;color:var(--text3);text-transform:uppercase;margin-bottom:2px">Winners / Losers</div><div id="pf-win-loss" style="font-size:18px;font-weight:700">—</div></div>
+      </div>
+    </div>
+    <div class="stat-card sec-fade" style="padding:0;margin-bottom:16px;overflow-x:auto">
+      <div id="pf-alpaca-table">
+        <div style="padding:28px;text-align:center;font-family:var(--font-mono);font-size:11px;color:var(--text3)">Loading Alpaca positions…</div>
+      </div>
+    </div>
+
+    <!-- Manual Positions -->
     <div class="stat-card sec-fade" style="padding:20px 24px;margin-bottom:16px">
-      <div style="font-family:var(--font-mono);font-size:10px;color:var(--text3);letter-spacing:1px;text-transform:uppercase;margin-bottom:14px">Add Position</div>
+      <div style="font-family:var(--font-mono);font-size:10px;color:var(--text3);letter-spacing:1px;text-transform:uppercase;margin-bottom:4px">Add Manual Position</div>
+      <div style="font-family:var(--font-body);font-size:11px;color:var(--text3);margin-bottom:14px">Manual positions are separate from your connected Alpaca account</div>
       <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
         <div>
           <div class="input-label" style="margin-bottom:4px">Symbol</div>
@@ -2306,6 +2328,8 @@ function showPage(id){
   const tab=document.querySelector(`.nav-tab[data-page="${id}"]`);
   if(tab)tab.classList.add('active');
   window.scrollTo({top:0,behavior:'smooth'});
+  // Stop portfolio auto-refresh when leaving that tab
+  if(id!=='portfolio'&&typeof stopPortfolioAutoRefresh==='function') stopPortfolioAutoRefresh();
   // Auto-load pharma data on first visit
   if(id==='pharma'&&!_pharmaLoaded){
     _pharmaLoaded=true;
@@ -3737,7 +3761,101 @@ async function removeFromWatchlist(id,userId){
 
 /* ── PORTFOLIO ──────────────────────────────────── */
 
+let _pfAutoRefresh = null;
+
+async function loadAlpacaPositions() {
+  const table = document.getElementById('pf-alpaca-table');
+  const summary = document.getElementById('pf-alpaca-summary');
+  if (!table) return;
+  table.innerHTML = '<div style="padding:20px;text-align:center;font-family:var(--font-mono);font-size:11px;color:var(--text3)">Loading Alpaca positions…</div>';
+  try {
+    const resp = await fetch('/api/alpaca?type=positions');
+    const positions = await resp.json();
+    if (!Array.isArray(positions) || positions.length === 0) {
+      table.innerHTML = '<div style="padding:28px;text-align:center;font-family:var(--font-mono);font-size:11px;color:var(--text3)">No open Alpaca positions</div>';
+      if (summary) summary.style.display = 'none';
+      return;
+    }
+
+    // Calculate totals
+    let totalValue = 0, totalPnl = 0, totalCost = 0, winners = 0, losers = 0;
+    for (const p of positions) {
+      const mv = parseFloat(p.market_value) || 0;
+      const pnl = parseFloat(p.unrealized_pl) || 0;
+      const cost = (parseFloat(p.avg_entry_price) || 0) * (parseFloat(p.qty) || 0);
+      totalValue += mv;
+      totalPnl += pnl;
+      totalCost += cost;
+      if (pnl > 0) winners++;
+      else if (pnl < 0) losers++;
+    }
+    const totalPnlPct = totalCost > 0 ? (totalPnl / totalCost * 100) : 0;
+    const pnlColor = totalPnl >= 0 ? 'var(--green)' : 'var(--red)';
+
+    // Update summary
+    if (summary) {
+      summary.style.display = 'block';
+      document.getElementById('pf-total-value').textContent = '$' + totalValue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      const pnlEl = document.getElementById('pf-total-pnl');
+      pnlEl.textContent = (totalPnl >= 0 ? '+' : '') + '$' + totalPnl.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      pnlEl.style.color = pnlColor;
+      const pctEl = document.getElementById('pf-total-pnl-pct');
+      pctEl.textContent = (totalPnlPct >= 0 ? '+' : '') + totalPnlPct.toFixed(2) + '%';
+      pctEl.style.color = pnlColor;
+      document.getElementById('pf-pos-count').textContent = positions.length;
+      const wlEl = document.getElementById('pf-win-loss');
+      wlEl.innerHTML = '<span style="color:var(--green)">' + winners + 'W</span> / <span style="color:var(--red)">' + losers + 'L</span>';
+    }
+
+    // Build table
+    table.innerHTML = `<table style="width:100%;border-collapse:collapse;font-family:var(--font-mono);font-size:12px">
+      <thead><tr style="border-bottom:1px solid var(--border)">
+        <th style="padding:10px 16px;text-align:left;color:var(--text3);font-weight:500;font-size:10px;text-transform:uppercase">Symbol</th>
+        <th style="padding:10px 16px;text-align:right;color:var(--text3);font-weight:500;font-size:10px;text-transform:uppercase">Qty</th>
+        <th style="padding:10px 16px;text-align:right;color:var(--text3);font-weight:500;font-size:10px;text-transform:uppercase">Avg Entry</th>
+        <th style="padding:10px 16px;text-align:right;color:var(--text3);font-weight:500;font-size:10px;text-transform:uppercase">Current</th>
+        <th style="padding:10px 16px;text-align:right;color:var(--text3);font-weight:500;font-size:10px;text-transform:uppercase">Mkt Value</th>
+        <th style="padding:10px 16px;text-align:right;color:var(--text3);font-weight:500;font-size:10px;text-transform:uppercase">P&amp;L $</th>
+        <th style="padding:10px 16px;text-align:right;color:var(--text3);font-weight:500;font-size:10px;text-transform:uppercase">P&amp;L %</th>
+      </tr></thead>
+      <tbody>${positions.map(p => {
+        const qty = parseFloat(p.qty) || 0;
+        const entry = parseFloat(p.avg_entry_price) || 0;
+        const current = parseFloat(p.current_price) || 0;
+        const mv = parseFloat(p.market_value) || 0;
+        const pnl = parseFloat(p.unrealized_pl) || 0;
+        const pnlPct = parseFloat(p.unrealized_plpc) * 100 || 0;
+        const c = pnl >= 0 ? 'var(--green)' : 'var(--red)';
+        return `<tr style="border-bottom:1px solid var(--border)">
+          <td style="padding:11px 16px;font-weight:700;color:var(--text)">${p.symbol}</td>
+          <td style="padding:11px 16px;text-align:right;color:var(--text2)">${qty}</td>
+          <td style="padding:11px 16px;text-align:right;color:var(--text2)">$${entry.toFixed(2)}</td>
+          <td style="padding:11px 16px;text-align:right;color:var(--text2)">$${current.toFixed(2)}</td>
+          <td style="padding:11px 16px;text-align:right;color:var(--text2)">$${mv.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}</td>
+          <td style="padding:11px 16px;text-align:right;font-weight:600;color:${c}">${pnl>=0?'+':''}$${pnl.toFixed(2)}</td>
+          <td style="padding:11px 16px;text-align:right;font-weight:600;color:${c}">${pnlPct>=0?'+':''}${pnlPct.toFixed(2)}%</td>
+        </tr>`;
+      }).join('')}</tbody>
+    </table>`;
+  } catch(err) {
+    table.innerHTML = '<div style="padding:20px;text-align:center;font-size:12px;color:var(--red)">Error loading Alpaca positions: ' + err.message + '</div>';
+  }
+}
+
+function startPortfolioAutoRefresh() {
+  stopPortfolioAutoRefresh();
+  _pfAutoRefresh = setInterval(() => { loadAlpacaPositions(); }, 60000);
+}
+function stopPortfolioAutoRefresh() {
+  if (_pfAutoRefresh) { clearInterval(_pfAutoRefresh); _pfAutoRefresh = null; }
+}
+
 async function loadPortfolio(userId){
+  // Load Alpaca positions first
+  loadAlpacaPositions();
+  startPortfolioAutoRefresh();
+
+  // Then load manual positions from Supabase
   const wrap=document.getElementById('pf-table-wrap');
   if(!wrap||!supabaseClient)return;
   wrap.innerHTML='<div style="padding:20px;text-align:center;font-family:var(--font-mono);font-size:11px;color:var(--text3)">Loading…</div>';
@@ -3746,7 +3864,7 @@ async function loadPortfolio(userId){
       .from('portfolio').select('*').eq('user_id',userId).order('created_at',{ascending:false});
     if(error)throw error;
     if(!data||data.length===0){
-      wrap.innerHTML='<div style="padding:28px;text-align:center;font-family:var(--font-mono);font-size:11px;color:var(--text3)">No positions yet — add one above</div>';
+      wrap.innerHTML='<div style="padding:28px;text-align:center;font-family:var(--font-mono);font-size:11px;color:var(--text3)">No manual positions yet — add one above</div>';
       return;
     }
     wrap.innerHTML=`<table style="width:100%;border-collapse:collapse;font-family:var(--font-mono);font-size:12px">
