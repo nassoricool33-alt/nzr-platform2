@@ -3313,7 +3313,7 @@ async function manageOpenPositions() {
       let posStillExists = true;
       try {
         const checkCtrl = new AbortController();
-        const checkTimer = setTimeout(() => checkCtrl.abort(), 2000);
+        const checkTimer = setTimeout(() => checkCtrl.abort(), 1500);
         let checkResp;
         try { checkResp = await fetch(`${ALPACA_BASE}/v2/positions/${encodeURIComponent(symbol)}`, { headers: alpacaHeaders, signal: checkCtrl.signal }); }
         finally { clearTimeout(checkTimer); }
@@ -3340,7 +3340,7 @@ async function manageOpenPositions() {
       try {
         const closeSide = side === 'long' ? 'sell' : 'buy';
         const closeCtrl = new AbortController();
-        const closeTimer = setTimeout(() => closeCtrl.abort(), 10000);
+        const closeTimer = setTimeout(() => closeCtrl.abort(), 5000);
         let closeResp;
         try {
           closeResp = await fetch(`${ALPACA_BASE}/v2/orders`, {
@@ -4527,7 +4527,7 @@ module.exports = async function handler(req, res) {
     pushLog('SCAN_UNIVERSE_SIZE: ' + SCAN_UNIVERSE.length + ' symbols', 'info');
     pushLog('SCAN_STARTED: capital=$' + capital + ' day=$' + dayAlloc + ' swing=$' + swingAlloc + ' universe=' + SCAN_UNIVERSE.length + ' ET=' + etHour + ':' + String(etMinute).padStart(2,'0'), 'info');
 
-    // ── Dynamic position management — runs FIRST every cycle (8s hard limit) ──
+    // ── Dynamic position management — runs FIRST every cycle (20s hard limit) ──
     let posMgmt = { positionsManaged: 0, closed: 0, held: 0, trailUpdated: 0, staleOrdersCancelled: 0, openCount: 0, totalUnrealizedPct: 0, newEntriesAllowed: true };
     try {
       let mgmtTimedOut = false;
@@ -4536,9 +4536,9 @@ module.exports = async function handler(req, res) {
         new Promise(resolve => {
           setTimeout(() => {
             mgmtTimedOut = true;
-            pushLog('MGMT_TIMEOUT: position management cut short at 8s, proceeding to scan', 'warn');
+            pushLog('MGMT_TIMEOUT: position management cut short at 20s, proceeding to scan', 'warn');
             resolve(null);
-          }, 8000);
+          }, 20000);
         })
       ]);
       if (mgmtResult) posMgmt = mgmtResult;
@@ -4601,7 +4601,13 @@ module.exports = async function handler(req, res) {
     // ── SPY benchmark tracking (#1, #2) ────────────────────────────────────────
     let spyDayChangePct = 0;
     try {
-      const spySnap = await raceFetch('https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers/SPY?apiKey=' + apiKey);
+      let spySnap = await raceFetch('https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers/SPY?apiKey=' + apiKey);
+      // Fallback: if snapshot endpoint fails (403 on free plan), use prev close endpoint
+      if (!spySnap?.ticker) {
+        const prevData = await raceFetch('https://api.polygon.io/v2/aggs/ticker/SPY/prev?adjusted=true&apiKey=' + apiKey);
+        const bar = prevData?.results?.[0];
+        if (bar) spySnap = { ticker: { prevDay: { c: bar.c, o: bar.o, h: bar.h, l: bar.l, v: bar.v }, day: {} } };
+      }
       const spyPrice = spySnap?.ticker?.day?.c || spySnap?.ticker?.lastTrade?.p || spySnap?.ticker?.prevDay?.c || 0;
       const spyPrevClose = spySnap?.ticker?.prevDay?.c || 0;
       if (spyPrice > 0 && spyPrevClose > 0) {
@@ -4695,9 +4701,16 @@ module.exports = async function handler(req, res) {
     const sectorEtfCache = {};
     try {
       const etfs = ['QQQ', 'XLF', 'XLY', 'XLK', 'XLV', 'XLE', 'XLI'];
-      const etfSnaps = await Promise.all(etfs.map(etf =>
-        raceFetch('https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers/' + etf + '?apiKey=' + apiKey)
-      ));
+      const etfSnaps = await Promise.all(etfs.map(async (etf) => {
+        let snap = await raceFetch('https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers/' + etf + '?apiKey=' + apiKey);
+        // Fallback: if snapshot fails (403 on free plan), use prev close endpoint
+        if (!snap?.ticker) {
+          const prevData = await raceFetch('https://api.polygon.io/v2/aggs/ticker/' + etf + '/prev?adjusted=true&apiKey=' + apiKey);
+          const bar = prevData?.results?.[0];
+          if (bar) snap = { ticker: { prevDay: { c: bar.c, o: bar.o, h: bar.h, l: bar.l, v: bar.v }, day: {} } };
+        }
+        return snap;
+      }));
       etfs.forEach((etf, i) => {
         const snap = etfSnaps[i];
         const cur = snap?.ticker?.day?.c || snap?.ticker?.lastTrade?.p || snap?.ticker?.prevDay?.c || 0;
@@ -4718,14 +4731,21 @@ module.exports = async function handler(req, res) {
         const sector = sectorMap[symbol] || 'OTHER';
 
         // ── PHASE 1: Quick RSI pre-filter (saves API calls on 75-symbol universe) ──
-        const [snapRes, rsiData] = await Promise.all([
+        let [snapRes, rsiData] = await Promise.all([
           raceFetch('https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers/' + symbol + '?apiKey=' + apiKey),
           raceFetch('https://api.polygon.io/v1/indicators/rsi/' + symbol + '?timespan=hour&adjusted=true&window=14&series_type=close&order=desc&limit=3&apiKey=' + apiKey),
         ]);
 
+        // Fallback: if snapshot fails (403 on free plan), use prev close endpoint
+        if (!snapRes?.ticker) {
+          const prevData = await raceFetch('https://api.polygon.io/v2/aggs/ticker/' + symbol + '/prev?adjusted=true&apiKey=' + apiKey);
+          const bar = prevData?.results?.[0];
+          if (bar) snapRes = { ticker: { prevDay: { c: bar.c, o: bar.o, h: bar.h, l: bar.l, v: bar.v }, day: {} } };
+        }
+
         const price = snapRes?.ticker?.day?.c || snapRes?.ticker?.lastTrade?.p || snapRes?.ticker?.prevDay?.c || null;
         if (!price) {
-          pushLog('SKIP ' + symbol + ': no price (snapshot=' + (snapRes ? 'received' : 'null') + ' dayC=' + snapRes?.ticker?.day?.c + ' lastTrade=' + snapRes?.ticker?.lastTrade?.p + ' prevDayC=' + snapRes?.ticker?.prevDay?.c + ')', 'warn');
+          pushLog('SKIP ' + symbol + ': no price (snapshot=' + (snapRes ? 'received' : 'null') + ')', 'warn');
           return;
         }
 
