@@ -3234,7 +3234,10 @@ async function manageOpenPositions() {
     let reason = '';
 
     // --- CLOSE conditions (checked first, order matters) ---
-    if (unrealizedPct >= 0.08) {
+    // Hard override: 12%+ closes immediately regardless of any other condition
+    if (unrealizedPct >= 0.12) {
+      action = 'CLOSE'; reason = 'PROFIT_TARGET_12PCT_OVERRIDE: +' + (unrealizedPct * 100).toFixed(1) + '% (>=12%)';
+    } else if (unrealizedPct >= 0.08) {
       action = 'CLOSE'; reason = 'PROFIT_TARGET: +' + (unrealizedPct * 100).toFixed(1) + '% (>=8%)';
     } else if (unrealizedPct <= -0.04) {
       action = 'CLOSE'; reason = 'STOP_LOSS: ' + (unrealizedPct * 100).toFixed(1) + '% (<=-4%)';
@@ -3250,7 +3253,11 @@ async function manageOpenPositions() {
 
     // --- HOLD conditions ---
     if (action === 'HOLD') {
-      if (daysHeld < 1) {
+      if (daysHeld < 1 && unrealizedPct >= 0.08) {
+        // New position but already at 8%+ profit — close immediately
+        action = 'CLOSE';
+        reason = 'PROFIT_TARGET_8PCT: +' + (unrealizedPct * 100).toFixed(1) + '% (>=8%, overrides new-position hold)';
+      } else if (daysHeld < 1) {
         reason = 'NEW_POSITION: held <1d, giving time';
       } else if (hasRealRsi && rsi >= 50 && rsi <= 70 && unrealizedPct > 0) {
         reason = 'MOMENTUM_INTACT: RSI=' + rsi.toFixed(1) + ' pnl=+' + (unrealizedPct * 100).toFixed(1) + '%';
@@ -3291,6 +3298,8 @@ async function manageOpenPositions() {
 
     // ── Execute decision ─────────────────────────────────────────────────────
     if (action === 'CLOSE') {
+      pushLog('CLOSE_ATTEMPT: ' + symbol + ' reason=' + reason + ' pnl=' + (unrealizedPct * 100).toFixed(2) + '%', 'pass');
+
       // Guard: skip if already closed this cycle
       if (closedThisCycle.has(symbol)) {
         pushLog('POSITION_ALREADY_CLOSED: ' + symbol + ' skipping duplicate close', 'warn');

@@ -53,12 +53,12 @@ module.exports = async function handler(req, res) {
     }
 
     const price = ticker.lastTrade?.p || ticker.day?.c || ticker.prevDay?.c || 0;
-    const open = ticker.day?.o || ticker.prevDay?.c || 0;
+    const open = ticker.day?.o || 0;
     const high = ticker.day?.h || 0;
     const low = ticker.day?.l || 0;
     const prevClose = ticker.prevDay?.c || 0;
     const change = price - prevClose;
-    const changePercent = prevClose ? (change / prevClose * 100) : 0;
+    const changePercent = prevClose > 0 ? (change / prevClose * 100) : 0;
     const volume = ticker.day?.v || 0;
 
     console.log('[quote]', symbol, 'price=', price, 'prevClose=', prevClose, 'change=', change.toFixed(2))
@@ -67,8 +67,8 @@ module.exports = async function handler(req, res) {
       symbol,
       price: parseFloat(price.toFixed(2)),
       open: parseFloat(open.toFixed(2)),
-      high: high ? parseFloat(high.toFixed(2)) : null,
-      low: low ? parseFloat(low.toFixed(2)) : null,
+      high: parseFloat(high.toFixed(2)),
+      low: parseFloat(low.toFixed(2)),
       prevClose: parseFloat(prevClose.toFixed(2)),
       change: parseFloat(change.toFixed(2)),
       changePercent: parseFloat(changePercent.toFixed(2)),
