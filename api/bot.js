@@ -1833,8 +1833,11 @@ async function runFullScan(testMode = false) {
           target1:    parseFloat(target1.toFixed(2)),
           positionSize, atr,
           rsi:        rsiVal != null ? parseFloat(rsiVal.toFixed(1)) : null,
+          macdHist:   macdHist != null ? parseFloat(Number(macdHist).toFixed(4)) : null,
           emaTrend:   (ema60v != null && ema200v != null) ? (ema60v > ema200v ? 'BULL' : 'BEAR') : null,
           emaCross:   (ema60v != null && ema200v != null) ? (ema60v > ema200v ? 'GOLDEN' : 'DEATH') : null,
+          vixLevel:   regime.vix != null ? regime.vix : null,
+          sectorEtf:  symbolSector || null,
         };
 
         let execResult;
@@ -3180,7 +3183,10 @@ async function manageOpenPositions(prefetchedPositions, prefetchedAccount) {
     const side         = pos.side;
     const stateKey     = 'position_' + symbol;
     const posTrack     = posTrackMap[stateKey] || null;
-    const entryDate    = posTrack?.entryDate || new Date().toISOString().split('T')[0];
+    // Use posTrack entryDate first, then Alpaca's created_at, then today as last resort
+    const entryDate    = posTrack?.entryDate
+      || (pos.created_at ? pos.created_at.split('T')[0] : null)
+      || new Date().toISOString().split('T')[0];
     const daysHeld     = Math.max(0, Math.floor((Date.now() - new Date(entryDate).getTime()) / 86400000));
 
     const pd = { symbol, currentPrice, entryPrice, qty, unrealizedPct, side, stateKey, posTrack, entryDate, daysHeld };
@@ -3480,7 +3486,7 @@ async function updateClosedTrades() {
     pushLog('UPDATE_PNL: starting', 'info');
 
     // Fetch all orders from Alpaca
-    const alpacaRes = await fetch('https://paper-api.alpaca.markets/v2/orders?status=all&limit=500&direction=desc', {
+    const alpacaRes = await fetch(`${ALPACA_BASE}/v2/orders?status=all&limit=500&direction=desc`, {
       headers: {
         'APCA-API-KEY-ID': process.env.ALPACA_API_KEY,
         'APCA-API-SECRET-KEY': process.env.ALPACA_SECRET_KEY
@@ -3509,20 +3515,22 @@ async function updateClosedTrades() {
     if (fetchError) { pushLog('UPDATE_PNL: supabase error: ' + fetchError.message, 'warn'); return; }
     if (!openEntries || openEntries.length === 0) { pushLog('UPDATE_PNL: no open journal entries to update', 'info'); return; }
 
-    pushLog('UPDATE_PNL: ' + openEntries.length + ' open journal entries to check', 'info');
+    pushLog('UPDATE_PNL: ' + openEntries.length + ' open journal entries to check against ' + sellOrders.length + ' sells', 'info');
 
     let updated = 0;
     const matchedSellIds = new Set();
 
     for (const entry of openEntries) {
-      // Find the earliest matching sell order for this symbol that hasn't been used yet
+      // Match sell to journal entry: same symbol, filled after entry date
+      // Use >= comparison on the date portion so same-day trades match
+      const entryDateStr = entry.trade_date || '';
       const matchingSell = sellOrders
         .filter(o =>
           o.symbol === entry.symbol &&
           !matchedSellIds.has(o.id) &&
-          new Date(o.filled_at) > new Date(entry.trade_date)
+          (o.filled_at || '').slice(0, 10) >= entryDateStr
         )
-        .sort((a, b) => new Date(a.filled_at) - new Date(b.filled_at))[0];
+        .sort((a, b) => (a.filled_at || '').localeCompare(b.filled_at || ''))[0];
 
       if (matchingSell) {
         matchedSellIds.add(matchingSell.id);
@@ -3569,65 +3577,6 @@ async function updateClosedTrades() {
 // ─── ALPACA ORDER EXECUTION ───────────────────────────────────────────────────
 
 /**
- * Writes a journal row and a notification row to Supabase after a successful
- * order placement.  Fail-silent: any error is caught and warned.
- */
-async function writeSupabaseRecord(signal, qty, newsContext = null, orderData = null, stopPrice = 0, target1 = 0) {
-  const supabaseUrl = process.env.SUPABASE_URL || 'https://chfdvmtnditebmlmyihr.supabase.co';
-  const supabaseKey = process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_ANON_KEY;
-  if (!supabaseUrl || !supabaseKey) return;
-
-  const headers = {
-    'Content-Type':  'application/json',
-    'apikey':        supabaseKey,
-    'Authorization': `Bearer ${supabaseKey}`,
-    'Prefer':        'return=minimal',
-  };
-
-  const direction = signal.direction || 'LONG';
-  const notes = 'Bot: ' + (signal.strategy || 'COMBINED') +
-    ' | NZR=' + signal.nrzScore +
-    ' | Dir=' + direction.toUpperCase() +
-    ' | RSI=' + (signal.rsi ? signal.rsi.toFixed(1) : 'n/a') +
-    ' | MACD=' + (signal.macdHist ? signal.macdHist.toFixed(3) : 'n/a') +
-    ' | EMA=' + (signal.emaTrend || 'n/a') +
-    ' | Stop=$' + (stopPrice > 0 ? stopPrice.toFixed(2) : 'n/a') +
-    ' | Target=$' + (target1 > 0 ? target1.toFixed(2) : 'n/a') +
-    ' | Qty=' + qty +
-    ' | OrderID=' + (orderData?.id || 'unknown');
-
-  const journalRow = {
-    symbol:      signal.symbol,
-    entry_price: parseFloat(signal.entryPrice) || 0,
-    exit_price:  null,
-    pnl_pct:     null,
-    avg_cost:    parseFloat(signal.entryPrice) || 0,
-    trade_date:  toETDate(),
-    notes:       notes,
-    user_id:     null,
-  };
-  if (newsContext) {
-    journalRow.news_context = JSON.stringify(newsContext);
-  }
-
-  try {
-    await Promise.allSettled([
-      fetch(`${supabaseUrl}/rest/v1/journal`, {
-        method: 'POST', headers,
-        body: JSON.stringify(journalRow),
-      }),
-      safeNotify(
-        `Bot opened ${direction.toLowerCase()} on ${signal.symbol} @ $${(parseFloat(signal.entryPrice) || 0).toFixed(2)} (NZR ${signal.nrzScore})`,
-        'trade'
-      ),
-    ]);
-    pushLog('JOURNAL_WRITTEN: ' + signal.symbol + ' trade logged', 'info');
-  } catch(journalErr) {
-    pushLog('JOURNAL_ERROR: ' + journalErr.message, 'warn');
-  }
-}
-
-/**
  * Submits a bracket limit order to Alpaca Paper Trading for an approved signal.
  *
  * @param {object} signal  — { symbol, direction, mode, strategy, nrzScore,
@@ -3641,7 +3590,6 @@ async function executeSignal(signal, newsContext = null) {
   const positionSize = parseFloat(signal.positionSize) || 0;
   const atr         = parseFloat(signal.atr) || entryPrice * 0.015;
 
-  console.log('[EXECUTE] Starting for', signal.symbol, 'score=', signal.nrzScore, 'dir=', signal.direction, 'price=', entryPrice, 'posSize=', positionSize);
   pushLog('EXEC_START: ' + signal.symbol + ' score=' + (signal.nrzScore || 0) + ' price=$' + entryPrice + ' posSize=$' + positionSize, 'info');
 
   if (!entryPrice || entryPrice <= 0) {
@@ -3660,7 +3608,6 @@ async function executeSignal(signal, newsContext = null) {
     : signal.direction === 'LONG' ? entryPrice + (2 * atr) : entryPrice - (2 * atr);
 
   // Gate: paper-mode when BOT_LIVE_TRADING is not explicitly enabled
-  console.log('[EXECUTE] BOT_LIVE_TRADING=', process.env.BOT_LIVE_TRADING, 'parsed=', BOT_LIVE_TRADING);
   pushLog('EXEC_GATE: ' + signal.symbol + ' BOT_LIVE_TRADING=' + process.env.BOT_LIVE_TRADING + ' killSwitch=' + killSwitch, 'info');
   if (!BOT_LIVE_TRADING) {
     pushLog('PAPER_MODE: live trading disabled (BOT_LIVE_TRADING=' + process.env.BOT_LIVE_TRADING + '), signal logged only — ' + signal.symbol, 'warn');
@@ -3698,7 +3645,6 @@ async function executeSignal(signal, newsContext = null) {
 
   // 1. Calculate share quantity
   const qty = Math.floor(positionSize / entryPrice);
-  console.log('[EXECUTE] Capital=', capitalAmount, 'qty=', qty, 'posSize=', positionSize, 'price=', entryPrice);
   pushLog('EXEC_QTY: ' + signal.symbol + ' qty=' + qty + ' (posSize=$' + positionSize.toFixed(2) + ' / price=$' + entryPrice.toFixed(2) + ')', 'info');
   if (qty < 1) {
     pushLog(`EXEC_SKIP: ${signal.symbol} qty=${qty} too small (posSize=${positionSize} price=${entryPrice})`, 'warn');
@@ -3797,7 +3743,6 @@ async function executeSignal(signal, newsContext = null) {
     client_order_id: clientOrderId,
   };
 
-  console.log('[EXECUTE] Order body=', JSON.stringify(orderBody));
   pushLog('EXEC_ORDER: ' + signal.symbol + ' ' + side + ' ' + qty + ' @ $' + entryPrice.toFixed(2) + ' stop=$' + stopPrice.toFixed(2) + ' target=$' + target1.toFixed(2) + ' tif=' + orderBody.time_in_force, 'info');
 
   try {
@@ -3815,8 +3760,6 @@ async function executeSignal(signal, newsContext = null) {
 
     const orderData = await orderResp.json().catch(() => ({}));
 
-    console.log('[EXECUTE] Alpaca response status=', orderResp.status);
-    console.log('[EXECUTE] Alpaca response=', JSON.stringify(orderData));
     pushLog('EXEC_RESPONSE: ' + signal.symbol + ' status=' + orderResp.status + ' id=' + (orderData.id || 'none') + ' msg=' + (orderData.message || 'ok'), orderResp.status <= 201 ? 'pass' : 'warn');
 
     // 5. Handle success
@@ -3859,20 +3802,26 @@ async function executeSignal(signal, newsContext = null) {
                  ' | OrderID=' + (orderData.id || 'unknown')
         };
 
-        console.log('[JOURNAL] Attempting insert:', JSON.stringify(journalPayload));
-
+        // Dedup: skip if this Alpaca order ID already exists in journal
+        const { data: existingEntry } = await supabase
+          .from('journal')
+          .select('id')
+          .like('notes', '%OrderID=' + (orderData.id || 'unknown') + '%')
+          .limit(1);
+        if (existingEntry && existingEntry.length > 0) {
+          pushLog('JOURNAL_DEDUP: ' + signal.symbol + ' OrderID=' + orderData.id + ' already exists, skipping', 'info');
+        } else {
         const { data: journalData, error: journalError } = await supabase
           .from('journal')
           .insert(journalPayload)
           .select();
 
         if (journalError) {
-          console.error('[JOURNAL] Insert error:', JSON.stringify(journalError));
           pushLog('JOURNAL_ERROR: ' + signal.symbol + ' — code=' + journalError.code + ' msg=' + journalError.message, 'warn');
         } else {
-          console.log('[JOURNAL] Insert success:', JSON.stringify(journalData));
           pushLog('JOURNAL_SUCCESS: ' + signal.symbol + ' trade logged id=' + (journalData?.[0]?.id || 'unknown'), 'pass');
         }
+        } // end dedup else
       } catch(je) {
         console.error('[JOURNAL] Exception:', je.message);
         pushLog('JOURNAL_EXCEPTION: ' + je.message, 'warn');
@@ -4248,7 +4197,7 @@ module.exports = async function handler(req, res) {
       pushLog('BACKFILL: starting historical trade import', 'info');
 
       // Fetch all closed orders from Alpaca
-      const ordersRes = await fetch('https://paper-api.alpaca.markets/v2/orders?status=closed&limit=500&direction=desc', {
+      const ordersRes = await fetch(`${ALPACA_BASE}/v2/orders?status=closed&limit=500&direction=desc`, {
         headers: {
           'APCA-API-KEY-ID': process.env.ALPACA_API_KEY,
           'APCA-API-SECRET-KEY': process.env.ALPACA_SECRET_KEY
@@ -4451,11 +4400,11 @@ module.exports = async function handler(req, res) {
 
     // Fix 1: Close ORCL short position (duplicate sells created a short)
     try {
-      const orclRes = await fetch('https://paper-api.alpaca.markets/v2/positions/ORCL', { headers: alpacaHdrs });
+      const orclRes = await fetch(`${ALPACA_BASE}/v2/positions/ORCL`, { headers: alpacaHdrs });
       if (orclRes.ok) {
         const orclPos = await orclRes.json();
         if (parseFloat(orclPos.qty) < 0) {
-          const closeRes = await fetch('https://paper-api.alpaca.markets/v2/positions/ORCL', { method: 'DELETE', headers: alpacaHdrs });
+          const closeRes = await fetch(`${ALPACA_BASE}/v2/positions/ORCL`, { method: 'DELETE', headers: alpacaHdrs });
           fixes.push({ symbol: 'ORCL', action: 'closed short', status: closeRes.ok ? 'done' : 'failed' });
         } else {
           fixes.push({ symbol: 'ORCL', action: 'not short, skipped' });
@@ -4467,19 +4416,19 @@ module.exports = async function handler(req, res) {
 
     // Fix 2: Close all SH (inverse ETF — not wanted)
     try {
-      const shRes = await fetch('https://paper-api.alpaca.markets/v2/positions/SH', { method: 'DELETE', headers: alpacaHdrs });
+      const shRes = await fetch(`${ALPACA_BASE}/v2/positions/SH`, { method: 'DELETE', headers: alpacaHdrs });
       fixes.push({ symbol: 'SH', action: 'closed all', status: shRes.ok ? 'done' : 'failed' });
     } catch(e) { fixes.push({ symbol: 'SH', error: e.message }); }
 
     // Fix 3: Close all PSQ (inverse ETF — not wanted)
     try {
-      const psqRes = await fetch('https://paper-api.alpaca.markets/v2/positions/PSQ', { method: 'DELETE', headers: alpacaHdrs });
+      const psqRes = await fetch(`${ALPACA_BASE}/v2/positions/PSQ`, { method: 'DELETE', headers: alpacaHdrs });
       fixes.push({ symbol: 'PSQ', action: 'closed all', status: psqRes.ok ? 'done' : 'failed' });
     } catch(e) { fixes.push({ symbol: 'PSQ', error: e.message }); }
 
     // Fix 4: Sell 75 excess GOOGL shares (90 → 15)
     try {
-      const googlRes = await fetch('https://paper-api.alpaca.markets/v2/orders', {
+      const googlRes = await fetch(`${ALPACA_BASE}/v2/orders`, {
         method: 'POST', headers: alpacaHdrs,
         body: JSON.stringify({ symbol: 'GOOGL', qty: '75', side: 'sell', type: 'market', time_in_force: 'day' })
       });
@@ -4488,7 +4437,7 @@ module.exports = async function handler(req, res) {
 
     // Fix 5: Sell 78 excess NVDA shares (100 → 22)
     try {
-      const nvdaRes = await fetch('https://paper-api.alpaca.markets/v2/orders', {
+      const nvdaRes = await fetch(`${ALPACA_BASE}/v2/orders`, {
         method: 'POST', headers: alpacaHdrs,
         body: JSON.stringify({ symbol: 'NVDA', qty: '78', side: 'sell', type: 'market', time_in_force: 'day' })
       });
@@ -4497,7 +4446,7 @@ module.exports = async function handler(req, res) {
 
     // Fix 6: Sell 120 excess MRNA shares (179 → 59)
     try {
-      const mrnaRes = await fetch('https://paper-api.alpaca.markets/v2/orders', {
+      const mrnaRes = await fetch(`${ALPACA_BASE}/v2/orders`, {
         method: 'POST', headers: alpacaHdrs,
         body: JSON.stringify({ symbol: 'MRNA', qty: '120', side: 'sell', type: 'market', time_in_force: 'day' })
       });
@@ -5063,14 +5012,14 @@ module.exports = async function handler(req, res) {
       }
 
       // Check 3: position count gate — scored AFTER scan, not before
-      if (sig.nrzScore >= 90 && liveOpenCount < 30) {
-        // High conviction: buy up to hard cap 30
-        pushLog('HIGH_CONVICTION_OVERRIDE: ' + sig.symbol + ' score=' + sig.nrzScore + ' positions=' + liveOpenCount + '/30 — forcing entry', 'pass');
+      if (sig.nrzScore >= 90 && liveOpenCount < 25) {
+        // High conviction: same 25 hard cap as standard signals
+        pushLog('HIGH_CONVICTION_OVERRIDE: ' + sig.symbol + ' score=' + sig.nrzScore + ' positions=' + liveOpenCount + '/25 — forcing entry', 'pass');
       } else if (sig.nrzScore >= 75 && liveOpenCount < 25) {
         // Standard signal: buy under soft cap 25
         pushLog('SIGNAL_ENTRY: ' + sig.symbol + ' score=' + sig.nrzScore + ' positions=' + liveOpenCount + '/25', 'info');
       } else {
-        pushLog('SIGNAL_BLOCKED: ' + sig.symbol + ' score=' + sig.nrzScore + ' — positions=' + liveOpenCount + ' (need <' + (sig.nrzScore >= 90 ? '30' : '25') + ')', 'warn');
+        pushLog('SIGNAL_BLOCKED: ' + sig.symbol + ' score=' + sig.nrzScore + ' — positions=' + liveOpenCount + ' (need <25)', 'warn');
         continue;
       }
 
