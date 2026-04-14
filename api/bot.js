@@ -4573,9 +4573,9 @@ module.exports = async function handler(req, res) {
         new Promise(resolve => {
           setTimeout(() => {
             mgmtTimedOut = true;
-            pushLog('MGMT_TIMEOUT: position management cut short at 28s, proceeding to scan', 'warn');
+            pushLog('MGMT_TIMEOUT: position management cut short at 29s, proceeding to scan', 'warn');
             resolve(null);
-          }, 28000);
+          }, 29000);
         })
       ]);
       if (mgmtResult) posMgmt = mgmtResult;
