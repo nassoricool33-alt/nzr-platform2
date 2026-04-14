@@ -4212,12 +4212,10 @@ function askAiAboutTrade(notes){
 function renderBotSummary(data){
   const bar=document.getElementById('jn-bot-summary');
   if(!bar)return;
-  const now=new Date();
-  const monthStr=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0');
-  const botTrades=data.filter(r=>r.notes&&r.notes.startsWith('Bot:')&&r.trade_date&&r.trade_date.startsWith(monthStr));
+  const botTrades=data.filter(r=>r.symbol&&r.symbol!=='TEST');
   if(botTrades.length===0){bar.style.display='none';return;}
 
-  const closed=botTrades.filter(r=>r.pnl_pct!=null);
+  const closed=botTrades.filter(r=>r.exit_price!=null);
   const wins=closed.filter(r=>Number(r.pnl_pct)>0);
   const winRate=closed.length>0?((wins.length/closed.length)*100).toFixed(0):'-';
   let totalPnlPct=0;let totalPnlDollars=0;let bestPnl=-Infinity;let worstPnl=Infinity;let bestSym='—';let worstSym='—';
@@ -4237,7 +4235,7 @@ function renderBotSummary(data){
     <div class="jn-summary-stat">
       <div class="jn-summary-label">Bot Trades</div>
       <div class="jn-summary-value">${botTrades.length}</div>
-      <div class="jn-summary-sub">this month · ${closed.length} closed</div>
+      <div class="jn-summary-sub">${closed.length} closed · ${botTrades.length-closed.length} open</div>
     </div>
     <div class="jn-summary-stat">
       <div class="jn-summary-label">Win Rate</div>
