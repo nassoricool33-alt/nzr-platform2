@@ -1832,6 +1832,9 @@ async function runFullScan(testMode = false) {
           stopPrice:  parseFloat(stopPrice.toFixed(2)),
           target1:    parseFloat(target1.toFixed(2)),
           positionSize, atr,
+          rsi:        rsiVal != null ? parseFloat(rsiVal.toFixed(1)) : null,
+          emaTrend:   (ema60v != null && ema200v != null) ? (ema60v > ema200v ? 'BULL' : 'BEAR') : null,
+          emaCross:   (ema60v != null && ema200v != null) ? (ema60v > ema200v ? 'GOLDEN' : 'DEATH') : null,
         };
 
         let execResult;
@@ -3372,12 +3375,16 @@ async function manageOpenPositions() {
               if (journalEntries && journalEntries.length > 0) {
                 const entry = journalEntries[0];
                 const pnlPct = ((currentPrice - parseFloat(entry.entry_price)) / parseFloat(entry.entry_price) * 100).toFixed(2);
+                const entryTime = new Date(entry.created_at || entry.trade_date).getTime();
+                const holdMinutes = entryTime > 0 ? Math.round((Date.now() - entryTime) / 60000) : null;
                 await supabase.from('journal').update({
                   exit_price: currentPrice,
                   pnl_pct: parseFloat(pnlPct),
+                  exit_reason: reason.split(':')[0].trim(),
+                  hold_duration_minutes: holdMinutes,
                   notes: (entry.notes || '') + ' | CLOSED: ' + reason
                 }).eq('id', entry.id);
-                pushLog('JOURNAL_EXIT_UPDATED: ' + symbol + ' pnl=' + pnlPct + '%', 'info');
+                pushLog('JOURNAL_EXIT_UPDATED: ' + symbol + ' pnl=' + pnlPct + '% reason=' + reason.split(':')[0] + ' held=' + holdMinutes + 'min', 'info');
               }
             } catch (je) {
               pushLog('JOURNAL_EXIT_ERR: ' + symbol + ' ' + je.message, 'warn');
@@ -3508,17 +3515,29 @@ async function updateClosedTrades() {
         const exitPrice = parseFloat(matchingSell.filled_avg_price);
         const pnlPct = ((exitPrice - entryPrice) / entryPrice * 100);
 
+        // Determine exit reason from the sell order's client_order_id
+        const sellCid = matchingSell.client_order_id || '';
+        let exitReason = 'BRACKET_FILL';
+        if (sellCid.includes('AUTOCLOSE')) exitReason = 'AUTOCLOSE';
+        else if (sellCid.includes('GAPPROT')) exitReason = 'GAP_PROTECTION';
+        else if (sellCid.includes('CLOSE')) exitReason = 'MANAGED_CLOSE';
+
+        const entryTime = new Date(entry.created_at || entry.trade_date).getTime();
+        const holdMinutes = entryTime > 0 ? Math.round((new Date(matchingSell.filled_at).getTime() - entryTime) / 60000) : null;
+
         const { error: updateError } = await supabase
           .from('journal')
           .update({
             exit_price: exitPrice,
-            pnl_pct: parseFloat(pnlPct.toFixed(2))
+            pnl_pct: parseFloat(pnlPct.toFixed(2)),
+            exit_reason: exitReason,
+            hold_duration_minutes: holdMinutes,
           })
           .eq('id', entry.id);
 
         if (!updateError) {
           updated++;
-          pushLog('PNL_UPDATED: ' + entry.symbol + ' entry=$' + entryPrice + ' exit=$' + exitPrice + ' pnl=' + pnlPct.toFixed(2) + '%', pnlPct > 0 ? 'pass' : 'warn');
+          pushLog('PNL_UPDATED: ' + entry.symbol + ' entry=$' + entryPrice + ' exit=$' + exitPrice + ' pnl=' + pnlPct.toFixed(2) + '% reason=' + exitReason, pnlPct > 0 ? 'pass' : 'warn');
         } else {
           pushLog('PNL_UPDATE_ERROR: ' + entry.symbol + ' — ' + updateError.message, 'warn');
         }
@@ -3802,6 +3821,18 @@ async function executeSignal(signal, newsContext = null) {
           exit_price: null,
           pnl_pct: null,
           trade_date: new Date().toISOString().split('T')[0],
+          strategy: signal.strategy || 'COMBINED',
+          nzr_score: signal.nrzScore || null,
+          rsi_at_entry: signal.rsi ? parseFloat(Number(signal.rsi).toFixed(1)) : null,
+          macd_hist_at_entry: signal.macdHist ? parseFloat(Number(signal.macdHist).toFixed(4)) : null,
+          ema_trend: signal.emaTrend || null,
+          ema_cross: signal.emaCross || null,
+          volume_vs_avg: signal.volumeVsAvg || null,
+          spy_change_pct: signal.spyChangePct != null ? parseFloat(Number(signal.spyChangePct).toFixed(2)) : null,
+          vix_level: signal.vixLevel != null ? parseFloat(Number(signal.vixLevel).toFixed(1)) : null,
+          sector_etf: signal.sectorEtf || null,
+          sector_etf_change_pct: signal.sectorEtfChangePct != null ? parseFloat(Number(signal.sectorEtfChangePct).toFixed(2)) : null,
+          filters_bypassed: signal.filtersBypassed || null,
           notes: 'Bot: ' + (signal.strategy || 'COMBINED') + ' | NZR=' + (signal.nrzScore || 0) +
                  ' | Dir=' + (signal.direction || 'long').toUpperCase() +
                  ' | RSI=' + (signal.rsi ? Number(signal.rsi).toFixed(1) : 'n/a') +
@@ -4843,6 +4874,11 @@ module.exports = async function handler(req, res) {
           candidateSignals.push({
             symbol, direction, nrzScore, price, rsiValue, macdHist,
             emaTrend: ema50 > ema200 ? 'BULL' : 'BEAR',
+            emaCross: ema60 > ema200 ? 'GOLDEN' : 'DEATH',
+            volumeVsAvg: volAboveAvg ? 'ABOVE' : 'BELOW',
+            sectorEtf: sectorEtf || null,
+            sectorEtfChangePct: (sectorEtf && sectorEtfCache[sectorEtf] !== undefined) ? parseFloat(sectorEtfCache[sectorEtf].toFixed(2)) : null,
+            filtersBypassed: filterReasons.length > 0 ? filterReasons.join(', ') : null,
             sector, sectorSizeMultiplier
           });
           pushLog('CANDIDATE_ADDED: ' + symbol + ' score=' + nrzScore + ' (total candidates=' + candidateSignals.length + ')', 'info');
@@ -4945,6 +4981,13 @@ module.exports = async function handler(req, res) {
           rsi: sig.rsiValue,
           macdHist: sig.macdHist,
           emaTrend: sig.emaTrend,
+          emaCross: sig.emaCross,
+          volumeVsAvg: sig.volumeVsAvg,
+          spyChangePct: spyDayChangePct,
+          vixLevel: null,
+          sectorEtf: sig.sectorEtf,
+          sectorEtfChangePct: sig.sectorEtfChangePct,
+          filtersBypassed: sig.filtersBypassed,
         });
         if (execResult.executed) {
           tradesPlaced++;
@@ -6063,6 +6106,12 @@ module.exports = async function handler(req, res) {
     target2:      target2 ?? null,
     positionSize: adaptiveMax,
     atr:          atrValue,
+    rsi:          rsiValueRaw,
+    macdHist:     bd.macdCross != null ? bd.macdCross : null,
+    emaTrend:     dailyTrend ? (dailyTrend.bullish ? 'BULL' : 'BEAR') : null,
+    emaCross:     dailyTrend ? (dailyTrend.ema60 > dailyTrend.ema200 ? 'GOLDEN' : 'DEATH') : null,
+    sectorEtf:    symbolSectorEtf || null,
+    vixLevel:     regime.vix != null ? regime.vix : null,
   }).catch(err => console.error('[bot] executeSignal unexpected error:', err.message));
 
   return res.status(200).json({
