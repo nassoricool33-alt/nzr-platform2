@@ -4594,15 +4594,15 @@ module.exports = async function handler(req, res) {
 
     const apiKey = process.env.POLYGON_API_KEY;
     const raceFetch = (url) => Promise.race([
-      fetch(url).then(r => r.json()),
-      new Promise(resolve => setTimeout(() => resolve(null), 1500))
+      fetch(url).then(r => r.ok ? r.json() : null),
+      new Promise(resolve => setTimeout(() => resolve(null), 3000))
     ]).catch(() => null);
 
     // ── SPY benchmark tracking (#1, #2) ────────────────────────────────────────
     let spyDayChangePct = 0;
     try {
       const spySnap = await raceFetch('https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers/SPY?apiKey=' + apiKey);
-      const spyPrice = spySnap?.ticker?.day?.c || spySnap?.ticker?.lastTrade?.p || 0;
+      const spyPrice = spySnap?.ticker?.day?.c || spySnap?.ticker?.lastTrade?.p || spySnap?.ticker?.prevDay?.c || 0;
       const spyPrevClose = spySnap?.ticker?.prevDay?.c || 0;
       if (spyPrice > 0 && spyPrevClose > 0) {
         spyDayChangePct = ((spyPrice - spyPrevClose) / spyPrevClose) * 100;
@@ -4700,7 +4700,7 @@ module.exports = async function handler(req, res) {
       ));
       etfs.forEach((etf, i) => {
         const snap = etfSnaps[i];
-        const cur = snap?.ticker?.day?.c || snap?.ticker?.lastTrade?.p || 0;
+        const cur = snap?.ticker?.day?.c || snap?.ticker?.lastTrade?.p || snap?.ticker?.prevDay?.c || 0;
         const prev = snap?.ticker?.prevDay?.c || 0;
         sectorEtfCache[etf] = (cur > 0 && prev > 0) ? ((cur - prev) / prev * 100) : 0;
       });
@@ -4724,7 +4724,10 @@ module.exports = async function handler(req, res) {
         ]);
 
         const price = snapRes?.ticker?.day?.c || snapRes?.ticker?.lastTrade?.p || snapRes?.ticker?.prevDay?.c || null;
-        if (!price) { pushLog('SKIP ' + symbol + ': no price', 'warn'); return; }
+        if (!price) {
+          pushLog('SKIP ' + symbol + ': no price (snapshot=' + (snapRes ? 'received' : 'null') + ' dayC=' + snapRes?.ticker?.day?.c + ' lastTrade=' + snapRes?.ticker?.lastTrade?.p + ' prevDayC=' + snapRes?.ticker?.prevDay?.c + ')', 'warn');
+          return;
+        }
 
         const rsiValue = rsiData?.results?.values?.[0]?.value || 50;
 
