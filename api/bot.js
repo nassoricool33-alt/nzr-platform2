@@ -4219,15 +4219,17 @@ module.exports = async function handler(req, res) {
 
       let imported = 0;
       let skipped = 0;
+      const matchedSellIds = new Set();
 
       for (const order of buyOrders) {
         try {
-          // Check if already in journal
+          // Check if this specific Alpaca order was already imported
+          // Match on OrderID in notes field — unique per order, safe for
+          // multiple trades in the same symbol on the same day
           const { data: existing } = await supabase
             .from('journal')
             .select('id')
-            .eq('symbol', order.symbol)
-            .eq('trade_date', order.filled_at ? order.filled_at.split('T')[0] : order.submitted_at.split('T')[0])
+            .like('notes', '%OrderID=' + order.id + '%')
             .limit(1);
 
           if (existing && existing.length > 0) {
@@ -4235,14 +4237,18 @@ module.exports = async function handler(req, res) {
             continue;
           }
 
-          // Find matching sell order for this symbol after this buy
-          const matchingSell = orders.find(o =>
-            o.side === 'sell' &&
-            o.status === 'filled' &&
-            o.symbol === order.symbol &&
-            o.filled_at > order.filled_at &&
-            o.filled_avg_price
-          );
+          // Find the earliest matching sell order for this symbol after this buy
+          const matchingSell = orders
+            .filter(o =>
+              o.side === 'sell' &&
+              o.status === 'filled' &&
+              o.symbol === order.symbol &&
+              o.filled_at > order.filled_at &&
+              o.filled_avg_price &&
+              !matchedSellIds.has(o.id)
+            )
+            .sort((a, b) => (a.filled_at || '').localeCompare(b.filled_at || ''))[0] || null;
+          if (matchingSell) matchedSellIds.add(matchingSell.id);
 
           const entryPrice = parseFloat(order.filled_avg_price);
           const exitPrice = matchingSell ? parseFloat(matchingSell.filled_avg_price) : null;

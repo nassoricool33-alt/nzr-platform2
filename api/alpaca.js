@@ -296,11 +296,14 @@ module.exports = async function handler(req, res) {
         const matchedBuyIds = new Set();
         const matchedSellIds = new Set();
 
-        // Match sell orders to their most recent preceding buy for the same symbol
+        // Match sell orders to their most recent preceding buy for the same symbol.
+        // Use filledAt (not submittedAt) because bracket child orders (TP/SL)
+        // are created by Alpaca and may have null or misleading submitted_at.
+        // The buy always fills before its exit sell, so filledAt is reliable.
         for (const sell of sells) {
           const buy = buys
-            .filter(b => b.symbol === sell.symbol && b.submittedAt <= sell.submittedAt && !matchedBuyIds.has(b.orderId))
-            .sort((a, b) => b.submittedAt.localeCompare(a.submittedAt))[0];
+            .filter(b => b.symbol === sell.symbol && b.filledAt <= sell.filledAt && !matchedBuyIds.has(b.orderId))
+            .sort((a, b) => b.filledAt.localeCompare(a.filledAt))[0];
           if (!buy) continue;
 
           matchedBuyIds.add(buy.orderId);
