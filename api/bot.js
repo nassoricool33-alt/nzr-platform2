@@ -3481,15 +3481,20 @@ async function updateClosedTrades() {
     pushLog('UPDATE_PNL: ' + openEntries.length + ' open journal entries to check', 'info');
 
     let updated = 0;
+    const matchedSellIds = new Set();
 
     for (const entry of openEntries) {
-      // Find matching sell order for this symbol
-      const matchingSell = sellOrders.find(o =>
-        o.symbol === entry.symbol &&
-        new Date(o.filled_at) > new Date(entry.trade_date)
-      );
+      // Find the earliest matching sell order for this symbol that hasn't been used yet
+      const matchingSell = sellOrders
+        .filter(o =>
+          o.symbol === entry.symbol &&
+          !matchedSellIds.has(o.id) &&
+          new Date(o.filled_at) > new Date(entry.trade_date)
+        )
+        .sort((a, b) => new Date(a.filled_at) - new Date(b.filled_at))[0];
 
       if (matchingSell) {
+        matchedSellIds.add(matchingSell.id);
         const entryPrice = parseFloat(entry.entry_price);
         const exitPrice = parseFloat(matchingSell.filled_avg_price);
         const pnlPct = ((exitPrice - entryPrice) / entryPrice * 100);
@@ -3556,7 +3561,7 @@ async function writeSupabaseRecord(signal, qty, newsContext = null, orderData = 
     avg_cost:    parseFloat(signal.entryPrice) || 0,
     trade_date:  toETDate(),
     notes:       notes,
-    user_id:     '00000000-0000-0000-0000-000000000000',
+    user_id:     null,
   };
   if (newsContext) {
     journalRow.news_context = JSON.stringify(newsContext);
@@ -3782,12 +3787,13 @@ async function executeSignal(signal, newsContext = null) {
       // Write to journal with full error logging
       try {
         const journalPayload = {
+          user_id: null,
           symbol: signal.symbol,
           entry_price: parseFloat(entryPrice) || 0,
           exit_price: null,
           pnl_pct: null,
           trade_date: new Date().toISOString().split('T')[0],
-          notes: 'Bot: COMBINED | NZR=' + (signal.nrzScore || 0) +
+          notes: 'Bot: ' + (signal.strategy || 'COMBINED') + ' | NZR=' + (signal.nrzScore || 0) +
                  ' | Dir=' + (signal.direction || 'long').toUpperCase() +
                  ' | RSI=' + (signal.rsi ? Number(signal.rsi).toFixed(1) : 'n/a') +
                  ' | MACD=' + (signal.macdHist ? Number(signal.macdHist).toFixed(3) : 'n/a') +
@@ -4244,6 +4250,7 @@ module.exports = async function handler(req, res) {
           const tradeDate = (order.filled_at || order.submitted_at).split('T')[0];
 
           const { error } = await supabase.from('journal').insert({
+            user_id: null,
             symbol: order.symbol,
             entry_price: entryPrice,
             exit_price: exitPrice,

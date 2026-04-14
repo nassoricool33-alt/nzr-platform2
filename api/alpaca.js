@@ -237,10 +237,18 @@ module.exports = async function handler(req, res) {
         //           NZR-OPTIONS-EQ-{SYMBOL}-{TS}  (options-bot)
         //           NZR-PHARMA-{SYMBOL}-{TS}  (pharma)
         //           no tag / other
+        // Exit-mechanism tags (CLOSE, AUTOCLOSE, GAPPROT) are not strategies —
+        // they indicate how the position was closed, not the entry signal.
+        const EXIT_MECHANISMS = new Set(['CLOSE', 'AUTOCLOSE', 'GAPPROT']);
         function parseTag(cid) {
           if (!cid) return { mode: 'MANUAL', strategy: 'MANUAL', signal: 'MANUAL' };
           const p = cid.split('-');
           if (p[0] !== 'NZR') return { mode: 'MANUAL', strategy: 'MANUAL', signal: 'MANUAL' };
+          // Exit-mechanism sells should not override strategy — treat as MANUAL
+          // so the matching logic falls back to the buy's strategy tag
+          if (p.length >= 2 && EXIT_MECHANISMS.has(p[1])) {
+            return { mode: p[1], strategy: 'MANUAL', signal: 'MANUAL' };
+          }
           if (p.length >= 6) return { mode: p[1], strategy: p[2], signal: p[3] };
           if (p.length >= 5) return { mode: p[1], strategy: p[2], signal: p[2] };
           if (p.length >= 4) return { mode: p[1], strategy: p[1], signal: p[1] };
@@ -307,9 +315,9 @@ module.exports = async function handler(req, res) {
             pnl:      parseFloat(pnl.toFixed(2)),
             pnlPct:   parseFloat(pnlPct.toFixed(2)),
             win:      pnl > 0,
-            mode:     sell.mode     !== 'MANUAL' ? sell.mode     : buy.mode,
-            strategy: sell.strategy !== 'MANUAL' ? sell.strategy : buy.strategy,
-            signal:   sell.signal   !== 'MANUAL' ? sell.signal   : buy.signal,
+            mode:     buy.mode     !== 'MANUAL' ? buy.mode     : sell.mode,
+            strategy: buy.strategy !== 'MANUAL' ? buy.strategy : sell.strategy,
+            signal:   buy.signal   !== 'MANUAL' ? buy.signal   : sell.signal,
             session:  sessionLabel(sell.filledAt),
             dow:      DOW[new Date(sell.filledAt).getUTCDay()],
             status:   'closed',
@@ -344,16 +352,20 @@ module.exports = async function handler(req, res) {
             map[k].push(t);
           }
           return Object.entries(map).map(([label, ts]) => {
-            const wins     = ts.filter(t => t.win).length;
-            const totalPnl = ts.reduce((s, t) => s + t.pnl, 0);
+            const closed   = ts.filter(t => t.status === 'closed');
+            const open     = ts.length - closed.length;
+            const wins     = closed.filter(t => t.win).length;
+            const losses   = closed.length - wins;
+            const totalPnl = closed.reduce((s, t) => s + t.pnl, 0);
             return {
               label,
               trades:   ts.length,
               wins,
-              losses:   ts.length - wins,
-              winRate:  parseFloat((wins / ts.length * 100).toFixed(1)),
+              losses,
+              open,
+              winRate:  closed.length > 0 ? parseFloat((wins / closed.length * 100).toFixed(1)) : 0,
               totalPnl: parseFloat(totalPnl.toFixed(2)),
-              avgPnl:   parseFloat((totalPnl / ts.length).toFixed(2)),
+              avgPnl:   closed.length > 0 ? parseFloat((totalPnl / closed.length).toFixed(2)) : 0,
             };
           }).sort((a, b) => b.totalPnl - a.totalPnl);
         }

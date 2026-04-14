@@ -5322,7 +5322,7 @@ function attrRenderTable(tbodyId, rows, highlight) {
                    : '';
     return `<tr style="border-bottom:1px solid var(--border);background:${rowBg}">
       <td style="padding:9px 16px;${labelStyle}">${row.label}${badge}</td>
-      <td style="text-align:right;padding:9px 10px;color:var(--text2)">${row.trades}<span style="color:var(--text3);font-size:9px"> (${row.wins}W/${row.losses}L)</span></td>
+      <td style="text-align:right;padding:9px 10px;color:var(--text2)">${row.trades}<span style="color:var(--text3);font-size:9px"> (${row.wins}W/${row.losses}L${row.open ? '/' + row.open + 'O' : ''})</span></td>
       <td style="text-align:right;padding:9px 10px;color:${wrColor};font-weight:600">${row.winRate}%</td>
       <td style="text-align:right;padding:9px 16px;color:${pnlColor}">${attrFmt$(row.avgPnl)}</td>
       <td style="text-align:right;padding:9px 16px;color:${totColor};font-weight:700">${attrFmt$(row.totalPnl)}</td>
