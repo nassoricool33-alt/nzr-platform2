@@ -3151,7 +3151,7 @@ async function manageOpenPositions(prefetchedPositions, prefetchedAccount) {
         const keys = positions.map(p => 'position_' + p.symbol);
         const keyFilter = keys.map(k => `"${k}"`).join(',');
         const ctrl = new AbortController();
-        const t = setTimeout(() => ctrl.abort(), 3000);
+        const t = setTimeout(() => ctrl.abort(), 1500);
         let sr;
         try { sr = await fetch(`${sbUrl}/rest/v1/bot_state?key=in.(${keyFilter})&select=key,value`, { headers: sbHdrs, signal: ctrl.signal }); }
         finally { clearTimeout(t); }
@@ -3245,12 +3245,15 @@ async function manageOpenPositions(prefetchedPositions, prefetchedAccount) {
     const lowestPrice  = posTrack ? Math.min(posTrack.lowestPrice || currentPrice, currentPrice) : currentPrice;
     const entryMacdPositive = posTrack?.entryMacdPositive ?? false;
 
-    // Persist updated tracking data (fire-and-forget)
-    writeBotState(stateKey, JSON.stringify({
-      entryPrice, entryDate, highestPrice, lowestPrice,
-      lastRsi: rsi, lastMacd: macdHist, entryMacdPositive,
-      updatedAt: new Date().toISOString()
-    }));
+    // Only persist if something changed (new high, new low, or first time)
+    const priceChanged = !posTrack || highestPrice !== (posTrack.highestPrice || 0) || lowestPrice !== (posTrack.lowestPrice || 0);
+    if (priceChanged) {
+      writeBotState(stateKey, JSON.stringify({
+        entryPrice, entryDate, highestPrice, lowestPrice,
+        lastRsi: rsi, lastMacd: macdHist, entryMacdPositive,
+        updatedAt: new Date().toISOString()
+      }));
+    }
 
     // ── Decision logic ───────────────────────────────────────────────────────
     let action = 'HOLD';
