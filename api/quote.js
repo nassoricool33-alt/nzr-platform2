@@ -32,43 +32,61 @@ module.exports = async function handler(req, res) {
   }
 
   try {
-    const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), 6000)
-
-    // Use snapshot endpoint for real-time prices during market hours
+    // 1. Try snapshot for real-time intraday data
     const snapUrl = `https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers/${symbol}?apiKey=${apiKey}`
-    const snapRes = await fetch(snapUrl, { signal: controller.signal })
-    clearTimeout(timeout)
+    const snapRes = await withTimeout(fetch(snapUrl), 6000)
 
-    if (!snapRes.ok) {
-      console.error('[quote] Polygon snapshot error:', snapRes.status, 'for', symbol)
+    let ticker = null
+    if (snapRes && snapRes.ok) {
+      const snapData = await snapRes.json()
+      ticker = snapData.ticker || null
+    }
+
+    if (!ticker) {
+      console.error('[quote] Polygon snapshot empty for', symbol)
       return res.status(200).json({ symbol, price: null, error: 'Quote unavailable' })
     }
 
-    const snapData = await snapRes.json()
-    const ticker = snapData.ticker
+    const prevClose = ticker.prevDay?.c || 0;
+    let price = ticker.lastTrade?.p || ticker.day?.c || 0;
+    let open = ticker.day?.o || 0;
+    let high = ticker.day?.h || 0;
+    let low = ticker.day?.l || 0;
+    let volume = ticker.day?.v || 0;
 
-    if (!ticker) {
-      return res.status(200).json({ symbol, price: null, error: 'No data available' })
+    // 2. If no intraday data yet (market just opened or pre-market),
+    //    fall back to last trade endpoint for a fresher price
+    if (!open || !volume) {
+      try {
+        const lastTradeUrl = `https://api.polygon.io/v2/last/trade/${symbol}?apiKey=${apiKey}`
+        const ltRes = await withTimeout(fetch(lastTradeUrl), 4000)
+        if (ltRes && ltRes.ok) {
+          const ltData = await ltRes.json()
+          const ltPrice = ltData.results?.p || 0
+          if (ltPrice > 0) {
+            price = ltPrice
+            console.log('[quote]', symbol, 'using last trade price:', ltPrice)
+          }
+        }
+      } catch (ltErr) {
+        console.warn('[quote] last trade fallback failed for', symbol, ':', ltErr.message)
+      }
     }
 
-    const price = ticker.lastTrade?.p || ticker.day?.c || ticker.prevDay?.c || 0;
-    const open = ticker.day?.o || 0;
-    const high = ticker.day?.h || 0;
-    const low = ticker.day?.l || 0;
-    const prevClose = ticker.prevDay?.c || 0;
+    // Use prevDay close if we still have no price at all
+    if (!price) price = prevClose;
+
     const change = price - prevClose;
     const changePercent = prevClose > 0 ? (change / prevClose * 100) : 0;
-    const volume = ticker.day?.v || 0;
 
-    console.log('[quote]', symbol, 'price=', price, 'prevClose=', prevClose, 'change=', change.toFixed(2))
+    console.log('[quote]', symbol, 'price=', price, 'prevClose=', prevClose, 'change=', change.toFixed(2), 'vol=', volume)
 
     return res.status(200).json({
       symbol,
       price: parseFloat(price.toFixed(2)),
-      open: parseFloat(open.toFixed(2)),
-      high: parseFloat(high.toFixed(2)),
-      low: parseFloat(low.toFixed(2)),
+      open: open ? parseFloat(open.toFixed(2)) : null,
+      high: high ? parseFloat(high.toFixed(2)) : null,
+      low: low ? parseFloat(low.toFixed(2)) : null,
       prevClose: parseFloat(prevClose.toFixed(2)),
       change: parseFloat(change.toFixed(2)),
       changePercent: parseFloat(changePercent.toFixed(2)),
