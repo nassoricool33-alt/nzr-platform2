@@ -1572,8 +1572,10 @@ footer{border-top:1px solid var(--border);padding:32px 0;margin-top:80px}
       </div>
       <div style="display:flex;gap:24px;flex-wrap:wrap;font-family:var(--font-mono)">
         <div><div style="font-size:9px;color:var(--text3);text-transform:uppercase;margin-bottom:2px">Portfolio Value</div><div id="pf-total-value" style="font-size:18px;font-weight:700;color:var(--text)">—</div></div>
-        <div><div style="font-size:9px;color:var(--text3);text-transform:uppercase;margin-bottom:2px">Unrealized P&amp;L</div><div id="pf-total-pnl" style="font-size:18px;font-weight:700">—</div></div>
+        <div><div style="font-size:9px;color:var(--text3);text-transform:uppercase;margin-bottom:2px">Today's P&amp;L</div><div id="pf-total-pnl" style="font-size:18px;font-weight:700">—</div></div>
         <div><div style="font-size:9px;color:var(--text3);text-transform:uppercase;margin-bottom:2px">P&amp;L %</div><div id="pf-total-pnl-pct" style="font-size:18px;font-weight:700">—</div></div>
+        <div><div style="font-size:9px;color:var(--text3);text-transform:uppercase;margin-bottom:2px">Cash</div><div id="pf-cash" style="font-size:18px;font-weight:700;color:var(--text)">—</div></div>
+        <div><div style="font-size:9px;color:var(--text3);text-transform:uppercase;margin-bottom:2px">Buying Power</div><div id="pf-buying-power" style="font-size:18px;font-weight:700;color:var(--text)">—</div></div>
         <div><div style="font-size:9px;color:var(--text3);text-transform:uppercase;margin-bottom:2px">Positions</div><div id="pf-pos-count" style="font-size:18px;font-weight:700;color:var(--text)">—</div></div>
         <div><div style="font-size:9px;color:var(--text3);text-transform:uppercase;margin-bottom:2px">Winners / Losers</div><div id="pf-win-loss" style="font-size:18px;font-weight:700">—</div></div>
       </div>
@@ -3918,39 +3920,45 @@ async function loadAlpacaPositions() {
   if (summary) summary.style.display = 'block';
   table.innerHTML = '<div style="padding:20px;text-align:center;font-family:var(--font-mono);font-size:11px;color:var(--text3)">Loading Alpaca positions…</div>';
   try {
-    const resp = await fetch('/api/alpaca?type=positions');
+    const [resp, acctResp] = await Promise.all([
+      fetch('/api/alpaca?type=positions'),
+      fetch('/api/alpaca?type=account')
+    ]);
     const positions = await resp.json();
+    const acct = await acctResp.json();
+
+    // Update summary from account data
+    if (summary && acct.connected) {
+      summary.style.display = 'block';
+      const fmtUsd = v => '$' + Number(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      document.getElementById('pf-total-value').textContent = fmtUsd(acct.portfolioValue);
+      const todayPnl = parseFloat(acct.todayPnl) || 0;
+      const todayPnlPct = parseFloat(acct.todayPnlPct) || 0;
+      const pnlColor = todayPnl >= 0 ? 'var(--green)' : 'var(--red)';
+      const pnlEl = document.getElementById('pf-total-pnl');
+      pnlEl.textContent = (todayPnl >= 0 ? '+$' : '-$') + Math.abs(todayPnl).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      pnlEl.style.color = pnlColor;
+      const pctEl = document.getElementById('pf-total-pnl-pct');
+      pctEl.textContent = (todayPnlPct >= 0 ? '+' : '') + todayPnlPct.toFixed(2) + '%';
+      pctEl.style.color = pnlColor;
+      document.getElementById('pf-cash').textContent = fmtUsd(acct.cash);
+      document.getElementById('pf-buying-power').textContent = fmtUsd(acct.buyingPower);
+    }
+
     if (!Array.isArray(positions) || positions.length === 0) {
       table.innerHTML = '<div style="padding:28px;text-align:center;font-family:var(--font-mono);font-size:11px;color:var(--text3)">No open Alpaca positions</div>';
-      if (summary) summary.style.display = 'none';
       return;
     }
 
-    // Calculate totals
-    let totalValue = 0, totalPnl = 0, totalCost = 0, winners = 0, losers = 0;
+    // Count winners/losers for positions display
+    let winners = 0, losers = 0;
     for (const p of positions) {
-      const mv = parseFloat(p.market_value) || 0;
       const pnl = parseFloat(p.unrealized_pl) || 0;
-      const cost = (parseFloat(p.avg_entry_price) || 0) * (parseFloat(p.qty) || 0);
-      totalValue += mv;
-      totalPnl += pnl;
-      totalCost += cost;
       if (pnl > 0) winners++;
       else if (pnl < 0) losers++;
     }
-    const totalPnlPct = totalCost > 0 ? (totalPnl / totalCost * 100) : 0;
-    const pnlColor = totalPnl >= 0 ? 'var(--green)' : 'var(--red)';
 
-    // Update summary
     if (summary) {
-      summary.style.display = 'block';
-      document.getElementById('pf-total-value').textContent = '$' + totalValue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-      const pnlEl = document.getElementById('pf-total-pnl');
-      pnlEl.textContent = (totalPnl >= 0 ? '+' : '') + '$' + totalPnl.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-      pnlEl.style.color = pnlColor;
-      const pctEl = document.getElementById('pf-total-pnl-pct');
-      pctEl.textContent = (totalPnlPct >= 0 ? '+' : '') + totalPnlPct.toFixed(2) + '%';
-      pctEl.style.color = pnlColor;
       document.getElementById('pf-pos-count').textContent = positions.length;
       const wlEl = document.getElementById('pf-win-loss');
       wlEl.innerHTML = '<span style="color:var(--green)">' + winners + 'W</span> / <span style="color:var(--red)">' + losers + 'L</span>';

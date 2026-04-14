@@ -95,15 +95,21 @@ module.exports = async function handler(req, res) {
     }
     try {
       const data = await alpacaFetch('/v2/account');
+      const equity = parseFloat(data.equity);
+      const lastEquity = parseFloat(data.last_equity);
+      const todayPnl = equity - lastEquity;
+      const todayPnlPct = lastEquity > 0 ? ((todayPnl / lastEquity) * 100) : 0;
       return res.status(200).json({
         connected:      true,
         accountStatus:  data.status,
         buyingPower:    data.buying_power,
-        portfolioValue: data.portfolio_value,
+        portfolioValue: equity,
         // legacy fields kept for existing frontend code
         balance:        data.portfolio_value,
         cash:           data.cash,
         status:         data.status,
+        todayPnl:       todayPnl,
+        todayPnlPct:    todayPnlPct.toFixed(2),
       });
     } catch (err) {
       console.error('[alpaca/ping]', err.message);
