@@ -5166,12 +5166,36 @@ module.exports = async function handler(req, res) {
     console.log('[BOT] LOG route matched');
     try {
       const since = req.query.since;
-      let query = supabase.from('bot_logs').select('*').order('created_at', { ascending: false }).limit(100);
+      // Fetch from Supabase: ascending order so frontend can append chronologically
+      let query = supabase.from('bot_logs').select('*').order('created_at', { ascending: true }).limit(100);
       if (since) query = query.gt('created_at', since);
       const { data: logs, error } = await query;
       if (error) throw error;
-      const combined = [...botLogBuffer, ...(logs || [])].slice(0, 200);
-      return res.json({ logs: combined, count: combined.length });
+
+      // Filter in-memory buffer by since timestamp too (prevent duplicates)
+      let bufferEntries = botLogBuffer;
+      if (since) {
+        bufferEntries = botLogBuffer.filter(e => e.timestamp > since);
+      }
+
+      // Merge and deduplicate by message+timestamp, keep chronological order
+      const seen = new Set();
+      const combined = [];
+      for (const e of [...(logs || []), ...bufferEntries]) {
+        const key = (e.created_at || e.timestamp) + '|' + e.message;
+        if (!seen.has(key)) {
+          seen.add(key);
+          combined.push({
+            message: e.message,
+            type: e.type || 'info',
+            timestamp: e.created_at || e.timestamp,
+          });
+        }
+      }
+      // Sort ascending (oldest first) so frontend appends in order
+      combined.sort((a, b) => (a.timestamp || '').localeCompare(b.timestamp || ''));
+
+      return res.json({ logs: combined.slice(-200), count: combined.length });
     } catch(e) {
       return res.json({ logs: botLogBuffer, count: botLogBuffer.length });
     }

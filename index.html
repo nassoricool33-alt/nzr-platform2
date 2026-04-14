@@ -6683,7 +6683,10 @@ function clearBotLog() {
   const el = document.getElementById('bot-log-entries');
   if (el) el.innerHTML = '';
   _botLogLastSince = null;
+  _botLogSeen.clear();
 }
+
+const _botLogSeen = new Set();
 
 async function pollBotLog() {
   try {
@@ -6693,8 +6696,20 @@ async function pollBotLog() {
     if (!r.ok) return;
     const d = await r.json();
     if (Array.isArray(d.logs) && d.logs.length > 0) {
-      d.logs.forEach(e => appendBotLog(e.message, e.type));
+      for (const e of d.logs) {
+        const key = (e.timestamp || '') + '|' + (e.message || '');
+        if (_botLogSeen.has(key)) continue;
+        _botLogSeen.add(key);
+        appendBotLog(e.message, e.type);
+      }
+      // Track newest timestamp for next poll (entries arrive in ascending order)
       _botLogLastSince = d.logs[d.logs.length - 1].timestamp;
+      // Cap seen set to prevent unbounded memory growth
+      if (_botLogSeen.size > 500) {
+        const excess = _botLogSeen.size - 300;
+        const iter = _botLogSeen.values();
+        for (let i = 0; i < excess; i++) { _botLogSeen.delete(iter.next().value); }
+      }
     }
   } catch {}
 }
