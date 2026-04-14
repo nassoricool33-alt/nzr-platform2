@@ -3221,19 +3221,8 @@ async function manageOpenPositions(prefetchedPositions, prefetchedAccount) {
   let closed = 0, held = 0, trailUpdated = 0;
   const closedThisCycle = new Set(); // Prevent duplicate close orders within same scan
 
-  // ── Pre-fetch: batch verify which positions still exist on Alpaca ──────────
-  // One call replaces N sequential per-position checks (was 1.5s × N)
-  const livePositionSymbols = new Set();
-  try {
-    const checkResult = await Promise.race([
-      fetch(`${ALPACA_BASE}/v2/positions`, { headers: alpacaHeaders }).then(r => r.ok ? r.json() : []),
-      new Promise(resolve => setTimeout(() => resolve([]), 3000))
-    ]).catch(() => []);
-    if (Array.isArray(checkResult)) {
-      for (const p of checkResult) livePositionSymbols.add(p.symbol);
-    }
-  } catch {}
-  pushLog('POS_LIVE_CHECK: ' + livePositionSymbols.size + ' positions confirmed live on Alpaca', 'info');
+  // ── Reuse already-fetched positions array — zero API calls ──────────────────
+  const livePositionSymbols = new Set(positions.map(p => p.symbol));
 
   // ── 5. Evaluate each position ──────────────────────────────────────────────
   for (const pd of positionData) {
@@ -3431,46 +3420,46 @@ async function manageOpenPositions(prefetchedPositions, prefetchedAccount) {
     }
   }
 
-  // ── 6. Cancel stale open orders (> 30 minutes old) ─────────────────────────
-  let staleOrdersCancelled = 0;
-  try {
-    const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), 3000);
-    let ordResp;
-    try { ordResp = await fetch(`${ALPACA_BASE}/v2/orders?status=open`, { headers: alpacaHeaders, signal: ctrl.signal }); }
-    finally { clearTimeout(t); }
+  // ── 6. Cancel stale open orders (fire-and-forget — don't block return) ──────
+  (async () => {
+    try {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 3000);
+      let ordResp;
+      try { ordResp = await fetch(`${ALPACA_BASE}/v2/orders?status=open`, { headers: alpacaHeaders, signal: ctrl.signal }); }
+      finally { clearTimeout(t); }
 
-    if (ordResp.ok) {
-      const openOrders = await ordResp.json();
-      if (Array.isArray(openOrders)) {
-        const thirtyMinAgo = Date.now() - 30 * 60 * 1000;
-        for (const order of openOrders) {
-          const submittedAt = new Date(order.submitted_at || order.created_at).getTime();
-          if (submittedAt < thirtyMinAgo) {
-            try {
-              const cancelCtrl = new AbortController();
-              const cancelTimer = setTimeout(() => cancelCtrl.abort(), 2000);
+      if (ordResp.ok) {
+        const openOrders = await ordResp.json();
+        if (Array.isArray(openOrders)) {
+          const thirtyMinAgo = Date.now() - 30 * 60 * 1000;
+          for (const order of openOrders) {
+            const submittedAt = new Date(order.submitted_at || order.created_at).getTime();
+            if (submittedAt < thirtyMinAgo) {
               try {
-                await fetch(`${ALPACA_BASE}/v2/orders/${order.id}`, { method: 'DELETE', headers: alpacaHeaders, signal: cancelCtrl.signal });
-              } finally { clearTimeout(cancelTimer); }
-              staleOrdersCancelled++;
-              pushLog('STALE_ORDER_CANCELLED: ' + (order.symbol || 'unknown') + ' id=' + order.id + ' age=' + Math.round((Date.now() - submittedAt) / 60000) + 'min', 'info');
-            } catch (ce) {
-              pushLog('STALE_CANCEL_ERR: ' + order.id + ' — ' + ce.message, 'warn');
+                const cancelCtrl = new AbortController();
+                const cancelTimer = setTimeout(() => cancelCtrl.abort(), 2000);
+                try {
+                  await fetch(`${ALPACA_BASE}/v2/orders/${order.id}`, { method: 'DELETE', headers: alpacaHeaders, signal: cancelCtrl.signal });
+                } finally { clearTimeout(cancelTimer); }
+                pushLog('STALE_ORDER_CANCELLED: ' + (order.symbol || 'unknown') + ' id=' + order.id + ' age=' + Math.round((Date.now() - submittedAt) / 60000) + 'min', 'info');
+              } catch (ce) {
+                pushLog('STALE_CANCEL_ERR: ' + order.id + ' — ' + ce.message, 'warn');
+              }
             }
           }
         }
       }
+    } catch (e) {
+      pushLog('STALE_ORDERS_CHECK_ERR: ' + e.message, 'warn');
     }
-  } catch (e) {
-    pushLog('STALE_ORDERS_CHECK_ERR: ' + e.message, 'warn');
-  }
+  })();
 
-  pushLog('POS_MGMT_DONE: managed=' + positions.length + ' closed=' + closed + ' held=' + held + ' trail=' + trailUpdated + ' stale_cancelled=' + staleOrdersCancelled, 'info');
+  pushLog('POS_MGMT_DONE: managed=' + positions.length + ' closed=' + closed + ' held=' + held + ' trail=' + trailUpdated, 'info');
 
   return {
     positionsManaged: positions.length,
-    closed, held, trailUpdated, staleOrdersCancelled,
+    closed, held, trailUpdated, staleOrdersCancelled: 0,
     openCount: positions.length - closed,
     totalUnrealizedPct: +(totalUnrealizedPct * 100).toFixed(2),
     newEntriesAllowed
