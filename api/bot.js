@@ -3685,8 +3685,8 @@ async function executeSignal(signal, newsContext = null) {
     pushLog('EXEC_POS_CHECK_ERR: ' + signal.symbol + ' ' + err.message + ' (proceeding)', 'warn');
   }
 
-  // 3. Buying power check
-  pushLog('EXEC_CHECK_BP: ' + signal.symbol + ' checking buying power...', 'info');
+  // 3. Cash check — require actual cash, not margin buying power
+  pushLog('EXEC_CHECK_CASH: ' + signal.symbol + ' checking available cash...', 'info');
   try {
     const ctrl  = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 8000);
@@ -3697,18 +3697,18 @@ async function executeSignal(signal, newsContext = null) {
 
     if (acctResp.ok) {
       const acct = await acctResp.json().catch(() => ({}));
-      const buyingPower  = parseFloat(acct.buying_power ?? acct.cash ?? '0');
-      const orderValue   = qty * entryPrice;
-      pushLog('EXEC_BP: ' + signal.symbol + ' buyingPower=$' + buyingPower.toFixed(2) + ' orderValue=$' + orderValue.toFixed(2) + ' (' + (orderValue / buyingPower * 100).toFixed(1) + '%)', 'info');
-      if (isFinite(buyingPower) && buyingPower > 0 && orderValue > buyingPower * 0.95) {
-        pushLog(`BUYING_POWER_SKIP: ${signal.symbol} order $${orderValue.toFixed(2)} > 95% of buying power $${buyingPower.toFixed(2)}`, 'warn');
-        return { executed: false, reason: 'insufficient_buying_power', orderValue, buyingPower };
+      const availableCash = parseFloat(acct.cash ?? '0');
+      const orderValue    = qty * entryPrice;
+      pushLog('EXEC_CASH: ' + signal.symbol + ' cash=$' + availableCash.toFixed(2) + ' orderValue=$' + orderValue.toFixed(2) + ' (' + (availableCash > 0 ? (orderValue / availableCash * 100).toFixed(1) : '∞') + '%)', 'info');
+      if (isFinite(availableCash) && orderValue > availableCash) {
+        pushLog('INSUFFICIENT_CASH: ' + signal.symbol + ' needs $' + orderValue.toFixed(2) + ' but only $' + availableCash.toFixed(2) + ' cash available', 'warn');
+        return { executed: false, reason: 'insufficient_cash', orderValue, availableCash };
       }
     } else {
-      pushLog('EXEC_BP_FAIL: ' + signal.symbol + ' account fetch status=' + acctResp.status + ' (proceeding)', 'warn');
+      pushLog('EXEC_CASH_FAIL: ' + signal.symbol + ' account fetch status=' + acctResp.status + ' (proceeding)', 'warn');
     }
   } catch (err) {
-    pushLog('EXEC_BP_ERR: ' + signal.symbol + ' ' + err.message + ' (proceeding)', 'warn');
+    pushLog('EXEC_CASH_ERR: ' + signal.symbol + ' ' + err.message + ' (proceeding)', 'warn');
   }
 
   // 4. Anomaly detection — block rapid duplicate orders
