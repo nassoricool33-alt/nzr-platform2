@@ -4598,20 +4598,84 @@ module.exports = async function handler(req, res) {
       new Promise(resolve => setTimeout(() => resolve(null), 3000))
     ]).catch(() => null);
 
+    // ══════════════════════════════════════════════════════════════════════════
+    // PRICE CACHE — single batch fetch replaces ~83 individual snapshot calls
+    // ══════════════════════════════════════════════════════════════════════════
+    const SECTOR_ETFS = ['QQQ', 'XLF', 'XLY', 'XLK', 'XLV', 'XLE', 'XLI'];
+    const allCacheSymbols = [...new Set([...SCAN_UNIVERSE, ...SECTOR_ETFS, 'SPY', 'VIXY'])];
+    const priceCache = {};  // priceCache[symbol] = { price, prevClose, changePercent, dayOpen, dayHigh, dayLow, volume }
+
+    try {
+      // Polygon multi-ticker snapshot: up to 250 tickers in one call
+      const tickerParam = allCacheSymbols.join(',');
+      const snapData = await Promise.race([
+        fetch('https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers?tickers=' + tickerParam + '&apiKey=' + apiKey)
+          .then(r => r.ok ? r.json() : null),
+        new Promise(resolve => setTimeout(() => resolve(null), 8000))
+      ]).catch(() => null);
+
+      if (snapData?.tickers && Array.isArray(snapData.tickers)) {
+        for (const t of snapData.tickers) {
+          const sym = t.ticker;
+          const price = t.day?.c || t.lastTrade?.p || t.prevDay?.c || 0;
+          const prevClose = t.prevDay?.c || 0;
+          const changePercent = t.todaysChangePerc ?? (prevClose > 0 ? ((price - prevClose) / prevClose * 100) : 0);
+          priceCache[sym] = {
+            price,
+            prevClose,
+            changePercent: parseFloat(Number(changePercent).toFixed(2)),
+            dayOpen: t.day?.o || 0,
+            dayHigh: t.day?.h || 0,
+            dayLow: t.day?.l || 0,
+            volume: t.day?.v || 0,
+          };
+        }
+        pushLog('PRICE_CACHE_BUILT: ' + Object.keys(priceCache).length + '/' + allCacheSymbols.length + ' symbols from multi-ticker snapshot', 'pass');
+      } else {
+        pushLog('PRICE_CACHE_SNAPSHOT_FAILED: falling back to prev-close endpoint', 'warn');
+      }
+
+      // Fallback: for any symbols not in cache, try grouped daily prev close
+      const missingSymbols = allCacheSymbols.filter(s => !priceCache[s]);
+      if (missingSymbols.length > 0) {
+        // Batch prev-close: fetch individually but in parallel (max ~10 symbols typically missing)
+        const prevResults = await Promise.all(missingSymbols.map(sym =>
+          raceFetch('https://api.polygon.io/v2/aggs/ticker/' + sym + '/prev?adjusted=true&apiKey=' + apiKey)
+            .then(d => ({ sym, bar: d?.results?.[0] || null }))
+        ));
+        for (const { sym, bar } of prevResults) {
+          if (bar && bar.c > 0) {
+            priceCache[sym] = {
+              price: bar.c,
+              prevClose: bar.c,  // prev day close IS the price in this case
+              changePercent: 0,  // no intraday change available
+              dayOpen: bar.o || 0,
+              dayHigh: bar.h || 0,
+              dayLow: bar.l || 0,
+              volume: bar.v || 0,
+            };
+          }
+        }
+        pushLog('PRICE_CACHE_FALLBACK: filled ' + prevResults.filter(r => r.bar?.c > 0).length + '/' + missingSymbols.length + ' via prev-close', 'info');
+      }
+    } catch(cacheErr) {
+      pushLog('PRICE_CACHE_ERROR: ' + cacheErr.message, 'warn');
+    }
+
+    // Hard gate: if cache is mostly empty, abort cycle
+    if (Object.keys(priceCache).length < 5) {
+      pushLog('PRICE_CACHE_FAILED: only ' + Object.keys(priceCache).length + ' symbols cached — aborting cycle', 'block');
+      global.scanInProgress = false;
+      return res.status(200).json({ success: false, error: 'PRICE_CACHE_FAILED', cached: Object.keys(priceCache).length });
+    }
+
     // ── SPY benchmark tracking (#1, #2) ────────────────────────────────────────
     let spyDayChangePct = 0;
     try {
-      let spySnap = await raceFetch('https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers/SPY?apiKey=' + apiKey);
-      // Fallback: if snapshot endpoint fails (403 on free plan), use prev close endpoint
-      if (!spySnap?.ticker) {
-        const prevData = await raceFetch('https://api.polygon.io/v2/aggs/ticker/SPY/prev?adjusted=true&apiKey=' + apiKey);
-        const bar = prevData?.results?.[0];
-        if (bar) spySnap = { ticker: { prevDay: { c: bar.c, o: bar.o, h: bar.h, l: bar.l, v: bar.v }, day: {} } };
-      }
-      const spyPrice = spySnap?.ticker?.day?.c || spySnap?.ticker?.lastTrade?.p || spySnap?.ticker?.prevDay?.c || 0;
-      const spyPrevClose = spySnap?.ticker?.prevDay?.c || 0;
+      const spyPrice = priceCache['SPY']?.price || 0;
+      const spyPrevClose = priceCache['SPY']?.prevClose || 0;
       if (spyPrice > 0 && spyPrevClose > 0) {
-        spyDayChangePct = ((spyPrice - spyPrevClose) / spyPrevClose) * 100;
+        spyDayChangePct = priceCache['SPY']?.changePercent || ((spyPrice - spyPrevClose) / spyPrevClose * 100);
       }
 
       if (spyPrice > 0) {
@@ -4697,30 +4761,17 @@ module.exports = async function handler(req, res) {
       pushLog('WEEKLY_PNL_ERROR: ' + weekErr.message, 'warn');
     }
 
-    // ── Pre-fetch sector ETF snapshots for sector momentum filter (#4) ────────
+    // ── Sector ETF data from priceCache (no additional API calls) ──────────────
     const sectorEtfCache = {};
-    try {
-      const etfs = ['QQQ', 'XLF', 'XLY', 'XLK', 'XLV', 'XLE', 'XLI'];
-      const etfSnaps = await Promise.all(etfs.map(async (etf) => {
-        let snap = await raceFetch('https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers/' + etf + '?apiKey=' + apiKey);
-        // Fallback: if snapshot fails (403 on free plan), use prev close endpoint
-        if (!snap?.ticker) {
-          const prevData = await raceFetch('https://api.polygon.io/v2/aggs/ticker/' + etf + '/prev?adjusted=true&apiKey=' + apiKey);
-          const bar = prevData?.results?.[0];
-          if (bar) snap = { ticker: { prevDay: { c: bar.c, o: bar.o, h: bar.h, l: bar.l, v: bar.v }, day: {} } };
-        }
-        return snap;
-      }));
-      etfs.forEach((etf, i) => {
-        const snap = etfSnaps[i];
-        const cur = snap?.ticker?.day?.c || snap?.ticker?.lastTrade?.p || snap?.ticker?.prevDay?.c || 0;
-        const prev = snap?.ticker?.prevDay?.c || 0;
-        sectorEtfCache[etf] = (cur > 0 && prev > 0) ? ((cur - prev) / prev * 100) : 0;
-      });
-      pushLog('SECTOR_ETFS: ' + etfs.map(e => e + '=' + (sectorEtfCache[e] || 0).toFixed(2) + '%').join(' '), 'info');
-    } catch(sectorErr) {
-      pushLog('SECTOR_ETF_ERROR: ' + sectorErr.message, 'warn');
+    for (const etf of SECTOR_ETFS) {
+      const cached = priceCache[etf];
+      if (cached && cached.price > 0 && cached.prevClose > 0) {
+        sectorEtfCache[etf] = cached.changePercent || ((cached.price - cached.prevClose) / cached.prevClose * 100);
+      } else {
+        sectorEtfCache[etf] = 0;
+      }
     }
+    pushLog('SECTOR_ETFS: ' + SECTOR_ETFS.map(e => e + '=' + (sectorEtfCache[e] || 0).toFixed(2) + '%').join(' '), 'info');
 
     // ── evaluateSymbol — two-phase: RSI pre-filter then full analysis ─────────
     let preFilterSkipped = 0;
@@ -4730,24 +4781,15 @@ module.exports = async function handler(req, res) {
         symbolsScanned++;
         const sector = sectorMap[symbol] || 'OTHER';
 
-        // ── PHASE 1: Quick RSI pre-filter (saves API calls on 75-symbol universe) ──
-        let [snapRes, rsiData] = await Promise.all([
-          raceFetch('https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers/' + symbol + '?apiKey=' + apiKey),
-          raceFetch('https://api.polygon.io/v1/indicators/rsi/' + symbol + '?timespan=hour&adjusted=true&window=14&series_type=close&order=desc&limit=3&apiKey=' + apiKey),
-        ]);
-
-        // Fallback: if snapshot fails (403 on free plan), use prev close endpoint
-        if (!snapRes?.ticker) {
-          const prevData = await raceFetch('https://api.polygon.io/v2/aggs/ticker/' + symbol + '/prev?adjusted=true&apiKey=' + apiKey);
-          const bar = prevData?.results?.[0];
-          if (bar) snapRes = { ticker: { prevDay: { c: bar.c, o: bar.o, h: bar.h, l: bar.l, v: bar.v }, day: {} } };
-        }
-
-        const price = snapRes?.ticker?.day?.c || snapRes?.ticker?.lastTrade?.p || snapRes?.ticker?.prevDay?.c || null;
+        // ── PHASE 1: Price from cache + RSI fetch (only 1 API call now) ──────
+        const cached = priceCache[symbol];
+        const price = cached?.price || null;
         if (!price) {
-          pushLog('SKIP ' + symbol + ': no price (snapshot=' + (snapRes ? 'received' : 'null') + ')', 'warn');
+          pushLog('CACHE_MISS ' + symbol + ': no price in cache — skipping', 'warn');
           return;
         }
+
+        const rsiData = await raceFetch('https://api.polygon.io/v1/indicators/rsi/' + symbol + '?timespan=hour&adjusted=true&window=14&series_type=close&order=desc&limit=3&apiKey=' + apiKey);
 
         const rsiValue = rsiData?.results?.values?.[0]?.value || 50;
 
