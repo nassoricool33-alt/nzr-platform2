@@ -3204,6 +3204,20 @@ async function manageOpenPositions() {
   let closed = 0, held = 0, trailUpdated = 0;
   const closedThisCycle = new Set(); // Prevent duplicate close orders within same scan
 
+  // ── Pre-fetch: batch verify which positions still exist on Alpaca ──────────
+  // One call replaces N sequential per-position checks (was 1.5s × N)
+  const livePositionSymbols = new Set();
+  try {
+    const checkResult = await Promise.race([
+      fetch(`${ALPACA_BASE}/v2/positions`, { headers: alpacaHeaders }).then(r => r.ok ? r.json() : []),
+      new Promise(resolve => setTimeout(() => resolve([]), 3000))
+    ]).catch(() => []);
+    if (Array.isArray(checkResult)) {
+      for (const p of checkResult) livePositionSymbols.add(p.symbol);
+    }
+  } catch {}
+  pushLog('POS_LIVE_CHECK: ' + livePositionSymbols.size + ' positions confirmed live on Alpaca', 'info');
+
   // ── 5. Evaluate each position ──────────────────────────────────────────────
   for (const pd of positionData) {
     const { symbol, currentPrice, entryPrice, qty, unrealizedPct, side, stateKey, posTrack, entryDate, daysHeld } = pd;
@@ -3309,18 +3323,8 @@ async function manageOpenPositions() {
         continue;
       }
 
-      // Guard: verify position still exists on Alpaca before placing close order
-      let posStillExists = true;
-      try {
-        const checkCtrl = new AbortController();
-        const checkTimer = setTimeout(() => checkCtrl.abort(), 1500);
-        let checkResp;
-        try { checkResp = await fetch(`${ALPACA_BASE}/v2/positions/${encodeURIComponent(symbol)}`, { headers: alpacaHeaders, signal: checkCtrl.signal }); }
-        finally { clearTimeout(checkTimer); }
-        posStillExists = checkResp.ok;
-      } catch { posStillExists = false; }
-
-      if (!posStillExists) {
+      // Guard: verify position still exists (batch-checked above, zero API calls)
+      if (!livePositionSymbols.has(symbol)) {
         pushLog('POSITION_GONE: ' + symbol + ' already closed, skipping', 'warn');
         closedThisCycle.add(symbol);
         continue;
@@ -3340,7 +3344,7 @@ async function manageOpenPositions() {
       try {
         const closeSide = side === 'long' ? 'sell' : 'buy';
         const closeCtrl = new AbortController();
-        const closeTimer = setTimeout(() => closeCtrl.abort(), 5000);
+        const closeTimer = setTimeout(() => closeCtrl.abort(), 3000);
         let closeResp;
         try {
           closeResp = await fetch(`${ALPACA_BASE}/v2/orders`, {
@@ -3363,35 +3367,37 @@ async function manageOpenPositions() {
           closedThisCycle.add(symbol);
           pushLog('POSITION_CLOSED_OK: ' + symbol + ' ' + closeSide + ' ' + Math.abs(qty) + ' shares', 'pass');
 
-          // Update journal entry
+          // Update journal entry (fire-and-forget — don't block the close loop)
           if (supabase) {
-            try {
-              const { data: journalEntries } = await supabase.from('journal')
-                .select('*')
-                .eq('symbol', symbol)
-                .is('exit_price', null)
-                .order('trade_date', { ascending: false })
-                .limit(1);
-              if (journalEntries && journalEntries.length > 0) {
-                const entry = journalEntries[0];
-                const pnlPct = ((currentPrice - parseFloat(entry.entry_price)) / parseFloat(entry.entry_price) * 100).toFixed(2);
-                const entryTime = new Date(entry.created_at || entry.trade_date).getTime();
-                const holdMinutes = entryTime > 0 ? Math.round((Date.now() - entryTime) / 60000) : null;
-                await supabase.from('journal').update({
-                  exit_price: currentPrice,
-                  pnl_pct: parseFloat(pnlPct),
-                  exit_reason: reason.split(':')[0].trim(),
-                  hold_duration_minutes: holdMinutes,
-                  notes: (entry.notes || '') + ' | CLOSED: ' + reason
-                }).eq('id', entry.id);
-                pushLog('JOURNAL_EXIT_UPDATED: ' + symbol + ' pnl=' + pnlPct + '% reason=' + reason.split(':')[0] + ' held=' + holdMinutes + 'min', 'info');
+            (async () => {
+              try {
+                const { data: journalEntries } = await supabase.from('journal')
+                  .select('*')
+                  .eq('symbol', symbol)
+                  .is('exit_price', null)
+                  .order('trade_date', { ascending: false })
+                  .limit(1);
+                if (journalEntries && journalEntries.length > 0) {
+                  const entry = journalEntries[0];
+                  const pnlPct = ((currentPrice - parseFloat(entry.entry_price)) / parseFloat(entry.entry_price) * 100).toFixed(2);
+                  const entryTime = new Date(entry.created_at || entry.trade_date).getTime();
+                  const holdMinutes = entryTime > 0 ? Math.round((Date.now() - entryTime) / 60000) : null;
+                  await supabase.from('journal').update({
+                    exit_price: currentPrice,
+                    pnl_pct: parseFloat(pnlPct),
+                    exit_reason: reason.split(':')[0].trim(),
+                    hold_duration_minutes: holdMinutes,
+                    notes: (entry.notes || '') + ' | CLOSED: ' + reason
+                  }).eq('id', entry.id);
+                  pushLog('JOURNAL_EXIT_UPDATED: ' + symbol + ' pnl=' + pnlPct + '% reason=' + reason.split(':')[0] + ' held=' + holdMinutes + 'min', 'info');
+                }
+              } catch (je) {
+                pushLog('JOURNAL_EXIT_ERR: ' + symbol + ' ' + je.message, 'warn');
               }
-            } catch (je) {
-              pushLog('JOURNAL_EXIT_ERR: ' + symbol + ' ' + je.message, 'warn');
-            }
+            })();
           }
 
-          // Clean up position tracking state
+          // Clean up position tracking state (fire-and-forget)
           writeBotState(stateKey, JSON.stringify({ closed: true, closedAt: new Date().toISOString(), reason }));
         } else {
           const errBody = await closeResp.text().catch(() => 'unknown');
@@ -4527,7 +4533,7 @@ module.exports = async function handler(req, res) {
     pushLog('SCAN_UNIVERSE_SIZE: ' + SCAN_UNIVERSE.length + ' symbols', 'info');
     pushLog('SCAN_STARTED: capital=$' + capital + ' day=$' + dayAlloc + ' swing=$' + swingAlloc + ' universe=' + SCAN_UNIVERSE.length + ' ET=' + etHour + ':' + String(etMinute).padStart(2,'0'), 'info');
 
-    // ── Dynamic position management — runs FIRST every cycle (20s hard limit) ──
+    // ── Dynamic position management — runs FIRST every cycle (25s safety net) ──
     let posMgmt = { positionsManaged: 0, closed: 0, held: 0, trailUpdated: 0, staleOrdersCancelled: 0, openCount: 0, totalUnrealizedPct: 0, newEntriesAllowed: true };
     try {
       let mgmtTimedOut = false;
@@ -4536,9 +4542,9 @@ module.exports = async function handler(req, res) {
         new Promise(resolve => {
           setTimeout(() => {
             mgmtTimedOut = true;
-            pushLog('MGMT_TIMEOUT: position management cut short at 20s, proceeding to scan', 'warn');
+            pushLog('MGMT_TIMEOUT: position management cut short at 25s, proceeding to scan', 'warn');
             resolve(null);
-          }, 20000);
+          }, 25000);
         })
       ]);
       if (mgmtResult) posMgmt = mgmtResult;
