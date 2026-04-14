@@ -32,7 +32,7 @@ module.exports = async function handler(req, res) {
   }
 
   try {
-    // 1. Try snapshot for real-time intraday data
+    // 1. Fetch snapshot for real-time intraday data
     const snapUrl = `https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers/${symbol}?apiKey=${apiKey}`
     const snapRes = await withTimeout(fetch(snapUrl), 6000)
 
@@ -40,46 +40,66 @@ module.exports = async function handler(req, res) {
     if (snapRes && snapRes.ok) {
       const snapData = await snapRes.json()
       ticker = snapData.ticker || null
+
+      // Debug: log raw snapshot structure for Vercel function logs
+      console.log('[quote][raw]', symbol, JSON.stringify({
+        dayC: ticker?.day?.c,
+        dayO: ticker?.day?.o,
+        dayV: ticker?.day?.v,
+        minC: ticker?.min?.c,
+        lastTradeP: ticker?.lastTrade?.p,
+        prevDayC: ticker?.prevDay?.c,
+        todaysChange: ticker?.todaysChange,
+        todaysChangePerc: ticker?.todaysChangePerc,
+      }))
+    } else {
+      console.error('[quote] Polygon snapshot failed:', symbol, 'status=', snapRes?.status)
     }
 
     if (!ticker) {
-      console.error('[quote] Polygon snapshot empty for', symbol)
       return res.status(200).json({ symbol, price: null, error: 'Quote unavailable' })
     }
 
+    // 2. Extract price: prefer day.c (updates intraday), then min.c, then lastTrade.p
     const prevClose = ticker.prevDay?.c || 0;
-    let price = ticker.lastTrade?.p || ticker.day?.c || 0;
-    let open = ticker.day?.o || 0;
-    let high = ticker.day?.h || 0;
-    let low = ticker.day?.l || 0;
-    let volume = ticker.day?.v || 0;
+    let price = ticker.day?.c || ticker.min?.c || ticker.lastTrade?.p || 0;
+    const open = ticker.day?.o || 0;
+    const high = ticker.day?.h || 0;
+    const low = ticker.day?.l || 0;
+    const volume = ticker.day?.v || 0;
 
-    // 2. If no intraday data yet (market just opened or pre-market),
-    //    fall back to last trade endpoint for a fresher price
-    if (!open || !volume) {
+    // 3. If no intraday data yet, fall back to last trade endpoint
+    if ((!price || !volume) && prevClose > 0) {
       try {
         const lastTradeUrl = `https://api.polygon.io/v2/last/trade/${symbol}?apiKey=${apiKey}`
         const ltRes = await withTimeout(fetch(lastTradeUrl), 4000)
         if (ltRes && ltRes.ok) {
           const ltData = await ltRes.json()
           const ltPrice = ltData.results?.p || 0
-          if (ltPrice > 0) {
-            price = ltPrice
-            console.log('[quote]', symbol, 'using last trade price:', ltPrice)
-          }
+          console.log('[quote][lastTrade]', symbol, 'price=', ltPrice)
+          if (ltPrice > 0) price = ltPrice
         }
       } catch (ltErr) {
         console.warn('[quote] last trade fallback failed for', symbol, ':', ltErr.message)
       }
     }
 
-    // Use prevDay close if we still have no price at all
+    // 4. Final fallback: use prevClose as price (shows 0% change, better than null)
     if (!price) price = prevClose;
 
-    const change = price - prevClose;
-    const changePercent = prevClose > 0 ? (change / prevClose * 100) : 0;
+    // 5. Use Polygon's pre-calculated change values when available (most reliable),
+    //    otherwise calculate from price vs prevClose
+    let change, changePercent;
+    if (ticker.todaysChangePerc != null && ticker.todaysChange != null) {
+      change = ticker.todaysChange;
+      changePercent = ticker.todaysChangePerc;
+    } else {
+      change = price - prevClose;
+      changePercent = prevClose > 0 ? (change / prevClose * 100) : 0;
+    }
 
-    console.log('[quote]', symbol, 'price=', price, 'prevClose=', prevClose, 'change=', change.toFixed(2), 'vol=', volume)
+    console.log('[quote]', symbol, 'price=', price, 'prevClose=', prevClose,
+      'change=', change.toFixed(2), 'chg%=', changePercent.toFixed(2), 'vol=', volume)
 
     return res.status(200).json({
       symbol,

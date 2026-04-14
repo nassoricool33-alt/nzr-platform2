@@ -6031,9 +6031,12 @@ async function renderDirectionCard(ticker, ind, qd){
   initWebSocket(); // start WebSocket for real-time price streaming
 })();
 
-// 30-second price refresh during market hours
+// Price refresh: 30s during market hours, 5min outside
+let _priceRefreshCount = 0;
 async function refreshPrices(){
-  if(!isMarketOpen())return;
+  _priceRefreshCount++;
+  // Outside market hours, only refresh every 10th tick (10 × 30s = 5 min)
+  if (!isMarketOpen() && (_priceRefreshCount % 10 !== 0)) return;
   await Promise.allSettled([
     ...ALL_SYMS.map(s=>loadQuote(s)),
     loadVix(),
