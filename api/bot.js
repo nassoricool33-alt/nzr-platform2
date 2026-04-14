@@ -3074,7 +3074,7 @@ function recommendDirection(ind) {
  * Returns { positionsManaged, closed, held, trailUpdated, staleOrdersCancelled,
  *           openCount, totalUnrealizedPct, newEntriesAllowed }
  */
-async function manageOpenPositions() {
+async function manageOpenPositions(prefetchedPositions, prefetchedAccount) {
   const alpacaKey    = process.env.ALPACA_API_KEY;
   const alpacaSecret = process.env.ALPACA_SECRET_KEY;
   if (!alpacaKey || !alpacaSecret) {
@@ -3095,26 +3095,32 @@ async function manageOpenPositions() {
     new Promise(resolve => setTimeout(() => resolve(null), 2000))
   ]).catch(() => null);
 
-  // ── 1. Fetch all open positions + account in parallel ─────────────────────
+  // ── 1. Use pre-fetched positions + account, or fetch if not provided ──────
   let positions = [];
   let portfolioValue = 0;
   let totalUnrealizedPl = 0;
-  try {
-    const [posResult, acctResult] = await Promise.all([
-      Promise.race([
-        fetch(`${ALPACA_BASE}/v2/positions`, { headers: alpacaHeaders }).then(r => r.ok ? r.json() : []),
-        new Promise(resolve => setTimeout(() => resolve([]), 5000))
-      ]).catch(() => []),
-      Promise.race([
-        fetch(`${ALPACA_BASE}/v2/account`, { headers: alpacaHeaders }).then(r => r.ok ? r.json() : null),
-        new Promise(resolve => setTimeout(() => resolve(null), 5000))
-      ]).catch(() => null),
-    ]);
-    positions = Array.isArray(posResult) ? posResult : [];
-    if (acctResult) portfolioValue = parseFloat(acctResult.portfolio_value) || 0;
-  } catch (e) {
-    pushLog('POS_MGMT_FETCH_ERR: ' + e.message, 'warn');
-    return { positionsManaged: 0, closed: 0, held: 0, trailUpdated: 0, staleOrdersCancelled: 0, openCount: 0, totalUnrealizedPct: 0, newEntriesAllowed: true };
+  if (prefetchedPositions && prefetchedAccount !== undefined) {
+    positions = Array.isArray(prefetchedPositions) ? prefetchedPositions : [];
+    if (prefetchedAccount) portfolioValue = parseFloat(prefetchedAccount.portfolio_value) || 0;
+    pushLog('POS_MGMT_PREFETCHED: ' + positions.length + ' positions passed in', 'info');
+  } else {
+    try {
+      const [posResult, acctResult] = await Promise.all([
+        Promise.race([
+          fetch(`${ALPACA_BASE}/v2/positions`, { headers: alpacaHeaders }).then(r => r.ok ? r.json() : []),
+          new Promise(resolve => setTimeout(() => resolve([]), 5000))
+        ]).catch(() => []),
+        Promise.race([
+          fetch(`${ALPACA_BASE}/v2/account`, { headers: alpacaHeaders }).then(r => r.ok ? r.json() : null),
+          new Promise(resolve => setTimeout(() => resolve(null), 5000))
+        ]).catch(() => null),
+      ]);
+      positions = Array.isArray(posResult) ? posResult : [];
+      if (acctResult) portfolioValue = parseFloat(acctResult.portfolio_value) || 0;
+    } catch (e) {
+      pushLog('POS_MGMT_FETCH_ERR: ' + e.message, 'warn');
+      return { positionsManaged: 0, closed: 0, held: 0, trailUpdated: 0, staleOrdersCancelled: 0, openCount: 0, totalUnrealizedPct: 0, newEntriesAllowed: true };
+    }
   }
 
   for (const p of positions) {
@@ -3135,31 +3141,33 @@ async function manageOpenPositions() {
 
   pushLog('POS_MGMT_START: ' + positions.length + ' open positions, unrealized=' + (totalUnrealizedPct * 100).toFixed(2) + '%', 'info');
 
-  // ── 2. Load all position tracking states from Supabase in one batch ───────
+  // ── 2. Load position tracking states from Supabase (skip if no positions) ──
   const posTrackMap = {};
-  try {
-    const sbUrl = process.env.SUPABASE_URL;
-    const sbHdrs = _sbHeaders();
-    if (sbUrl && sbHdrs && positions.length > 0) {
-      const keys = positions.map(p => 'position_' + p.symbol);
-      const keyFilter = keys.map(k => `"${k}"`).join(',');
-      const ctrl = new AbortController();
-      const t = setTimeout(() => ctrl.abort(), 3000);
-      let sr;
-      try { sr = await fetch(`${sbUrl}/rest/v1/bot_state?key=in.(${keyFilter})&select=key,value`, { headers: sbHdrs, signal: ctrl.signal }); }
-      finally { clearTimeout(t); }
-      if (sr.ok) {
-        const rows = await sr.json().catch(() => []);
-        if (Array.isArray(rows)) {
-          for (const row of rows) {
-            try { posTrackMap[row.key] = JSON.parse(row.value); } catch {}
+  if (positions.length > 0) {
+    try {
+      const sbUrl = process.env.SUPABASE_URL;
+      const sbHdrs = _sbHeaders();
+      if (sbUrl && sbHdrs) {
+        const keys = positions.map(p => 'position_' + p.symbol);
+        const keyFilter = keys.map(k => `"${k}"`).join(',');
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), 3000);
+        let sr;
+        try { sr = await fetch(`${sbUrl}/rest/v1/bot_state?key=in.(${keyFilter})&select=key,value`, { headers: sbHdrs, signal: ctrl.signal }); }
+        finally { clearTimeout(t); }
+        if (sr.ok) {
+          const rows = await sr.json().catch(() => []);
+          if (Array.isArray(rows)) {
+            for (const row of rows) {
+              try { posTrackMap[row.key] = JSON.parse(row.value); } catch {}
+            }
           }
         }
       }
-    }
-  } catch { /* no tracking data */ }
+    } catch { /* no tracking data */ }
+  }
 
-  // ── 3. Determine which positions need RSI — only those held > 1 day ───────
+  // ── 3. Determine which positions need RSI — decision zone only, capped at 5 ──
   const needsRsi = [];
   const positionData = [];
 
@@ -3178,20 +3186,29 @@ async function manageOpenPositions() {
     const pd = { symbol, currentPrice, entryPrice, qty, unrealizedPct, side, stateKey, posTrack, entryDate, daysHeld };
     positionData.push(pd);
 
-    // P&L threshold decisions don't need RSI
+    // P&L threshold decisions don't need RSI — they'll close regardless
     if (unrealizedPct >= 0.08 || unrealizedPct <= -0.04) continue;
     // Positions held < 1 day: skip RSI, just hold
     if (daysHeld < 1) continue;
-    // Older positions need RSI for nuanced decisions
+    // Only fetch RSI for positions in the decision zone where RSI changes the outcome
+    // Outside -3% to +6%, P&L-based rules dominate (time limit, underperformer cut)
+    if (unrealizedPct < -0.03 || unrealizedPct > 0.06) continue;
     needsRsi.push(symbol);
   }
 
-  pushLog('POS_RSI_PLAN: ' + positions.length + ' positions, ' + needsRsi.length + ' need RSI fetch (skipping ' + (positions.length - needsRsi.length) + ' — threshold/new)', 'info');
+  // Cap at 5 RSI fetches per cycle to keep position management fast
+  const MAX_RSI_FETCHES = 5;
+  const rsiSlice = needsRsi.slice(0, MAX_RSI_FETCHES);
+  if (needsRsi.length > MAX_RSI_FETCHES) {
+    pushLog('POS_RSI_CAPPED: ' + needsRsi.length + ' need RSI but capped to ' + MAX_RSI_FETCHES, 'info');
+  }
+
+  pushLog('POS_RSI_PLAN: ' + positions.length + ' positions, ' + rsiSlice.length + ' RSI fetches (of ' + needsRsi.length + ' in decision zone, ' + (positions.length - needsRsi.length) + ' skipped — threshold/new/extreme)', 'info');
 
   // ── 4. Batch fetch RSI for symbols that need it (parallel with 2s timeout) ──
   const rsiMap = {};
-  if (polyKey && needsRsi.length > 0) {
-    const rsiPromises = needsRsi.map(async (symbol) => {
+  if (polyKey && rsiSlice.length > 0) {
+    const rsiPromises = rsiSlice.map(async (symbol) => {
       const data = await raceFetchFast('https://api.polygon.io/v1/indicators/rsi/' + symbol + '?timespan=hour&adjusted=true&window=14&series_type=close&order=desc&limit=1&apiKey=' + polyKey);
       return { symbol, rsi: data?.results?.values?.[0]?.value || null };
     });
@@ -4533,18 +4550,40 @@ module.exports = async function handler(req, res) {
     pushLog('SCAN_UNIVERSE_SIZE: ' + SCAN_UNIVERSE.length + ' symbols', 'info');
     pushLog('SCAN_STARTED: capital=$' + capital + ' day=$' + dayAlloc + ' swing=$' + swingAlloc + ' universe=' + SCAN_UNIVERSE.length + ' ET=' + etHour + ':' + String(etMinute).padStart(2,'0'), 'info');
 
-    // ── Dynamic position management — runs FIRST every cycle (25s safety net) ──
+    // ── Pre-fetch Alpaca positions + account ONCE, reuse for mgmt AND scan ────
+    const _alpHdrs = { 'APCA-API-KEY-ID': process.env.ALPACA_API_KEY, 'APCA-API-SECRET-KEY': process.env.ALPACA_SECRET_KEY };
+    let _prefetchedPositions = [];
+    let _prefetchedAccount = null;
+    try {
+      const [_posR, _acctR] = await Promise.all([
+        Promise.race([
+          fetch(`${ALPACA_BASE}/v2/positions`, { headers: _alpHdrs }).then(r => r.ok ? r.json() : []),
+          new Promise(resolve => setTimeout(() => resolve([]), 5000))
+        ]).catch(() => []),
+        Promise.race([
+          fetch(`${ALPACA_BASE}/v2/account`, { headers: _alpHdrs }).then(r => r.ok ? r.json() : null),
+          new Promise(resolve => setTimeout(() => resolve(null), 5000))
+        ]).catch(() => null),
+      ]);
+      _prefetchedPositions = Array.isArray(_posR) ? _posR : [];
+      _prefetchedAccount = _acctR;
+      pushLog('PREFETCH_ALPACA: ' + _prefetchedPositions.length + ' positions, account=' + (!!_acctR), 'info');
+    } catch(e) {
+      pushLog('PREFETCH_ALPACA_ERR: ' + e.message, 'warn');
+    }
+
+    // ── Dynamic position management — uses pre-fetched data (28s safety net) ──
     let posMgmt = { positionsManaged: 0, closed: 0, held: 0, trailUpdated: 0, staleOrdersCancelled: 0, openCount: 0, totalUnrealizedPct: 0, newEntriesAllowed: true };
     try {
       let mgmtTimedOut = false;
       const mgmtResult = await Promise.race([
-        manageOpenPositions(),
+        manageOpenPositions(_prefetchedPositions, _prefetchedAccount),
         new Promise(resolve => {
           setTimeout(() => {
             mgmtTimedOut = true;
-            pushLog('MGMT_TIMEOUT: position management cut short at 25s, proceeding to scan', 'warn');
+            pushLog('MGMT_TIMEOUT: position management cut short at 28s, proceeding to scan', 'warn');
             resolve(null);
-          }, 25000);
+          }, 28000);
         })
       ]);
       if (mgmtResult) posMgmt = mgmtResult;
