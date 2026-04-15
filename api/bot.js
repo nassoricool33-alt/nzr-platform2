@@ -5003,10 +5003,10 @@ module.exports = async function handler(req, res) {
     const scanLoopStart = Date.now();
     const BATCH_SIZE = 5;
     for (let i = 0; i < scanSlice.length; i += BATCH_SIZE) {
-      // Scan always gets at least 10s; also respect overall 28s hard limit
-      const scanElapsed = Date.now() - scanStartTime;
+      // Measure from loop start so setup time doesn't eat into scan budget
+      const scanElapsed = Date.now() - scanLoopStart;
       const totalElapsed = Date.now() - startTime;
-      if (scanElapsed > 20000 || totalElapsed > 55000) {
+      if (scanElapsed > 20000 || totalElapsed > 58000) {
         pushLog('TIME_BUDGET: stopping early at batch starting ' + scanSlice[i] + ' (scan=' + scanElapsed + 'ms, total=' + totalElapsed + 'ms)', 'warn');
         break;
       }
