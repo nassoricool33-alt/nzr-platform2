@@ -4563,7 +4563,7 @@ module.exports = async function handler(req, res) {
     const scanStartTime = Date.now();
 
     // Update P&L for any closed trades (fire-and-forget — don't block scan)
-    updateClosedTrades().catch(e => pushLog('CLOSED_TRADES_ERR: ' + e.message, 'warn'));
+    try { await updateClosedTrades(); } catch(e) { pushLog('CLOSED_TRADES_ERR: ' + e.message, 'warn'); }
 
     // ── Position list for buy gating — reuse prefetch if no closes happened ──
     let openPositions = [];
@@ -5155,7 +5155,7 @@ module.exports = async function handler(req, res) {
     try {
       const since = req.query.since;
       // Fetch from Supabase: ascending order so frontend can append chronologically
-      let query = supabase.from('bot_logs').select('*').order('created_at', { ascending: true }).limit(100);
+      let query = supabase.from('bot_logs').select('*').order('created_at', { ascending: false }).limit(200);
       if (since) query = query.gt('created_at', since);
       const { data: logs, error } = await query;
       if (error) throw error;
