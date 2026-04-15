@@ -2638,7 +2638,7 @@ async function initAllData(){
   renderTickerLive();
   renderFearGreedLive();
   renderTopMoversPolygon();
-  buildHotPlays();
+  loadHotPlaysWithFallback();
   buildMarkets();
   buildScreener();
   updateMarketStatus();
@@ -2817,14 +2817,62 @@ async function renderTopMoversPolygon(){
 }
 
 /* ── HOT PLAYS ──────────────────────────────────── */
-const hotPlays=[
-  {sym:'NVDA',setup:'Breakout continuation',tf:'15m',score:92,trend:'BULLISH',tag:'Momentum',color:'var(--green)'},
-  {sym:'META',setup:'VWAP reclaim bounce',tf:'1h',score:88,trend:'BULLISH',tag:'Intraday',color:'var(--cyan)'},
-  {sym:'SPY',setup:'Weekly support hold',tf:'1D',score:81,trend:'BULLISH',tag:'Swing',color:'var(--gold)'},
-  {sym:'TSLA',setup:'Short squeeze watch',tf:'5m',score:76,trend:'NEUTRAL',tag:'Scalp',color:'var(--gold)'},
-  {sym:'AMD',setup:'Earnings run-up play',tf:'1W',score:84,trend:'BULLISH',tag:'Position',color:'var(--green)'},
-  {sym:'AMZN',setup:'Flag pattern breakout',tf:'1D',score:79,trend:'BULLISH',tag:'Swing',color:'var(--cyan)'},
-];
+const DEFAULT_HOT_SYMS=['NVDA','META','SPY','TSLA','AMD','AMZN'];
+let hotPlays=[];
+
+function hotPlaySetup(r){
+  if(!r)return{setup:'Scan result',tag:'Scan',tf:'1D'};
+  const d=r.direction||'';const e=r.emaTrend||'';const rsi=r.rsi||0;
+  if(e==='BULL'&&d==='LONG')return{setup:'Trend continuation',tag:'Momentum',tf:'1D'};
+  if(e==='BEAR'&&d==='SHORT')return{setup:'Bearish breakdown',tag:'Short',tf:'1D'};
+  if(rsi<35)return{setup:'Oversold bounce',tag:'Mean Revert',tf:'1h'};
+  if(rsi>70)return{setup:'Overbought fade',tag:'Caution',tf:'1h'};
+  if(d==='LONG')return{setup:'Bullish setup',tag:'Swing',tf:'1D'};
+  if(d==='SHORT')return{setup:'Bearish setup',tag:'Short',tf:'1D'};
+  return{setup:'Scan result',tag:'Scan',tf:'1D'};
+}
+function hotPlayColor(score){
+  if(score>=85)return'var(--green)';
+  if(score>=70)return'var(--cyan)';
+  return'var(--gold)';
+}
+function hotPlayTrend(r){
+  if(!r)return'--';
+  if(r.emaTrend==='BULL')return'BULLISH';
+  if(r.emaTrend==='BEAR')return'BEARISH';
+  return'NEUTRAL';
+}
+
+async function fetchHotPlays(){
+  try{
+    const r=await fetch('/api/bot?type=scanresult');
+    if(!r.ok)return null;
+    const d=await r.json();
+    const results=d.results||[];
+    // Take top 6 by NZR score that have score > 0
+    const top=results.filter(s=>s.nrzScore>0).sort((a,b)=>b.nrzScore-a.nrzScore).slice(0,6);
+    if(top.length===0)return null;
+    hotPlays=top.map(s=>{
+      const info=hotPlaySetup(s);
+      return{sym:s.symbol,setup:info.setup,tf:info.tf,score:s.nrzScore,trend:hotPlayTrend(s),tag:info.tag,color:hotPlayColor(s.nrzScore)};
+    });
+    return hotPlays;
+  }catch(e){console.warn('[hotPlays] fetch error:',e);return null;}
+}
+
+async function loadHotPlaysWithFallback(){
+  const live=await fetchHotPlays();
+  if(!live||live.length===0){
+    // Fallback: show default symbols with quotes only, no score
+    await Promise.allSettled(DEFAULT_HOT_SYMS.map(s=>Q[s]?Promise.resolve():loadQuote(s)));
+    hotPlays=DEFAULT_HOT_SYMS.map(s=>({sym:s,setup:'Awaiting scan data',tf:'--',score:0,trend:'--',tag:'Default',color:'var(--text3)'}));
+  }else{
+    // Load quotes for the live symbols
+    await Promise.allSettled(hotPlays.map(p=>Q[p.sym]?Promise.resolve():loadQuote(p.sym)));
+  }
+  buildHotPlays();
+}
+
 function buildHotPlays(){
   const grid=document.getElementById('hot-plays-grid');
   if(!hotPlays||hotPlays.length===0){
@@ -2836,9 +2884,12 @@ function buildHotPlays(){
     </div></div>`;
     return;
   }
+  grid.style.gridTemplateColumns='repeat(3,1fr)';
   grid.innerHTML=hotPlays.map(p=>{
     const q=Q[p.sym];
     const livePrice=q?`<span style="font-family:var(--font-mono);font-size:11px;color:var(--text2)">${fmt$(q.price)}</span><span style="font-family:var(--font-mono);font-size:11px;color:${q.up?'var(--green)':'var(--red)'};margin-left:6px">${fmtChg(q.change)}</span>`:'';
+    const scoreDisplay=p.score>0?p.score:'--';
+    const scoreWidth=p.score>0?p.score:0;
     return`<div class="stat-card" style="cursor:pointer" onclick="goAnalyze('${p.sym}')">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px">
         <div>
@@ -2853,16 +2904,17 @@ function buildHotPlays(){
       </div>
       <div style="display:flex;align-items:center;gap:12px">
         <div style="flex:1;background:rgba(0,0,0,.08);border-radius:99px;height:4px;overflow:hidden">
-          <div style="width:${p.score}%;height:100%;background:${p.color};border-radius:99px"></div>
+          <div style="width:${scoreWidth}%;height:100%;background:${p.color};border-radius:99px"></div>
         </div>
-        <div style="font-family:var(--font-mono);font-size:13px;font-weight:700;color:${p.color}">${p.score}</div>
+        <div style="font-family:var(--font-mono);font-size:13px;font-weight:700;color:${p.color}">${scoreDisplay}</div>
       </div>
       <div style="margin-top:12px;font-family:var(--font-mono);font-size:10px;color:var(--text3);letter-spacing:.5px">NZR SCORE · <span style="color:${p.color}">${p.trend}</span></div>
       <div style="position:absolute;bottom:16px;right:16px;font-size:12px;color:var(--text3)">Analyze →</div>
     </div>`;
   }).join('');
 }
-buildHotPlays();
+loadHotPlaysWithFallback();
+setInterval(loadHotPlaysWithFallback,15*60*1000);
 
 function goAnalyze(sym){
   showPage('analyzer');
@@ -6655,17 +6707,17 @@ function renderAnalyzerChart(symbol, bars, ema60Array, ema200Array, entryPrice, 
 let _botLogLastSince = null;
 let _botLogPolling   = false;
 
-function appendBotLog(message, type = 'info') {
+function appendBotLog(message, type = 'info', serverTimestamp = null) {
   const el = document.getElementById('bot-log-entries');
   if (!el) return;
 
   const colorMap = { pass: '#4caf50', block: '#f44336', warn: '#ff9800', info: '#9e9e9e' };
   const color = colorMap[type] || '#9e9e9e';
 
-  const now = new Date();
-  const hh  = String(now.getHours()).padStart(2,'0');
-  const mm  = String(now.getMinutes()).padStart(2,'0');
-  const ss  = String(now.getSeconds()).padStart(2,'0');
+  const ts = serverTimestamp ? new Date(serverTimestamp) : new Date();
+  const hh  = String(ts.getHours()).padStart(2,'0');
+  const mm  = String(ts.getMinutes()).padStart(2,'0');
+  const ss  = String(ts.getSeconds()).padStart(2,'0');
   const time = `${hh}:${mm}:${ss}`;
 
   const row = document.createElement('div');
@@ -6684,9 +6736,12 @@ function clearBotLog() {
   if (el) el.innerHTML = '';
   _botLogLastSince = null;
   _botLogSeen.clear();
+  _botLogInitialLoad = true;
 }
 
 const _botLogSeen = new Set();
+
+let _botLogInitialLoad = true;
 
 async function pollBotLog() {
   try {
@@ -6696,14 +6751,19 @@ async function pollBotLog() {
     if (!r.ok) return;
     const d = await r.json();
     if (Array.isArray(d.logs) && d.logs.length > 0) {
+      // On first load: only show entries from the last 2 hours, skip older ones
+      const cutoff = _botLogInitialLoad ? new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString() : null;
       for (const e of d.logs) {
         const key = (e.timestamp || '') + '|' + (e.message || '');
         if (_botLogSeen.has(key)) continue;
         _botLogSeen.add(key);
-        appendBotLog(e.message, e.type);
+        // On initial load, skip entries older than 2 hours
+        if (cutoff && e.timestamp && e.timestamp < cutoff) continue;
+        appendBotLog(e.message, e.type, e.timestamp);
       }
       // Track newest timestamp for next poll (entries arrive in ascending order)
       _botLogLastSince = d.logs[d.logs.length - 1].timestamp;
+      _botLogInitialLoad = false;
       // Cap seen set to prevent unbounded memory growth
       if (_botLogSeen.size > 500) {
         const excess = _botLogSeen.size - 300;

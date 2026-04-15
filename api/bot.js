@@ -3144,25 +3144,33 @@ async function manageOpenPositions(prefetchedPositions, prefetchedAccount) {
 
   pushLog('POS_MGMT_START: ' + positions.length + ' open positions, unrealized=' + (totalUnrealizedPct * 100).toFixed(2) + '%', 'info');
 
-  // ── 2. Load position tracking states from Supabase (skip if no positions) ──
+  // ── 2. Load position tracking states from Supabase (only for positions held >=1d) ──
   const posTrackMap = {};
   if (positions.length > 0) {
     try {
       const sbUrl = process.env.SUPABASE_URL;
       const sbHdrs = _sbHeaders();
       if (sbUrl && sbHdrs) {
-        const keys = positions.map(p => 'position_' + p.symbol);
-        const keyFilter = keys.map(k => `"${k}"`).join(',');
-        const ctrl = new AbortController();
-        const t = setTimeout(() => ctrl.abort(), 1500);
-        let sr;
-        try { sr = await fetch(`${sbUrl}/rest/v1/bot_state?key=in.(${keyFilter})&select=key,value`, { headers: sbHdrs, signal: ctrl.signal }); }
-        finally { clearTimeout(t); }
-        if (sr.ok) {
-          const rows = await sr.json().catch(() => []);
-          if (Array.isArray(rows)) {
-            for (const row of rows) {
-              try { posTrackMap[row.key] = JSON.parse(row.value); } catch {}
+        const oneDayAgo = Date.now() - 86400000;
+        const oldPositions = positions.filter(p => {
+          const created = p.created_at ? new Date(p.created_at).getTime() : Date.now();
+          return created < oneDayAgo;
+        });
+        pushLog('POS_STATE_FETCH: ' + oldPositions.length + '/' + positions.length + ' positions held >=1d, fetching state', 'info');
+        if (oldPositions.length > 0) {
+          const keys = oldPositions.map(p => 'position_' + p.symbol);
+          const keyFilter = keys.map(k => `"${k}"`).join(',');
+          const ctrl = new AbortController();
+          const t = setTimeout(() => ctrl.abort(), 1500);
+          let sr;
+          try { sr = await fetch(`${sbUrl}/rest/v1/bot_state?key=in.(${keyFilter})&select=key,value`, { headers: sbHdrs, signal: ctrl.signal }); }
+          finally { clearTimeout(t); }
+          if (sr.ok) {
+            const rows = await sr.json().catch(() => []);
+            if (Array.isArray(rows)) {
+              for (const row of rows) {
+                try { posTrackMap[row.key] = JSON.parse(row.value); } catch {}
+              }
             }
           }
         }

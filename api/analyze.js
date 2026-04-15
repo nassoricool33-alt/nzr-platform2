@@ -138,11 +138,8 @@ module.exports = async function handler(req, res) {
 
     if (!result.success) {
       console.error('[analyze] Anthropic error after retries:', result.status, result.error);
-      return res.status(result.status || 500).json({
-        error: 'Anthropic API error',
-        detail: result.error,
-        type: result.type,
-        status: result.status,
+      return res.status(503).json({
+        error: 'AI analysis temporarily unavailable. Please try again in 30 seconds.',
       });
     }
 
