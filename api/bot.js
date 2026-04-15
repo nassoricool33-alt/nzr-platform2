@@ -4560,6 +4560,8 @@ module.exports = async function handler(req, res) {
       pushLog('POS_MGMT_ERROR: ' + e.message, 'warn');
     }
 
+    const scanStartTime = Date.now();
+
     // Update P&L for any closed trades (fire-and-forget — don't block scan)
     updateClosedTrades().catch(e => pushLog('CLOSED_TRADES_ERR: ' + e.message, 'warn'));
 
@@ -5002,9 +5004,9 @@ module.exports = async function handler(req, res) {
     const BATCH_SIZE = 5;
     for (let i = 0; i < scanSlice.length; i += BATCH_SIZE) {
       // Scan always gets at least 10s; also respect overall 28s hard limit
-      const scanElapsed = Date.now() - scanLoopStart;
+      const scanElapsed = Date.now() - scanStartTime;
       const totalElapsed = Date.now() - startTime;
-      if (scanElapsed > 10000 || totalElapsed > 28000) {
+      if (scanElapsed > 20000 || totalElapsed > 55000) {
         pushLog('TIME_BUDGET: stopping early at batch starting ' + scanSlice[i] + ' (scan=' + scanElapsed + 'ms, total=' + totalElapsed + 'ms)', 'warn');
         break;
       }
