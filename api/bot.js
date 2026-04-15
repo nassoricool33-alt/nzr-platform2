@@ -3800,6 +3800,9 @@ async function executeSignal(signal, newsContext = null) {
       );
       // Write to journal with full error logging
       try {
+        if (!supabase) {
+          pushLog('JOURNAL_SKIP: supabase not configured — ' + signal.symbol + ' OrderID=' + orderId, 'warn');
+        } else {
         const journalPayload = {
           user_id: null,
           symbol: signal.symbol,
@@ -3827,29 +3830,36 @@ async function executeSignal(signal, newsContext = null) {
                  ' | Stop=$' + (stopPrice ? stopPrice.toFixed(2) : '0') +
                  ' | Target=$' + (target1 ? target1.toFixed(2) : '0') +
                  ' | Qty=' + (qty || 0) +
-                 ' | OrderID=' + (orderData.id || 'unknown')
+                 ' | OrderID=' + orderId
         };
 
-        // Dedup: skip if this Alpaca order ID already exists in journal
-        const { data: existingEntry } = await supabase
-          .from('journal')
-          .select('id')
-          .like('notes', '%OrderID=' + (orderData.id || 'unknown') + '%')
-          .limit(1);
-        if (existingEntry && existingEntry.length > 0) {
-          pushLog('JOURNAL_DEDUP: ' + signal.symbol + ' OrderID=' + orderData.id + ' already exists, skipping', 'info');
-        } else {
-        const { data: journalData, error: journalError } = await supabase
-          .from('journal')
-          .insert(journalPayload)
-          .select();
-
-        if (journalError) {
-          pushLog('JOURNAL_ERROR: ' + signal.symbol + ' — code=' + journalError.code + ' msg=' + journalError.message, 'warn');
-        } else {
-          pushLog('JOURNAL_SUCCESS: ' + signal.symbol + ' trade logged id=' + (journalData?.[0]?.id || 'unknown'), 'pass');
+        // Dedup: only check if we have a real Alpaca order ID (not 'unknown')
+        let skipDedup = (orderId === 'unknown');
+        if (!skipDedup) {
+          const { data: existingEntry } = await supabase
+            .from('journal')
+            .select('id')
+            .like('notes', '%OrderID=' + orderId + '%')
+            .limit(1);
+          if (existingEntry && existingEntry.length > 0) {
+            pushLog('JOURNAL_DEDUP: ' + signal.symbol + ' OrderID=' + orderId + ' already exists, skipping', 'info');
+            skipDedup = true;
+          }
         }
-        } // end dedup else
+
+        if (!skipDedup) {
+          const { data: journalData, error: journalError } = await supabase
+            .from('journal')
+            .insert(journalPayload)
+            .select();
+
+          if (journalError) {
+            pushLog('JOURNAL_ERROR: ' + signal.symbol + ' — code=' + journalError.code + ' msg=' + journalError.message, 'warn');
+          } else {
+            pushLog('JOURNAL_SUCCESS: ' + signal.symbol + ' trade logged id=' + (journalData?.[0]?.id || 'unknown'), 'pass');
+          }
+        }
+        } // end supabase check
       } catch(je) {
         console.error('[JOURNAL] Exception:', je.message);
         pushLog('JOURNAL_EXCEPTION: ' + je.message, 'warn');
@@ -6207,26 +6217,31 @@ module.exports = async function handler(req, res) {
 
   pushLog(`SIGNAL_PASS: ${mode.toUpperCase()} ${direction} ${symbol} score=${composite.score} entry=${limitPrice} stop=${stopLoss} T1=${target}`, 'pass');
 
-  // ── Fire-and-forget: submit order to Alpaca (non-blocking, errors caught inside)
-  executeSignal({
-    symbol,
-    direction,
-    mode,
-    strategy:     strategyTag,
-    nrzScore:     composite.score,
-    entryPrice:   limitPrice,
-    stopPrice:    stopLoss,
-    target1:      target,
-    target2:      target2 ?? null,
-    positionSize: adaptiveMax,
-    atr:          atrValue,
-    rsi:          rsiValueRaw,
-    macdHist:     bd.macdCross != null ? bd.macdCross : null,
-    emaTrend:     dailyTrend ? (dailyTrend.bullish ? 'BULL' : 'BEAR') : null,
-    emaCross:     dailyTrend ? (dailyTrend.ema60 > dailyTrend.ema200 ? 'GOLDEN' : 'DEATH') : null,
-    sectorEtf:    symbolSectorEtf || null,
-    vixLevel:     regime.vix != null ? regime.vix : null,
-  }).catch(err => console.error('[bot] executeSignal unexpected error:', err.message));
+  // ── Await executeSignal so journal insert completes before response ──
+  let execResult = { executed: false };
+  try {
+    execResult = await executeSignal({
+      symbol,
+      direction,
+      mode,
+      strategy:     strategyTag,
+      nrzScore:     composite.score,
+      entryPrice:   limitPrice,
+      stopPrice:    stopLoss,
+      target1:      target,
+      target2:      target2 ?? null,
+      positionSize: adaptiveMax,
+      atr:          atrValue,
+      rsi:          rsiValueRaw,
+      macdHist:     bd.macdCross != null ? bd.macdCross : null,
+      emaTrend:     dailyTrend ? (dailyTrend.bullish ? 'BULL' : 'BEAR') : null,
+      emaCross:     dailyTrend ? (dailyTrend.ema60 > dailyTrend.ema200 ? 'GOLDEN' : 'DEATH') : null,
+      sectorEtf:    symbolSectorEtf || null,
+      vixLevel:     regime.vix != null ? regime.vix : null,
+    });
+  } catch(err) {
+    console.error('[bot] executeSignal unexpected error:', err.message);
+  }
 
   return res.status(200).json({
     approved: true,
