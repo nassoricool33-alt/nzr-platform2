@@ -3095,7 +3095,7 @@ async function manageOpenPositions(prefetchedPositions, prefetchedAccount) {
   const polyKey = process.env.POLYGON_API_KEY;
   const raceFetchFast = (url) => Promise.race([
     fetch(url).then(r => r.ok ? r.json() : null),
-    new Promise(resolve => setTimeout(() => resolve(null), 2000))
+    new Promise(resolve => setTimeout(() => resolve(null), 1500))
   ]).catch(() => null);
 
   // ── 1. Use pre-fetched positions + account, or fetch if not provided ──────
@@ -3202,8 +3202,8 @@ async function manageOpenPositions(prefetchedPositions, prefetchedAccount) {
     needsRsi.push(symbol);
   }
 
-  // Cap at 5 RSI fetches per cycle to keep position management fast
-  const MAX_RSI_FETCHES = 5;
+  // Cap at 3 RSI fetches per cycle to keep position management fast
+  const MAX_RSI_FETCHES = 3;
   const rsiSlice = needsRsi.slice(0, MAX_RSI_FETCHES);
   if (needsRsi.length > MAX_RSI_FETCHES) {
     pushLog('POS_RSI_CAPPED: ' + needsRsi.length + ' need RSI but capped to ' + MAX_RSI_FETCHES, 'info');
@@ -3517,53 +3517,81 @@ async function updateClosedTrades() {
 
     pushLog('UPDATE_PNL: ' + openEntries.length + ' open journal entries to check against ' + sellOrders.length + ' sells', 'info');
 
+    // Debug: log first journal entry columns for first sell symbol
+    if (sellOrders.length > 0 && openEntries.length > 0) {
+      const firstSellSym = sellOrders[0].symbol;
+      const debugEntry = openEntries.find(e => (e.symbol || '').toUpperCase() === (firstSellSym || '').toUpperCase());
+      pushLog('UPDATE_PNL_DEBUG: first sell symbol=' + firstSellSym + ' journal match=' + (debugEntry ? JSON.stringify(debugEntry) : 'NONE') + ' all journal symbols=[' + [...new Set(openEntries.map(e => e.symbol))].join(',') + ']', 'info');
+    }
+
     let updated = 0;
-    const matchedSellIds = new Set();
+    const matchedEntryIds = new Set();
 
-    for (const entry of openEntries) {
-      // Match sell to journal entry: same symbol, filled after entry date
-      // Use >= comparison on the date portion so same-day trades match
-      const entryDateStr = entry.trade_date || '';
-      const matchingSell = sellOrders
-        .filter(o =>
-          o.symbol === entry.symbol &&
-          !matchedSellIds.has(o.id) &&
-          (o.filled_at || '').slice(0, 10) >= entryDateStr
-        )
-        .sort((a, b) => (a.filled_at || '').localeCompare(b.filled_at || ''))[0];
+    for (const sellOrder of sellOrders) {
+      const sellSymbol = (sellOrder.symbol || '').toUpperCase().trim();
+      const sellPrice = parseFloat(sellOrder.filled_avg_price);
 
-      if (matchingSell) {
-        matchedSellIds.add(matchingSell.id);
-        const entryPrice = parseFloat(entry.entry_price);
-        const exitPrice = parseFloat(matchingSell.filled_avg_price);
-        const pnlPct = ((exitPrice - entryPrice) / entryPrice * 100);
+      // Find journal entries for this symbol (case-insensitive)
+      const candidates = openEntries.filter(e =>
+        !matchedEntryIds.has(e.id) &&
+        (e.symbol || '').toUpperCase().trim() === sellSymbol
+      );
 
-        // Determine exit reason from the sell order's client_order_id
-        const sellCid = matchingSell.client_order_id || '';
-        let exitReason = 'BRACKET_FILL';
-        if (sellCid.includes('AUTOCLOSE')) exitReason = 'AUTOCLOSE';
-        else if (sellCid.includes('GAPPROT')) exitReason = 'GAP_PROTECTION';
-        else if (sellCid.includes('CLOSE')) exitReason = 'MANAGED_CLOSE';
+      pushLog('MATCH_ATTEMPT: ' + sellSymbol + ' sell=$' + sellPrice.toFixed(2) + ' candidates=' + candidates.length + (candidates.length > 0 ? ' first_entry_price=$' + candidates[0].entry_price : ''), 'info');
 
-        const entryTime = new Date(entry.created_at || entry.trade_date).getTime();
-        const holdMinutes = entryTime > 0 ? Math.round((new Date(matchingSell.filled_at).getTime() - entryTime) / 60000) : null;
+      if (candidates.length === 0) continue;
 
-        const { error: updateError } = await supabase
-          .from('journal')
-          .update({
-            exit_price: exitPrice,
-            pnl_pct: parseFloat(pnlPct.toFixed(2)),
-            exit_reason: exitReason,
-            hold_duration_minutes: holdMinutes,
-          })
-          .eq('id', entry.id);
-
-        if (!updateError) {
-          updated++;
-          pushLog('PNL_UPDATED: ' + entry.symbol + ' entry=$' + entryPrice + ' exit=$' + exitPrice + ' pnl=' + pnlPct.toFixed(2) + '% reason=' + exitReason, pnlPct > 0 ? 'pass' : 'warn');
-        } else {
-          pushLog('PNL_UPDATE_ERROR: ' + entry.symbol + ' — ' + updateError.message, 'warn');
+      // Match on closest entry_price within 10% tolerance
+      let bestMatch = null;
+      let bestDiff = Infinity;
+      for (const entry of candidates) {
+        const ep = parseFloat(entry.entry_price);
+        if (!ep || ep <= 0) continue;
+        const diff = Math.abs(ep - sellPrice) / ep;
+        if (diff <= 0.10 && diff < bestDiff) {
+          bestDiff = diff;
+          bestMatch = entry;
         }
+      }
+
+      // If no 10% match, fall back to closest entry_price overall
+      if (!bestMatch) {
+        for (const entry of candidates) {
+          const ep = parseFloat(entry.entry_price);
+          if (!ep || ep <= 0) continue;
+          const diff = Math.abs(ep - sellPrice) / ep;
+          if (diff < bestDiff) {
+            bestDiff = diff;
+            bestMatch = entry;
+          }
+        }
+      }
+
+      if (!bestMatch) continue;
+
+      matchedEntryIds.add(bestMatch.id);
+      const entryPrice = parseFloat(bestMatch.entry_price);
+      const exitPrice = sellPrice;
+      const pnlPct = ((exitPrice - entryPrice) / entryPrice * 100);
+
+      const entryTime = new Date(bestMatch.created_at || bestMatch.trade_date).getTime();
+      const holdMinutes = entryTime > 0 ? Math.round((new Date(sellOrder.filled_at).getTime() - entryTime) / 60000) : null;
+
+      const { error: updateError } = await supabase
+        .from('journal')
+        .update({
+          exit_price: exitPrice,
+          pnl_pct: parseFloat(pnlPct.toFixed(2)),
+          exit_reason: 'CLOSED',
+          hold_duration_minutes: holdMinutes,
+        })
+        .eq('id', bestMatch.id);
+
+      if (!updateError) {
+        updated++;
+        pushLog('PNL_UPDATED: ' + bestMatch.symbol + ' entry=$' + entryPrice + ' exit=$' + exitPrice + ' pnl=' + pnlPct.toFixed(2) + '% hold=' + holdMinutes + 'min', pnlPct > 0 ? 'pass' : 'warn');
+      } else {
+        pushLog('PNL_UPDATE_ERROR: ' + bestMatch.symbol + ' — ' + updateError.message, 'warn');
       }
     }
 
