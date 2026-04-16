@@ -2631,9 +2631,13 @@ async function getOptimizedStrategyWeights() {
       } else if (avgPnl < -1) {
         rawWeights[s] = 0.05;          // severely underperforming — cap
       } else {
-        let score = winRate * avgPnl;
-        if (winRate > 0.6 && avgPnl > 1) score *= 1.5; // outperformance boost
-        rawWeights[s] = Math.max(0.01, score);          // floor so it stays in the mix
+        // Score = 70% win rate + 30% avg P&L (normalized)
+        // Win rate dominates so a 62.5% winner isn't crushed by slightly negative avg P&L
+        const winScore = winRate;                          // 0.0 to 1.0
+        const pnlScore = Math.max(0, (avgPnl + 5) / 10);  // normalize: -5% = 0, 0% = 0.5, +5% = 1.0
+        let score = (winScore * 0.7) + (pnlScore * 0.3);
+        if (winRate > 0.6 && avgPnl > 0.5) score *= 1.3;  // outperformance boost
+        rawWeights[s] = Math.max(0.05, score);             // floor at 5%
       }
     }
 
