@@ -2850,11 +2850,11 @@ async function fetchHotPlays(){
     const d=await r.json();
     const results=d.results||[];
     // Take top 6 by NZR score that have score > 0
-    const top=results.filter(s=>s.nrzScore>0).sort((a,b)=>b.nrzScore-a.nrzScore).slice(0,6);
+    const top=results.filter(s=>(s.nrzScore||s.score||0)>0).sort((a,b)=>(b.nrzScore||b.score||0)-(a.nrzScore||a.score||0)).slice(0,6);
     if(top.length===0)return null;
     hotPlays=top.map(s=>{
       const info=hotPlaySetup(s);
-      return{sym:s.symbol,setup:info.setup,tf:info.tf,score:s.nrzScore,trend:hotPlayTrend(s),tag:info.tag,color:hotPlayColor(s.nrzScore)};
+      return{sym:s.symbol,setup:info.setup,tf:info.tf,score:s.nrzScore||s.score||0,trend:hotPlayTrend(s),tag:info.tag,color:hotPlayColor(s.nrzScore||s.score||0)};
     });
     return hotPlays;
   }catch(e){console.warn('[hotPlays] fetch error:',e);return null;}
@@ -4278,10 +4278,9 @@ function renderBotSummary(data){
   const closed=botTrades.filter(r=>r.exit_price!=null);
   const wins=closed.filter(r=>Number(r.pnl_pct)>0);
   const winRate=closed.length>0?((wins.length/closed.length)*100).toFixed(0):'-';
-  let totalPnlPct=0;let totalPnlDollars=0;let bestPnl=-Infinity;let worstPnl=Infinity;let bestSym='—';let worstSym='—';
+  let totalPnlDollars=0;let bestPnl=-Infinity;let worstPnl=Infinity;let bestSym='—';let worstSym='—';
   closed.forEach(r=>{
     const p=Number(r.pnl_pct);
-    totalPnlPct+=p;
     const entry=Number(r.entry_price)||0;
     const qty=r.notes?(r.notes.match(/Qty=(\d+)/)||[])[1]:null;
     if(qty&&entry)totalPnlDollars+=(p/100)*entry*parseInt(qty,10);
@@ -4289,6 +4288,8 @@ function renderBotSummary(data){
     if(p<worstPnl){worstPnl=p;worstSym=r.symbol;}
   });
 
+  const startingCapital=101000;
+  const totalPnlPct=(totalPnlDollars/startingCapital)*100;
   const pnlColor=totalPnlPct>=0?'var(--green)':'var(--red)';
   bar.style.display='grid';
   bar.innerHTML=`
@@ -6753,6 +6754,7 @@ async function pollBotLog() {
     if (Array.isArray(d.logs) && d.logs.length > 0) {
       // On first load: only show entries from the last 2 hours, skip older ones
       const cutoff = _botLogInitialLoad ? new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString() : null;
+      let newestShown = null;
       for (const e of d.logs) {
         const key = (e.timestamp || '') + '|' + (e.message || '');
         if (_botLogSeen.has(key)) continue;
@@ -6760,9 +6762,9 @@ async function pollBotLog() {
         // On initial load, skip entries older than 2 hours
         if (cutoff && e.timestamp && e.timestamp < cutoff) continue;
         appendBotLog(e.message, e.type, e.timestamp);
+        newestShown = e.timestamp;
       }
-      // Track newest timestamp for next poll (entries arrive in ascending order)
-      _botLogLastSince = d.logs[d.logs.length - 1].timestamp;
+      if (newestShown) _botLogLastSince = newestShown;
       _botLogInitialLoad = false;
       // Cap seen set to prevent unbounded memory growth
       if (_botLogSeen.size > 500) {
