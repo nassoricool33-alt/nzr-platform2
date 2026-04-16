@@ -3564,13 +3564,6 @@ async function updateClosedTrades() {
 
     pushLog('UPDATE_PNL: ' + openEntries.length + ' open journal entries to check against ' + sellOrders.length + ' sells', 'info');
 
-    // Debug: log first journal entry columns for first sell symbol
-    if (sellOrders.length > 0 && openEntries.length > 0) {
-      const firstSellSym = sellOrders[0].symbol;
-      const debugEntry = openEntries.find(e => (e.symbol || '').toUpperCase() === (firstSellSym || '').toUpperCase());
-      pushLog('UPDATE_PNL_DEBUG: first sell symbol=' + firstSellSym + ' journal match=' + (debugEntry ? JSON.stringify(debugEntry) : 'NONE') + ' all journal symbols=[' + [...new Set(openEntries.map(e => e.symbol))].join(',') + ']', 'info');
-    }
-
     let updated = 0;
     const matchedEntryIds = new Set();
 
