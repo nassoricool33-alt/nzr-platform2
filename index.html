@@ -6754,17 +6754,17 @@ async function pollBotLog() {
     if (Array.isArray(d.logs) && d.logs.length > 0) {
       // On first load: only show entries from the last 2 hours, skip older ones
       const cutoff = _botLogInitialLoad ? new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString() : null;
-      let newestShown = null;
+      let newest = null;
       for (const e of d.logs) {
+        if (!newest || e.timestamp > newest) newest = e.timestamp;
         const key = (e.timestamp || '') + '|' + (e.message || '');
         if (_botLogSeen.has(key)) continue;
         _botLogSeen.add(key);
         // On initial load, skip entries older than 2 hours
         if (cutoff && e.timestamp && e.timestamp < cutoff) continue;
         appendBotLog(e.message, e.type, e.timestamp);
-        newestShown = e.timestamp;
       }
-      if (newestShown) _botLogLastSince = newestShown;
+      if (newest) _botLogLastSince = newest;
       _botLogInitialLoad = false;
       // Cap seen set to prevent unbounded memory growth
       if (_botLogSeen.size > 500) {
@@ -6943,8 +6943,8 @@ async function loadStrategyWeights() {
         : 'n/a';
       const tradeStr = ps.trades > 0 ? `${ps.trades} trades` : '0 trades';
       const badge = insufficient
-        ? '<span style="font-size:9px;color:var(--text3);margin-left:6px">insufficient data</span>'
-        : w <= 0.06
+        ? '<span style="font-size:9px;color:var(--text3);margin-left:6px">needs data</span>'
+        : (ps.winRate != null && ps.winRate < 45 && ps.avgPnl != null && ps.avgPnl < -1)
           ? '<span style="font-size:9px;color:#f44336;margin-left:6px">underperforming</span>'
           : '';
 

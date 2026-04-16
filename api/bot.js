@@ -2567,6 +2567,7 @@ async function getOptimizedStrategyWeights() {
       .from('journal')
       .select('symbol, pnl_pct, notes, trade_date')
       .not('pnl_pct', 'is', null)
+      .or('hold_duration_minutes.is.null,hold_duration_minutes.gte.0')
       .order('trade_date', { ascending: false })
       .limit(50);
 
@@ -2639,7 +2640,13 @@ async function getOptimizedStrategyWeights() {
         // expectancy > 0 = profitable strategy, < 0 = losing strategy
         // Map to weight: floor at 0.05, no ceiling (let winners grow)
         // Add 0.5 offset so expectancy of 0 = neutral weight of 0.5
-        const score = Math.max(0.05, expectancy + 0.5);
+        let score = Math.max(0.05, expectancy + 0.5);
+        // Win-rate floor: high win-rate strategies never get crushed
+        const wrFloor = winRate >= 0.6 ? 0.25
+                      : winRate >= 0.5 ? 0.15
+                      : winRate >= 0.4 ? 0.10
+                      : 0.05;
+        score = Math.max(score, wrFloor);
         rawWeights[s] = score;
       }
     }
@@ -3433,13 +3440,14 @@ async function manageOpenPositions(prefetchedPositions, prefetchedAccount) {
                 if (journalEntries && journalEntries.length > 0) {
                   const entry = journalEntries[0];
                   const pnlPct = ((currentPrice - parseFloat(entry.entry_price)) / parseFloat(entry.entry_price) * 100).toFixed(2);
-                  const entryTime = new Date(entry.created_at || entry.trade_date).getTime();
+                  const entryTime = new Date(entry.created_at).getTime();
                   const holdMinutes = entryTime > 0 ? Math.round((Date.now() - entryTime) / 60000) : null;
+                  const safeHoldMinutes = holdMinutes > 0 ? holdMinutes : null;
                   await supabase.from('journal').update({
                     exit_price: currentPrice,
                     pnl_pct: parseFloat(pnlPct),
                     exit_reason: reason.split(':')[0].trim(),
-                    hold_duration_minutes: holdMinutes,
+                    hold_duration_minutes: safeHoldMinutes,
                     notes: (entry.notes || '') + ' | CLOSED: ' + reason
                   }).eq('id', entry.id);
                   pushLog('JOURNAL_EXIT_UPDATED: ' + symbol + ' pnl=' + pnlPct + '% reason=' + reason.split(':')[0] + ' held=' + holdMinutes + 'min', 'info');
@@ -3612,8 +3620,9 @@ async function updateClosedTrades() {
       const exitPrice = sellPrice;
       const pnlPct = ((exitPrice - entryPrice) / entryPrice * 100);
 
-      const entryTime = new Date(bestMatch.created_at || bestMatch.trade_date).getTime();
+      const entryTime = new Date(bestMatch.created_at).getTime();
       const holdMinutes = entryTime > 0 ? Math.round((new Date(sellOrder.filled_at).getTime() - entryTime) / 60000) : null;
+      const safeHoldMinutes = holdMinutes > 0 ? holdMinutes : null;
 
       const { error: updateError } = await supabase
         .from('journal')
@@ -3621,7 +3630,7 @@ async function updateClosedTrades() {
           exit_price: exitPrice,
           pnl_pct: parseFloat(pnlPct.toFixed(2)),
           exit_reason: 'CLOSED',
-          hold_duration_minutes: holdMinutes,
+          hold_duration_minutes: safeHoldMinutes,
         })
         .eq('id', bestMatch.id);
 
@@ -5203,7 +5212,7 @@ module.exports = async function handler(req, res) {
     try {
       const since = req.query.since;
       // Fetch from Supabase: ascending order so frontend can append chronologically
-      let query = supabase.from('bot_logs').select('*').order('created_at', { ascending: false }).limit(200);
+      let query = supabase.from('bot_logs').select('*').order('created_at', { ascending: true }).limit(200);
       if (since) query = query.gt('created_at', since);
       const { data: logs, error } = await query;
       if (error) throw error;
