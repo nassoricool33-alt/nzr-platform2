@@ -2599,7 +2599,7 @@ async function getOptimizedStrategyWeights() {
 
     // ── Aggregate per strategy ──────────────────────────────────────────────
     const agg = {};
-    for (const s of STRATEGIES) agg[s] = { wins: 0, total: 0, sumPnl: 0 };
+    for (const s of STRATEGIES) agg[s] = { wins: 0, losses: 0, total: 0, sumPnl: 0, sumWinPnl: 0, sumLossPnl: 0 };
 
     for (const t of trades) {
       const pnl = parseFloat(t.pnl_pct);
@@ -2608,7 +2608,8 @@ async function getOptimizedStrategyWeights() {
       if (!agg[s]) continue;
       agg[s].total++;
       agg[s].sumPnl += pnl;
-      if (pnl > 0) agg[s].wins++;
+      if (pnl > 0) { agg[s].wins++; agg[s].sumWinPnl += pnl; }
+      else { agg[s].losses++; agg[s].sumLossPnl += pnl; }
     }
 
     // ── Compute raw weights ─────────────────────────────────────────────────
@@ -2628,16 +2629,18 @@ async function getOptimizedStrategyWeights() {
 
       if (st.total < 5) {
         rawWeights[s] = 0.2;           // insufficient data — neutral seed
-      } else if (avgPnl < -1) {
-        rawWeights[s] = 0.05;          // severely underperforming — cap
       } else {
-        // Score = 70% win rate + 30% avg P&L (normalized)
-        // Win rate dominates so a 62.5% winner isn't crushed by slightly negative avg P&L
-        const winScore = winRate;                          // 0.0 to 1.0
-        const pnlScore = Math.max(0, (avgPnl + 5) / 10);  // normalize: -5% = 0, 0% = 0.5, +5% = 1.0
-        let score = (winScore * 0.7) + (pnlScore * 0.3);
-        if (winRate > 0.6 && avgPnl > 0.5) score *= 1.3;  // outperformance boost
-        rawWeights[s] = Math.max(0.05, score);             // floor at 5%
+        // Real expectancy = (winRate × avgWin) + (lossRate × avgLoss)
+        // avgLoss is negative so this gives expected P&L per trade
+        const avgWin  = st.wins   > 0 ? st.sumWinPnl  / st.wins   : 0;
+        const avgLoss = st.losses > 0 ? st.sumLossPnl / st.losses : 0;
+        const lossRate = 1 - winRate;
+        const expectancy = (winRate * avgWin) + (lossRate * avgLoss);
+        // expectancy > 0 = profitable strategy, < 0 = losing strategy
+        // Map to weight: floor at 0.05, no ceiling (let winners grow)
+        // Add 0.5 offset so expectancy of 0 = neutral weight of 0.5
+        const score = Math.max(0.05, expectancy + 0.5);
+        rawWeights[s] = score;
       }
     }
 
