@@ -1838,6 +1838,7 @@ async function runFullScan(testMode = false) {
           emaCross:   (ema60v != null && ema200v != null) ? (ema60v > ema200v ? 'GOLDEN' : 'DEATH') : null,
           vixLevel:   regime.vix != null ? regime.vix : null,
           sectorEtf:  symbolSector || null,
+          volumeVsAvg: volumeConfirmed ? 'ABOVE' : 'BELOW',
         };
 
         let execResult;
@@ -3435,7 +3436,7 @@ async function manageOpenPositions(prefetchedPositions, prefetchedAccount) {
                   .select('*')
                   .eq('symbol', symbol)
                   .is('exit_price', null)
-                  .order('trade_date', { ascending: false })
+                  .order('created_at', { ascending: false })
                   .limit(1);
                 if (journalEntries && journalEntries.length > 0) {
                   const entry = journalEntries[0];
@@ -4224,7 +4225,13 @@ module.exports = async function handler(req, res) {
   const ip = req.headers['x-forwarded-for'] || req.socket?.remoteAddress || 'unknown';
   if (!checkRate(ip)) return res.status(429).json({ error: 'Rate limit reached' });
 
+  const secret = req.query.secret || req.headers['x-internal-secret'];
+  const validSecret = process.env.INTERNAL_API_SECRET;
+  const sensitiveTypes = ['scan','backfill','updatepnl','emergency','weights','memory'];
   const type   = (req.query.type || '').toLowerCase();
+  if (validSecret && sensitiveTypes.includes(type) && secret !== validSecret) {
+    return res.status(401).json({ error: 'unauthorized' });
+  }
   const action = (req.query.action || req.body?.action || '').toLowerCase();
   console.log('[BOT] type=' + (type || 'none') + ' action=' + (action || 'none'));
 
