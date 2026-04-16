@@ -2644,6 +2644,29 @@ async function getOptimizedStrategyWeights() {
       weights[s] = total > 0 ? parseFloat((rawWeights[s] / total).toFixed(4)) : 0.2;
     }
 
+    // ── Clamp low-data strategies (< 3 closed trades) to [5%, 15%] ────────
+    const MIN_TRADES_FOR_DYNAMIC = 3;
+    const LOW_DATA_FLOOR = 0.05;
+    const LOW_DATA_CEIL  = 0.15;
+    const lowData  = STRATEGIES.filter(s => agg[s].total < MIN_TRADES_FOR_DYNAMIC);
+    const highData = STRATEGIES.filter(s => agg[s].total >= MIN_TRADES_FOR_DYNAMIC);
+
+    if (lowData.length > 0 && highData.length > 0) {
+      let surplus = 0;
+      for (const s of lowData) {
+        const clamped = Math.min(LOW_DATA_CEIL, Math.max(LOW_DATA_FLOOR, weights[s]));
+        surplus += weights[s] - clamped;
+        weights[s] = clamped;
+      }
+      // Redistribute surplus (or deficit) proportionally among dynamic strategies
+      const highSum = highData.reduce((a, s) => a + weights[s], 0);
+      if (highSum > 0) {
+        for (const s of highData) {
+          weights[s] = parseFloat((weights[s] + surplus * (weights[s] / highSum)).toFixed(4));
+        }
+      }
+    }
+
     const result = {
       ...weights,
       perfStats,
