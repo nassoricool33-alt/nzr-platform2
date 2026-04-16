@@ -4220,9 +4220,11 @@ module.exports = async function handler(req, res) {
 
   const secret = req.query.secret || req.headers['x-internal-secret'];
   const validSecret = process.env.INTERNAL_API_SECRET;
+  const origin = req.headers['origin'] || req.headers['referer'] || '';
+  const isFromFrontend = origin.includes('nzr-platform2.vercel.app') || origin.includes('localhost');
   const sensitiveTypes = ['scan','backfill','updatepnl','emergency','weights','memory'];
   const type   = (req.query.type || '').toLowerCase();
-  if (validSecret && sensitiveTypes.includes(type) && secret !== validSecret) {
+  if (validSecret && sensitiveTypes.includes(type) && secret !== validSecret && !isFromFrontend) {
     return res.status(401).json({ error: 'unauthorized' });
   }
   const action = (req.query.action || req.body?.action || '').toLowerCase();
