@@ -4221,7 +4221,7 @@ module.exports = async function handler(req, res) {
   const secret = req.query.secret || req.headers['x-internal-secret'];
   const validSecret = process.env.INTERNAL_API_SECRET;
   const origin = req.headers['origin'] || req.headers['referer'] || '';
-  const isFromFrontend = origin.includes('nzr-platform2.vercel.app') || origin.includes('localhost');
+  const isFromFrontend = !origin || origin.includes('nzr-platform2.vercel.app') || origin.includes('localhost');
   const sensitiveTypes = ['scan','backfill','updatepnl','emergency','weights','memory'];
   const type   = (req.query.type || '').toLowerCase();
   if (validSecret && sensitiveTypes.includes(type) && secret !== validSecret && !isFromFrontend) {
@@ -4546,29 +4546,11 @@ module.exports = async function handler(req, res) {
 
   // ── FULL SCAN (synchronous — 20s budget, 15 symbols/cycle rotation) ────────
   if (type === 'scan') {
-    console.log('[BOT] SCAN route matched');
-    // Distributed lock via Supabase (works across Vercel instances)
-    const lockKey = 'scan_lock';
-    if (supabase) {
-      const { data: existingLock } = await supabase
-        .from('bot_state')
-        .select('value, updated_at')
-        .eq('key', lockKey)
-        .single()
-        .catch(() => ({ data: null }));
-
-      if (existingLock?.value === 'locked') {
-        const lockAge = Date.now() - new Date(existingLock.updated_at).getTime();
-        if (lockAge < 55000) {
-          pushLog('SCAN_LOCK: another instance is running, skipping', 'warn');
-          return res.status(200).json({ success: false, message: 'scan already in progress' });
-        }
-      }
-
-      await supabase.from('bot_state').upsert({
-        key: lockKey, value: 'locked', updated_at: new Date().toISOString()
-      });
+    if (global.scanInProgress) {
+      return res.json({ success: true, message: 'Scan already in progress', skipped: true });
     }
+    global.scanInProgress = true;
+    console.log('[BOT] SCAN route matched');
     const startTime = Date.now();
     const capital = capitalAmount && capitalAmount > 0 ? capitalAmount : await getCapital();
     if (!capitalAmount || capitalAmount <= 0) {
@@ -4589,7 +4571,7 @@ module.exports = async function handler(req, res) {
 
     if (!isMarketOpen) {
       pushLog('MARKET_CLOSED: ' + etHour + ':' + String(etMinute).padStart(2,'0') + ' ET', 'info');
-      if (supabase) await supabase.from('bot_state').upsert({ key: lockKey, value: 'unlocked', updated_at: new Date().toISOString() }).catch(() => {});
+      global.scanInProgress = false;
       return res.status(200).json({ success: true, message: 'Market closed', symbolsScanned: 0, signalsPassed: 0, tradesPlaced: 0, duration: '0ms' });
     }
 
@@ -4763,7 +4745,7 @@ module.exports = async function handler(req, res) {
     // Hard gate: if cache is mostly empty, abort cycle
     if (Object.keys(priceCache).length < 5) {
       pushLog('PRICE_CACHE_FAILED: only ' + Object.keys(priceCache).length + ' symbols cached — aborting cycle', 'block');
-      if (supabase) await supabase.from('bot_state').upsert({ key: lockKey, value: 'unlocked', updated_at: new Date().toISOString() }).catch(() => {});
+      global.scanInProgress = false;
       return res.status(200).json({ success: false, error: 'PRICE_CACHE_FAILED', cached: Object.keys(priceCache).length });
     }
 
@@ -5189,7 +5171,7 @@ module.exports = async function handler(req, res) {
       writeBotState('next_scan', new Date(Date.now() + 15 * 60 * 1000).toISOString());
     } catch(_) {}
 
-    if (supabase) await supabase.from('bot_state').upsert({ key: lockKey, value: 'unlocked', updated_at: new Date().toISOString() }).catch(() => {});
+    global.scanInProgress = false;
     return res.status(200).json({
       success: true,
       symbolsScanned,
