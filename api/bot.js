@@ -4468,6 +4468,27 @@ module.exports = async function handler(req, res) {
       const days = Math.min(365, Math.max(1, parseInt(req.query.days || '30', 10)));
       const errors = [];
 
+      // Robust strategy parser: prefer the strategy column, fall back to notes.
+      // Splits notes on '|' and checks only the first segment ("Bot: MACD" or "Backfilled: ...")
+      // so indicator values embedded in notes (e.g. "MACD=0.023") do not cause mis-attribution.
+      function parseStrategyForAttribution(row) {
+        // Priority 1: the strategy column if populated
+        if (row.strategy && typeof row.strategy === 'string' && row.strategy.trim()) {
+          return row.strategy.trim().toUpperCase();
+        }
+        // Priority 2: parse from notes, checking ONLY the first segment before any '|'
+        const notes = row.notes || '';
+        const firstSegment = notes.split('|')[0].toUpperCase();
+        if (firstSegment.includes('MACD'))                                  return 'MACD';
+        if (firstSegment.includes('RSI'))                                   return 'RSI';
+        if (firstSegment.includes('EMA2050') || firstSegment.includes('EMA 20/50'))   return 'EMA2050';
+        if (firstSegment.includes('EMA60200') || firstSegment.includes('EMA 60/200')) return 'EMA60200';
+        if (firstSegment.includes('COMBINED'))                              return 'COMBINED';
+        if (firstSegment.includes('SCAN'))                                  return 'SCAN';
+        if (firstSegment.includes('BACKFILLED') || firstSegment.includes('BOT:')) return 'COMBINED';
+        return 'COMBINED';
+      }
+
       // ── 1. Alpaca portfolio history (authoritative equity curve) ────────
       let equityCurve = [];
       let startingEquity = 0, currentEquity = 0;
@@ -4515,7 +4536,7 @@ module.exports = async function handler(req, res) {
       try {
         const { data, error } = await supabase
           .from('journal')
-          .select('symbol, entry_price, exit_price, pnl_pct, strategy, trade_date, created_at, hold_duration_minutes, exit_reason')
+          .select('symbol, entry_price, exit_price, pnl_pct, strategy, notes, trade_date, created_at, hold_duration_minutes, exit_reason')
           .not('pnl_pct', 'is', null)
           .gte('trade_date', cutoffDate)
           .order('trade_date', { ascending: true });
@@ -4529,8 +4550,14 @@ module.exports = async function handler(req, res) {
       let spyReturnPct = 0;
       let spyStartDate = null, spyEndDate = null;
       try {
-        const today = new Date().toISOString().split('T')[0];
-        const fromDate = new Date(Date.now() - days * 86400000).toISOString().split('T')[0];
+        // Use actual Alpaca equity curve dates when available so SPY comparison is apples-to-apples.
+        // Falls back to calendar range only if Alpaca history failed to load.
+        const today = equityCurve.length > 0
+          ? equityCurve[equityCurve.length - 1].date
+          : new Date().toISOString().split('T')[0];
+        const fromDate = equityCurve.length > 0
+          ? equityCurve[0].date
+          : new Date(Date.now() - days * 86400000).toISOString().split('T')[0];
         const polyRes = await fetch(
           `https://api.polygon.io/v2/aggs/ticker/SPY/range/1/day/${fromDate}/${today}?adjusted=true&apiKey=${process.env.POLYGON_API_KEY}`
         );
@@ -4611,7 +4638,7 @@ module.exports = async function handler(req, res) {
       // ── 6. Per-strategy breakdown ───────────────────────────────────────
       const byStrategyRaw = {};
       for (const t of closedTrades) {
-        const strat = t.strategy || 'UNKNOWN';
+        const strat = parseStrategyForAttribution(t);
         if (!byStrategyRaw[strat]) byStrategyRaw[strat] = { trades: [], wins: 0, losses: 0 };
         const pnl = parseFloat(t.pnl_pct);
         byStrategyRaw[strat].trades.push(pnl);
