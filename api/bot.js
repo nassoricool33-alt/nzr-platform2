@@ -4222,7 +4222,7 @@ module.exports = async function handler(req, res) {
   const validSecret = process.env.INTERNAL_API_SECRET;
   const origin = req.headers['origin'] || req.headers['referer'] || '';
   const isFromFrontend = !origin || origin.includes('nzr-platform2.vercel.app') || origin.includes('localhost');
-  const sensitiveTypes = ['scan','backfill','updatepnl','emergency','weights','memory'];
+  const sensitiveTypes = ['scan','backfill','updatepnl','emergency','weights','memory','performance'];
   const type   = (req.query.type || '').toLowerCase();
   if (validSecret && sensitiveTypes.includes(type) && secret !== validSecret && !isFromFrontend) {
     return res.status(401).json({ error: 'unauthorized' });
@@ -4459,6 +4459,221 @@ module.exports = async function handler(req, res) {
       });
     } catch(e) {
       return res.json({ error: e.message });
+    }
+  }
+
+  // ── PERFORMANCE ANALYTICS ──────────────────────────────────────────────────
+  if (type === 'performance') {
+    try {
+      const days = Math.min(365, Math.max(1, parseInt(req.query.days || '30', 10)));
+      const errors = [];
+
+      // ── 1. Alpaca portfolio history (authoritative equity curve) ────────
+      let equityCurve = [];
+      let startingEquity = 0, currentEquity = 0;
+      try {
+        const histRes = await fetch(
+          `${ALPACA_BASE}/v2/account/portfolio/history?period=${days}D&timeframe=1D`,
+          { headers: {
+              'APCA-API-KEY-ID': process.env.ALPACA_API_KEY,
+              'APCA-API-SECRET-KEY': process.env.ALPACA_SECRET_KEY
+          }}
+        );
+        const hist = await histRes.json();
+        if (hist && Array.isArray(hist.timestamp) && Array.isArray(hist.equity)) {
+          for (let i = 0; i < hist.timestamp.length; i++) {
+            const eq = hist.equity[i];
+            if (eq != null && eq > 0) {
+              // Alpaca timestamps can be seconds OR milliseconds depending on engine version.
+              // Detect: anything < 10^12 is seconds, >= 10^12 is ms.
+              const rawTs = hist.timestamp[i];
+              const msTs = rawTs < 1e12 ? rawTs * 1000 : rawTs;
+              equityCurve.push({
+                date: new Date(msTs).toISOString().split('T')[0],
+                equity: eq,
+                pnlDollars: hist.profit_loss?.[i] || 0,
+                pnlPct: hist.profit_loss_pct?.[i] != null
+                  ? parseFloat((hist.profit_loss_pct[i] * 100).toFixed(2))
+                  : 0
+              });
+            }
+          }
+          if (equityCurve.length > 0) {
+            startingEquity = equityCurve[0].equity;
+            currentEquity = equityCurve[equityCurve.length - 1].equity;
+          }
+        } else if (hist && hist.message) {
+          errors.push('alpaca_history: ' + hist.message);
+        }
+      } catch(e) {
+        errors.push('alpaca_history: ' + e.message);
+      }
+
+      // ── 2. Closed trades from journal ───────────────────────────────────
+      const cutoffDate = new Date(Date.now() - days * 86400000).toISOString().split('T')[0];
+      let closedTrades = [];
+      try {
+        const { data, error } = await supabase
+          .from('journal')
+          .select('symbol, entry_price, exit_price, pnl_pct, strategy, trade_date, created_at, hold_duration_minutes, exit_reason')
+          .not('pnl_pct', 'is', null)
+          .gte('trade_date', cutoffDate)
+          .order('trade_date', { ascending: true });
+        if (error) errors.push('journal: ' + error.message);
+        else closedTrades = data || [];
+      } catch(e) {
+        errors.push('journal: ' + e.message);
+      }
+
+      // ── 3. SPY benchmark via Polygon ────────────────────────────────────
+      let spyReturnPct = 0;
+      let spyStartDate = null, spyEndDate = null;
+      try {
+        const today = new Date().toISOString().split('T')[0];
+        const fromDate = new Date(Date.now() - days * 86400000).toISOString().split('T')[0];
+        const polyRes = await fetch(
+          `https://api.polygon.io/v2/aggs/ticker/SPY/range/1/day/${fromDate}/${today}?adjusted=true&apiKey=${process.env.POLYGON_API_KEY}`
+        );
+        const polyData = await polyRes.json();
+        if (polyData && Array.isArray(polyData.results) && polyData.results.length >= 2) {
+          const spyFirst = polyData.results[0];
+          const spyLast = polyData.results[polyData.results.length - 1];
+          spyReturnPct = parseFloat(((spyLast.c - spyFirst.o) / spyFirst.o * 100).toFixed(2));
+          spyStartDate = new Date(spyFirst.t).toISOString().split('T')[0];
+          spyEndDate = new Date(spyLast.t).toISOString().split('T')[0];
+        } else if (polyData && polyData.error) {
+          errors.push('polygon_spy: ' + polyData.error);
+        }
+      } catch(e) {
+        errors.push('polygon_spy: ' + e.message);
+      }
+
+      // ── 4. Equity metrics (drawdown, Sharpe) ────────────────────────────
+      const totalReturnDollars = currentEquity - startingEquity;
+      const totalReturnPct = startingEquity > 0
+        ? parseFloat(((totalReturnDollars / startingEquity) * 100).toFixed(2))
+        : 0;
+
+      let maxDrawdownPct = 0;
+      let runningPeak = startingEquity;
+      for (const pt of equityCurve) {
+        if (pt.equity > runningPeak) runningPeak = pt.equity;
+        const dd = runningPeak > 0 ? ((pt.equity - runningPeak) / runningPeak) * 100 : 0;
+        if (dd < maxDrawdownPct) maxDrawdownPct = dd;
+      }
+      maxDrawdownPct = parseFloat(maxDrawdownPct.toFixed(2));
+
+      const dailyReturns = [];
+      for (let i = 1; i < equityCurve.length; i++) {
+        const prev = equityCurve[i-1].equity;
+        const curr = equityCurve[i].equity;
+        if (prev > 0) dailyReturns.push((curr - prev) / prev);
+      }
+
+      let sharpeRatio = null;
+      if (dailyReturns.length >= 2) {
+        const mean = dailyReturns.reduce((a,b) => a+b, 0) / dailyReturns.length;
+        const variance = dailyReturns.reduce((s,r) => s + Math.pow(r - mean, 2), 0) / (dailyReturns.length - 1);
+        const std = Math.sqrt(variance);
+        const rfDaily = 0.0425 / 252;
+        if (std > 0) {
+          sharpeRatio = parseFloat((((mean - rfDaily) / std) * Math.sqrt(252)).toFixed(2));
+        }
+      }
+
+      // ── 5. Trade metrics ────────────────────────────────────────────────
+      const winners = closedTrades.filter(t => parseFloat(t.pnl_pct) > 0);
+      const losers  = closedTrades.filter(t => parseFloat(t.pnl_pct) < 0);
+      const totalTrades = closedTrades.length;
+      const winRate = totalTrades > 0
+        ? parseFloat(((winners.length / totalTrades) * 100).toFixed(1))
+        : 0;
+      const avgWin = winners.length > 0
+        ? parseFloat((winners.reduce((s,t) => s + parseFloat(t.pnl_pct), 0) / winners.length).toFixed(2))
+        : 0;
+      const avgLoss = losers.length > 0
+        ? parseFloat((losers.reduce((s,t) => s + parseFloat(t.pnl_pct), 0) / losers.length).toFixed(2))
+        : 0;
+      const expectancy = parseFloat((
+        (avgWin * (winRate / 100)) + (avgLoss * ((100 - winRate) / 100))
+      ).toFixed(3));
+      const profitFactor = (avgLoss !== 0 && losers.length > 0)
+        ? parseFloat((Math.abs(avgWin * winners.length) / Math.abs(avgLoss * losers.length)).toFixed(2))
+        : null;
+
+      const validHolds = closedTrades
+        .map(t => t.hold_duration_minutes)
+        .filter(h => h != null && h > 0);
+      const avgHoldMinutes = validHolds.length > 0
+        ? Math.round(validHolds.reduce((a,b) => a+b, 0) / validHolds.length)
+        : null;
+
+      // ── 6. Per-strategy breakdown ───────────────────────────────────────
+      const byStrategyRaw = {};
+      for (const t of closedTrades) {
+        const strat = t.strategy || 'UNKNOWN';
+        if (!byStrategyRaw[strat]) byStrategyRaw[strat] = { trades: [], wins: 0, losses: 0 };
+        const pnl = parseFloat(t.pnl_pct);
+        byStrategyRaw[strat].trades.push(pnl);
+        if (pnl > 0) byStrategyRaw[strat].wins++;
+        else if (pnl < 0) byStrategyRaw[strat].losses++;
+      }
+      const strategyStats = {};
+      for (const [strat, d] of Object.entries(byStrategyRaw)) {
+        const count = d.trades.length;
+        const wr = count > 0 ? (d.wins / count) * 100 : 0;
+        const avgPnl = count > 0 ? d.trades.reduce((a,b) => a+b, 0) / count : 0;
+        const sAvgWin  = d.wins   > 0 ? d.trades.filter(p => p > 0).reduce((a,b) => a+b, 0) / d.wins   : 0;
+        const sAvgLoss = d.losses > 0 ? d.trades.filter(p => p < 0).reduce((a,b) => a+b, 0) / d.losses : 0;
+        const sExp = (sAvgWin * (wr/100)) + (sAvgLoss * ((100 - wr)/100));
+        strategyStats[strat] = {
+          tradeCount: count,
+          winRate: parseFloat(wr.toFixed(1)),
+          avgPnl: parseFloat(avgPnl.toFixed(2)),
+          expectancy: parseFloat(sExp.toFixed(3))
+        };
+      }
+
+      // ── 7. Response ─────────────────────────────────────────────────────
+      return res.json({
+        period: {
+          days,
+          startDate: equityCurve[0]?.date || cutoffDate,
+          endDate: equityCurve[equityCurve.length - 1]?.date || new Date().toISOString().split('T')[0],
+          spyDateRange: spyStartDate && spyEndDate ? `${spyStartDate} to ${spyEndDate}` : null
+        },
+        equity: {
+          starting: parseFloat(startingEquity.toFixed(2)),
+          current: parseFloat(currentEquity.toFixed(2)),
+          totalReturnDollars: parseFloat(totalReturnDollars.toFixed(2)),
+          totalReturnPct,
+          maxDrawdownPct,
+          sharpeRatio
+        },
+        benchmark: {
+          spyReturnPct,
+          alphaPct: parseFloat((totalReturnPct - spyReturnPct).toFixed(2)),
+          outperforming: totalReturnPct > spyReturnPct
+        },
+        trades: {
+          total: totalTrades,
+          winners: winners.length,
+          losers: losers.length,
+          winRate,
+          avgWinPct: avgWin,
+          avgLossPct: avgLoss,
+          expectancy,
+          profitFactor,
+          avgHoldMinutes
+        },
+        byStrategy: strategyStats,
+        dailyEquity: equityCurve,
+        errors: errors.length > 0 ? errors : undefined
+      });
+
+    } catch(e) {
+      pushLog('PERFORMANCE_FATAL: ' + e.message, 'warn');
+      return res.status(500).json({ error: e.message });
     }
   }
 
