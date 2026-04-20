@@ -5364,12 +5364,14 @@ function attrRenderSimpleTable(tbodyId, rows) {
   }).join('');
 }
 
-/* ── WEBSOCKET REAL-TIME PRICE STREAMING ─────────── */
-// Tickers to subscribe to for real-time trade updates
+/* ── LIVE PRICE POLLING ─────────────────────────── */
+// Polygon Starter plan does not support WebSocket streaming, so we poll
+// the /api/quote endpoint for watched tickers every 20s during market hours.
 const WS_TICKERS=['AAPL','NVDA','TSLA','SPY','QQQ'];
-let _wsConn=null, _wsReconnectTimer=null, _wsToken=null;
+let _pollTimer=null;
 
-// Refresh UI elements that display live price for a symbol
+// Refresh UI elements that display live price for a symbol.
+// Kept as wsUpdateSymbol for backwards compatibility — called by polling loop.
 function wsUpdateSymbol(sym,price,ts){
   if(!Q[sym])Q[sym]={price,change:0,up:true};
   const prev=Q[sym].prevClose;
@@ -5399,53 +5401,36 @@ function wsUpdateSymbol(sym,price,ts){
   renderIndicesLive();
 }
 
-async function wsConnect(){
-  if(_wsConn&&(_wsConn.readyState===WebSocket.OPEN||_wsConn.readyState===WebSocket.CONNECTING))return;
-  try{
-    if(!_wsToken){
-      const r=await fetch('/api/market?type=wstoken');
-      if(!r.ok)return;
-      const d=await r.json();
-      _wsToken=d.token;
-    }
-    const ws=new WebSocket('wss://socket.polygon.io/stocks');
-    _wsConn=ws;
-
-    ws.onopen=()=>{
-      ws.send(JSON.stringify({action:'auth',params:_wsToken}));
-    };
-
-    ws.onmessage=(e)=>{
-      try{
-        const msgs=JSON.parse(e.data);
-        msgs.forEach(m=>{
-          if(m.ev==='authenticated'){
-            // Subscribe to trades for watched tickers
-            ws.send(JSON.stringify({action:'subscribe',params:WS_TICKERS.map(t=>'T.'+t).join(',')}));
-          } else if(m.ev==='T'&&m.sym&&m.p!=null){
-            // Trade event: m.sym = symbol, m.p = price, m.t = timestamp ms
-            wsUpdateSymbol(m.sym,m.p,m.t);
-          }
-        });
-      }catch{}
-    };
-
-    ws.onerror=()=>{_wsToken=null;};
-    ws.onclose=()=>{
-      _wsConn=null;
-      // Reconnect after 10s
-      if(_wsReconnectTimer)clearTimeout(_wsReconnectTimer);
-      _wsReconnectTimer=setTimeout(wsConnect,10000);
-    };
-  }catch{}
+// Poll every ticker once. Uses the existing loadQuote() which already
+// populates Q[sym] and handles errors.
+async function pollWatchedTickers(){
+  for(const sym of WS_TICKERS){
+    try{
+      const q=await loadQuote(sym);
+      if(q && typeof q.price==='number'){
+        wsUpdateSymbol(sym, q.price, Date.now());
+      }
+    }catch{/* loadQuote already logs errors */}
+  }
 }
 
-// Start WebSocket when market is open; poll every 60s to check
+// Start polling when market is open; recheck every 60s to start/stop.
 function initWebSocket(){
-  if(isMarketOpen()){wsConnect();}
+  if(isMarketOpen()){
+    pollWatchedTickers();
+    if(_pollTimer)clearInterval(_pollTimer);
+    _pollTimer=setInterval(pollWatchedTickers,20000);
+  }
   setInterval(()=>{
-    if(isMarketOpen()){wsConnect();}
-    else if(_wsConn){_wsConn.close();_wsConn=null;}
+    if(isMarketOpen()){
+      if(!_pollTimer){
+        pollWatchedTickers();
+        _pollTimer=setInterval(pollWatchedTickers,20000);
+      }
+    }else if(_pollTimer){
+      clearInterval(_pollTimer);
+      _pollTimer=null;
+    }
   },60000);
 }
 
