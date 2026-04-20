@@ -3111,13 +3111,25 @@ function timeAgo(unix){
   return Math.floor(diff/86400)+'d ago';
 }
 
+/* ── SHARED NEWS CACHE (60s TTL) ─────────────────── */
+let _newsMarketCache = null;
+async function getMarketNews() {
+  const now = Date.now();
+  if (_newsMarketCache && (now - _newsMarketCache.ts) < 60000) {
+    return _newsMarketCache.data;
+  }
+  const r = await fetch('/api/news?type=market');
+  if (!r.ok) throw new Error('fetch failed');
+  const data = await r.json();
+  _newsMarketCache = { ts: now, data };
+  return data;
+}
+
 async function buildNewsWidget(){
   const el=document.getElementById('news-widget');
   if(!el)return;
   try{
-    const r=await fetchWithRetry('/api/news?type=market', undefined, null);
-    if(!r.ok)throw new Error('fetch failed');
-    const data=await r.json();
+    const data=await getMarketNews();
     const items=(data.news||[]).slice(0,5);
     if(!items.length)throw new Error('empty');
     const ts=new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
@@ -3142,9 +3154,7 @@ async function buildNewsTicker(){
   const track=document.getElementById('news-ticker-track');
   if(!track)return;
   try{
-    const r=await fetch('/api/news?type=market');
-    if(!r.ok)throw new Error();
-    const data=await r.json();
+    const data=await getMarketNews();
     const items=(data.news||[]).filter(n=>n.headline).map(n=>n.headline);
     if(!items.length)throw new Error();
     const html=items.map((h,i)=>
