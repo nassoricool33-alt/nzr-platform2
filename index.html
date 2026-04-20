@@ -780,6 +780,7 @@ footer{border-top:1px solid var(--border);padding:32px 0;margin-top:80px}
         <button class="nav-tab" data-page="journal">Journal</button>
         <button class="nav-tab" data-page="leaderboard">Leaders</button>
         <button class="nav-tab" data-page="bot">Bot</button>
+        <button class="nav-tab" data-page="performance">Performance</button>
         <button class="nav-tab" data-page="options">Options</button>
         <button class="nav-tab" data-page="flow">Flow</button>
         <button class="nav-tab" data-page="pharma">Pharma</button>
@@ -1846,6 +1847,150 @@ footer{border-top:1px solid var(--border);padding:32px 0;margin-top:80px}
 </div>
 </div>
 
+<!-- ══════════════════════════════════ PERFORMANCE ══ -->
+<div id="page-performance" class="page">
+<div class="wrapper" style="padding-top:40px;padding-bottom:80px">
+
+  <div class="section-header sec-fade">
+    <div class="section-eyebrow">Analytics</div>
+    <div class="section-title">Bot <span>Performance</span></div>
+    <div class="section-sub" style="display:flex;gap:10px;align-items:center;margin-top:12px">
+      <select id="perf-days" class="bt-select" style="max-width:180px" onchange="loadPerformance()">
+        <option value="7">Last 7 days</option>
+        <option value="11" selected>Last 11 days</option>
+        <option value="30">Last 30 days</option>
+        <option value="90">Last 90 days</option>
+        <option value="365">Last 365 days</option>
+      </select>
+      <button class="bt-export-btn" onclick="loadPerformance()">REFRESH ↻</button>
+    </div>
+  </div>
+
+  <div id="perf-placeholder" class="sec-fade" style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:280px;background:var(--panel);border:1px solid var(--border);border-radius:var(--radius-lg);padding:40px">
+    <div class="loading-ring"></div>
+    <div style="font-family:var(--font-mono);font-size:12px;margin-top:10px;color:var(--text3)">Loading performance data…</div>
+  </div>
+
+  <div id="perf-content" style="display:none">
+
+    <!-- KPI tiles (row 1: equity) -->
+    <div class="bt-summary-grid sec-fade" style="animation-delay:50ms">
+      <div class="bt-stat">
+        <div class="bt-stat-lbl">Starting Equity</div>
+        <div class="bt-stat-val" id="perf-starting">--</div>
+        <div class="bt-stat-sub" id="perf-period">--</div>
+      </div>
+      <div class="bt-stat">
+        <div class="bt-stat-lbl">Current Equity</div>
+        <div class="bt-stat-val" id="perf-current">--</div>
+      </div>
+      <div class="bt-stat">
+        <div class="bt-stat-lbl">Total Return</div>
+        <div class="bt-stat-val" id="perf-return">--</div>
+        <div class="bt-stat-sub" id="perf-return-dollars">--</div>
+      </div>
+      <div class="bt-stat">
+        <div class="bt-stat-lbl">Max Drawdown</div>
+        <div class="bt-stat-val" id="perf-drawdown">--</div>
+      </div>
+      <div class="bt-stat">
+        <div class="bt-stat-lbl">Sharpe (annualized)</div>
+        <div class="bt-stat-val" id="perf-sharpe">--</div>
+        <div class="bt-stat-sub" id="perf-sharpe-sub">--</div>
+      </div>
+    </div>
+
+    <!-- KPI tiles (row 2: vs SPY) -->
+    <div class="bt-summary-grid sec-fade" style="grid-template-columns:repeat(3,1fr);animation-delay:100ms">
+      <div class="bt-stat">
+        <div class="bt-stat-lbl">SPY Return (same period)</div>
+        <div class="bt-stat-val" id="perf-spy">--</div>
+        <div class="bt-stat-sub" id="perf-spy-range">--</div>
+      </div>
+      <div class="bt-stat">
+        <div class="bt-stat-lbl">Alpha vs SPY</div>
+        <div class="bt-stat-val" id="perf-alpha">--</div>
+        <div class="bt-stat-sub" id="perf-alpha-verdict">--</div>
+      </div>
+      <div class="bt-stat">
+        <div class="bt-stat-lbl">Profit Factor</div>
+        <div class="bt-stat-val" id="perf-pf">--</div>
+        <div class="bt-stat-sub">win$ / loss$</div>
+      </div>
+    </div>
+
+    <!-- KPI tiles (row 3: trades) -->
+    <div class="bt-summary-grid sec-fade" style="grid-template-columns:repeat(5,1fr);animation-delay:150ms">
+      <div class="bt-stat">
+        <div class="bt-stat-lbl">Total Trades</div>
+        <div class="bt-stat-val" id="perf-trades">--</div>
+        <div class="bt-stat-sub" id="perf-trades-sub">--</div>
+      </div>
+      <div class="bt-stat">
+        <div class="bt-stat-lbl">Win Rate</div>
+        <div class="bt-stat-val" id="perf-winrate">--</div>
+      </div>
+      <div class="bt-stat">
+        <div class="bt-stat-lbl">Avg Win</div>
+        <div class="bt-stat-val" id="perf-avgwin">--</div>
+      </div>
+      <div class="bt-stat">
+        <div class="bt-stat-lbl">Avg Loss</div>
+        <div class="bt-stat-val" id="perf-avgloss">--</div>
+      </div>
+      <div class="bt-stat">
+        <div class="bt-stat-lbl">Expectancy</div>
+        <div class="bt-stat-val" id="perf-exp">--</div>
+        <div class="bt-stat-sub">per trade</div>
+      </div>
+    </div>
+
+    <!-- Per-strategy breakdown table -->
+    <div class="section-header sec-fade" style="animation-delay:200ms;margin-top:32px">
+      <div class="section-eyebrow">Breakdown</div>
+      <div class="section-title">By <span>Strategy</span></div>
+    </div>
+    <div class="bt-table-wrap sec-fade" style="animation-delay:250ms">
+      <table class="bt-table">
+        <thead>
+          <tr>
+            <th>Strategy</th>
+            <th>Trades</th>
+            <th>Win Rate</th>
+            <th>Avg P&L</th>
+            <th>Expectancy</th>
+          </tr>
+        </thead>
+        <tbody id="perf-strategy-tbody"></tbody>
+      </table>
+    </div>
+
+    <!-- Daily equity curve table -->
+    <div class="section-header sec-fade" style="animation-delay:300ms;margin-top:32px">
+      <div class="section-eyebrow">History</div>
+      <div class="section-title">Daily <span>Equity</span></div>
+    </div>
+    <div class="bt-table-wrap sec-fade" style="animation-delay:350ms">
+      <table class="bt-table">
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>Equity</th>
+            <th>Daily P&L ($)</th>
+            <th>Daily P&L (%)</th>
+          </tr>
+        </thead>
+        <tbody id="perf-equity-tbody"></tbody>
+      </table>
+    </div>
+
+  </div>
+
+  <div id="perf-error" style="display:none;padding:40px;text-align:center;color:var(--red);font-family:var(--font-mono);font-size:12px"></div>
+
+</div>
+</div>
+
 <!-- ══════════════════════════════════ PHARMA ══ -->
 <div id="page-pharma" class="page">
 <div class="wrapper" style="padding-top:40px;padding-bottom:80px">
@@ -2360,10 +2505,131 @@ function showPage(id){
   if(id==='journal'&&currentUser){ loadJournal(currentUser.id); }
   if(id==='dashboard'){ loadPerfSummary(); loadMarketIntelligence(); }
   if(id==='options'){ loadPelosiIntel(); fetchOptionsLog(); }
+  if(id==='performance'){ loadPerformance(); }
 }
 document.querySelectorAll('.nav-tab').forEach(t=>{
   t.addEventListener('click',()=>showPage(t.dataset.page));
 });
+
+/* ── PERFORMANCE PAGE (bot analytics) ───────────── */
+async function loadPerformance() {
+  const placeholder = document.getElementById('perf-placeholder');
+  const content     = document.getElementById('perf-content');
+  const errorEl     = document.getElementById('perf-error');
+  const daysSel     = document.getElementById('perf-days');
+  const days        = daysSel ? daysSel.value : '11';
+
+  if (placeholder) placeholder.style.display = 'flex';
+  if (content)     content.style.display     = 'none';
+  if (errorEl)     errorEl.style.display     = 'none';
+
+  try {
+    const r = await fetch('/api/bot?type=performance&days=' + encodeURIComponent(days));
+    const data = await r.json();
+    if (!r.ok || data.error) throw new Error(data.error || 'Performance fetch failed');
+
+    // ── Row 1: equity ───────────────────────────────────────────────
+    const eq = data.equity || {};
+    const setTxt = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+    const color = (id, positive) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.style.color = positive ? 'var(--green)' : 'var(--red)';
+    };
+
+    setTxt('perf-starting', '$' + fmt$(eq.starting));
+    setTxt('perf-current',  '$' + fmt$(eq.current));
+    setTxt('perf-return',   fmtChg(eq.totalReturnPct));
+    setTxt('perf-return-dollars', (eq.totalReturnDollars >= 0 ? '+$' : '-$') + fmt$(Math.abs(eq.totalReturnDollars || 0)));
+    color('perf-return',    (eq.totalReturnPct || 0) >= 0);
+
+    setTxt('perf-drawdown', fmtChg(eq.maxDrawdownPct));
+    color('perf-drawdown',  (eq.maxDrawdownPct || 0) >= 0);
+
+    const sharpe = eq.sharpeRatio;
+    setTxt('perf-sharpe', sharpe == null ? 'N/A' : Number(sharpe).toFixed(2));
+    setTxt('perf-sharpe-sub', sharpe == null
+      ? 'Need ≥2 daily returns'
+      : (Math.abs(sharpe) > 4 ? 'Small sample — wait for 30d' : ''));
+
+    const p = data.period || {};
+    setTxt('perf-period', (p.startDate || '') + ' → ' + (p.endDate || ''));
+
+    // ── Row 2: vs SPY ───────────────────────────────────────────────
+    const bm = data.benchmark || {};
+    setTxt('perf-spy',   fmtChg(bm.spyReturnPct));
+    color('perf-spy',    (bm.spyReturnPct || 0) >= 0);
+    setTxt('perf-spy-range', p.spyDateRange || '');
+
+    setTxt('perf-alpha', fmtChg(bm.alphaPct));
+    color('perf-alpha',  (bm.alphaPct || 0) >= 0);
+    setTxt('perf-alpha-verdict', bm.outperforming ? 'Beating SPY' : 'Trailing SPY');
+
+    const tr = data.trades || {};
+    setTxt('perf-pf', tr.profitFactor == null ? 'N/A' : Number(tr.profitFactor).toFixed(2));
+
+    // ── Row 3: trades ──────────────────────────────────────────────
+    setTxt('perf-trades',    tr.total || 0);
+    setTxt('perf-trades-sub', (tr.winners || 0) + 'W / ' + (tr.losers || 0) + 'L');
+    setTxt('perf-winrate',   (tr.winRate == null ? '--' : Number(tr.winRate).toFixed(1) + '%'));
+    setTxt('perf-avgwin',    fmtChg(tr.avgWinPct));
+    color('perf-avgwin',     true);
+    setTxt('perf-avgloss',   fmtChg(tr.avgLossPct));
+    color('perf-avgloss',    false);
+    setTxt('perf-exp',       fmtChg(tr.expectancy));
+    color('perf-exp',        (tr.expectancy || 0) >= 0);
+
+    // ── Per-strategy breakdown ─────────────────────────────────────
+    const strat = data.byStrategy || {};
+    const stratTbody = document.getElementById('perf-strategy-tbody');
+    if (stratTbody) {
+      const rows = Object.entries(strat).sort((a, b) => (b[1].tradeCount || 0) - (a[1].tradeCount || 0));
+      stratTbody.innerHTML = rows.length === 0
+        ? '<tr><td colspan="5" style="text-align:center;color:var(--text3);padding:24px">No closed trades in this period</td></tr>'
+        : rows.map(([name, s]) => {
+            const winColor = (s.avgPnl || 0) >= 0 ? 'var(--green)' : 'var(--red)';
+            const expColor = (s.expectancy || 0) >= 0 ? 'var(--green)' : 'var(--red)';
+            return `<tr>
+              <td style="font-family:var(--font-mono);font-weight:700;color:var(--text)">${name}</td>
+              <td>${s.tradeCount || 0}</td>
+              <td>${s.winRate == null ? '--' : Number(s.winRate).toFixed(1) + '%'}</td>
+              <td style="color:${winColor}">${fmtChg(s.avgPnl)}</td>
+              <td style="color:${expColor}">${fmtChg(s.expectancy)}</td>
+            </tr>`;
+          }).join('');
+    }
+
+    // ── Daily equity curve ─────────────────────────────────────────
+    const daily = Array.isArray(data.dailyEquity) ? data.dailyEquity : [];
+    const eqTbody = document.getElementById('perf-equity-tbody');
+    if (eqTbody) {
+      eqTbody.innerHTML = daily.length === 0
+        ? '<tr><td colspan="4" style="text-align:center;color:var(--text3);padding:24px">No equity history available</td></tr>'
+        : daily.slice().reverse().map(d => {
+            const pnlC = (d.pnlDollars || 0) >= 0 ? 'var(--green)' : 'var(--red)';
+            const pct  = d.pnlPct || 0;
+            return `<tr>
+              <td style="font-family:var(--font-mono)">${d.date || ''}</td>
+              <td>$${fmt$(d.equity)}</td>
+              <td style="color:${pnlC}">${(d.pnlDollars >= 0 ? '+$' : '-$') + fmt$(Math.abs(d.pnlDollars || 0))}</td>
+              <td style="color:${pnlC}">${fmtChg(pct)}</td>
+            </tr>`;
+          }).join('');
+    }
+
+    if (placeholder) placeholder.style.display = 'none';
+    if (content)     content.style.display     = 'block';
+
+  } catch (e) {
+    if (placeholder) placeholder.style.display = 'none';
+    if (errorEl) {
+      errorEl.style.display = 'block';
+      errorEl.innerHTML = '<div style="font-size:28px;opacity:.35">⚠</div>'
+        + '<div>' + (e.message || 'Failed to load performance') + '</div>'
+        + '<div style="color:var(--text3);font-size:10px;margin-top:8px">Ensure the bot has been trading and try again.</div>';
+    }
+  }
+}
 
 /* ── PERFORMANCE SUMMARY BAR ────────────────────── */
 let _perfSummaryTimer = null;
