@@ -4772,72 +4772,23 @@ function btPctColor(v) {
 }
 
 async function runBacktest() {
-  const symbol      = (document.getElementById('bt-symbol')?.value || '').trim().toUpperCase();
-  const startDate   = document.getElementById('bt-start')?.value;
-  const endDate     = document.getElementById('bt-end')?.value;
-  const capital     = parseFloat(document.getElementById('bt-capital')?.value) || 10000;
-  const mode        = _btMode;
-  const dayStrategy   = document.getElementById('bt-day-strategy')?.value   || 'macd_crossover';
-  const swingStrategy = document.getElementById('bt-swing-strategy')?.value || 'combined';
-
-  const btn         = document.getElementById('bt-run-btn');
   const placeholder = document.getElementById('bt-placeholder');
   const summary     = document.getElementById('bt-summary');
+  const btn         = document.getElementById('bt-run-btn');
 
-  if (!symbol)                { alert('Enter a ticker symbol'); return; }
-  if (!startDate || !endDate) { alert('Select start and end dates'); return; }
-  if (startDate >= endDate)   { alert('End date must be after start date'); return; }
-
-  btn.disabled = true;
-  placeholder.style.display = 'flex';
-  placeholder.innerHTML = `<div class="loading-ring"></div>
-    <div style="font-family:var(--font-mono);font-size:12px;margin-top:10px">Running ${mode} backtest for ${symbol}…</div>`;
-  summary.style.display = 'none';
-
-  try {
-    const payload = { symbol, startDate, endDate, capital, mode, dayStrategy, swingStrategy };
-    const r    = await fetch('/api/backtest', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
-    const data = await r.json();
-    console.log('[backtest] Response:', data);
-
-    if (!r.ok || data.error) {
-      placeholder.style.display = 'flex';
-      placeholder.innerHTML = `<div style="font-size:28px;opacity:.35">⚠</div>
-        <div style="color:var(--red);font-family:var(--font-mono);font-size:12px;max-width:380px;text-align:center;line-height:1.6">${data.error || 'Backtest failed — check symbol and date range'}</div>`;
-      return;
-    }
-
-    placeholder.style.display = 'none';
-
-    if (data.mode === 'both') {
-      _btTrades = [
-        ...(data.dayResult?.trades   || []),
-        ...(data.swingResult?.trades || []),
-      ].sort((a, b) => a.entryDate.localeCompare(b.entryDate));
-      btShowMessage(data.dayResult?.message || data.swingResult?.message);
-      btRenderBothSummary(data);
-      btRenderTable(_btTrades);
-      btRenderSkippedSignals(null, data);
-      btRenderChart(data.dayResult?.summary?.equityCurve || [], data.swingResult?.summary?.equityCurve || [], data);
-      // Show swing walk-forward (daily bars — more meaningful); fall back to day
-      btRenderWalkForward(data.swingResult?.walkForward || data.dayResult?.walkForward || null);
-    } else {
-      _btTrades = data.trades || [];
-      btShowMessage(data.message);
-      btRenderSummary(data.summary, data.strategy || data.mode, data.barsUsed, data.capital, data.deployedCapital, data);
-      btRenderTable(_btTrades);
-      btRenderSkippedSignals(data.summary);
-      btRenderChart(data.summary.equityCurve || [], [], data);
-      btRenderWalkForward(data.walkForward || null);
-    }
-
-    summary.style.display = 'block';
-
-  } catch (err) {
+  if (summary) summary.style.display = 'none';
+  if (placeholder) {
     placeholder.style.display = 'flex';
-    placeholder.innerHTML = `<div style="color:var(--red);font-family:var(--font-mono);font-size:12px">⚠ ${err.message}</div>`;
-  } finally {
-    btn.disabled = false;
+    placeholder.innerHTML = `
+      <div style="font-size:32px;opacity:.35;margin-bottom:8px">🔧</div>
+      <div style="font-family:var(--font-display);font-size:16px;font-weight:700;color:var(--text);margin-bottom:6px">Backtest Engine — Coming Soon</div>
+      <div style="font-family:var(--font-mono);font-size:11px;color:var(--text3);max-width:380px;text-align:center;line-height:1.7">
+        Historical strategy simulation is under construction. Live paper trading is active — check the Performance tab for real results.
+      </div>`;
+  }
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'COMING SOON';
   }
 }
 
@@ -5283,7 +5234,7 @@ function btPreset(symbol, startDate, endDate, mode, dayStrat, swingStrat) {
   if (dayEl  && dayStrat)   dayEl.value = dayStrat;
   if (swgEl  && swingStrat) swgEl.value = swingStrat;
   btSetMode(mode || 'swing');
-  runBacktest();
+  runBacktest(); // now shows coming-soon notice
 }
 
 /* ── BOT PERFORMANCE ATTRIBUTION ────────────────── */
