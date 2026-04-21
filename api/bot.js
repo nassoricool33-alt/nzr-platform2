@@ -5999,6 +5999,72 @@ module.exports = async function handler(req, res) {
     return res.status(200).json({ status: 'ok', killSwitch, capitalAmount, timestamp: new Date().toISOString() });
   }
 
+  if (type === 'debug-entry-dates') {
+    try {
+      const alpacaKey    = process.env.ALPACA_API_KEY;
+      const alpacaSecret = process.env.ALPACA_SECRET_KEY;
+      if (!alpacaKey || !alpacaSecret) return res.status(500).json({ error: 'Alpaca keys not configured' });
+
+      const alpacaHeaders = {
+        'APCA-API-KEY-ID':     alpacaKey,
+        'APCA-API-SECRET-KEY': alpacaSecret,
+        'Content-Type':        'application/json',
+        'Accept':              'application/json',
+      };
+
+      // Fetch current positions
+      const posResp = await fetch(`${ALPACA_BASE}/v2/positions`, { headers: alpacaHeaders });
+      const positions = posResp.ok ? await posResp.json() : [];
+      if (!Array.isArray(positions)) return res.status(500).json({ error: 'positions fetch failed' });
+
+      // Fetch closed orders (same query as manageOpenPositions)
+      const ordersResp = await fetch(`${ALPACA_BASE}/v2/orders?status=closed&direction=desc&limit=500`, { headers: alpacaHeaders });
+      const orders = ordersResp.ok ? await ordersResp.json() : [];
+      if (!Array.isArray(orders)) return res.status(500).json({ error: 'orders fetch failed', httpStatus: ordersResp.status });
+
+      // Build entryDateMap (same logic as manageOpenPositions)
+      const entryDateMap = {};
+      const positionSymbols = new Set(positions.map(p => p.symbol));
+      let filledBuysSeen = 0;
+      let filledBuysForOpenPositions = 0;
+      for (const o of orders) {
+        if (!o || o.side !== 'buy' || o.status !== 'filled' || !o.filled_at || !o.symbol) continue;
+        filledBuysSeen++;
+        if (!positionSymbols.has(o.symbol)) continue;
+        filledBuysForOpenPositions++;
+        if (!entryDateMap[o.symbol]) entryDateMap[o.symbol] = o.filled_at;
+      }
+
+      // Build detailed position info with resolved dates
+      const now = Date.now();
+      const detail = positions.map(p => {
+        const entryIso = entryDateMap[p.symbol];
+        const daysHeld = entryIso ? Math.floor((now - new Date(entryIso).getTime()) / 86400000) : -1;
+        return {
+          symbol: p.symbol,
+          qty: p.qty,
+          avg_entry_price: p.avg_entry_price,
+          unrealized_plpc_pct: (parseFloat(p.unrealized_plpc) * 100).toFixed(2) + '%',
+          entry_date_resolved: entryIso || null,
+          days_held: daysHeld,
+          alpaca_position_created_at: p.created_at || null,
+        };
+      });
+
+      return res.status(200).json({
+        total_positions: positions.length,
+        total_orders_returned: orders.length,
+        filled_buys_seen: filledBuysSeen,
+        filled_buys_matching_open_positions: filledBuysForOpenPositions,
+        entry_date_map_size: Object.keys(entryDateMap).length,
+        entry_date_map: entryDateMap,
+        positions: detail,
+      });
+    } catch (e) {
+      return res.status(500).json({ error: e.message, stack: e.stack });
+    }
+  }
+
   // ── ORDER VALIDATION ─────────────────────────────────────────────────────────
   if (req.method !== 'POST') return res.status(405).json({ error: 'POST required' });
 
