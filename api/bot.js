@@ -3604,12 +3604,20 @@ async function updateClosedTrades() {
     for (const sellOrder of sellOrders) {
       const sellSymbol = (sellOrder.symbol || '').toUpperCase().trim();
       const sellPrice = parseFloat(sellOrder.filled_avg_price);
+      const sellFilledAtMs = sellOrder.filled_at ? new Date(sellOrder.filled_at).getTime() : 0;
 
-      // Find journal entries for this symbol (case-insensitive)
-      const candidates = openEntries.filter(e =>
-        !matchedEntryIds.has(e.id) &&
-        (e.symbol || '').toUpperCase().trim() === sellSymbol
-      );
+      // Find journal entries for this symbol that were created BEFORE this sell.
+      // A buy order must exist before its matching sell order — we enforce this
+      // temporal constraint to prevent matching old sells against new journal rows,
+      // which was producing negative hold durations and wrong P&L.
+      const candidates = openEntries.filter(e => {
+        if (matchedEntryIds.has(e.id)) return false;
+        if ((e.symbol || '').toUpperCase().trim() !== sellSymbol) return false;
+        if (!sellFilledAtMs) return true; // no timestamp info — fall back to old behavior
+        const entryTimeMs = e.created_at ? new Date(e.created_at).getTime() : 0;
+        if (!entryTimeMs) return true; // no entry timestamp — allow
+        return entryTimeMs < sellFilledAtMs; // entry must predate sell
+      });
 
       pushLog('MATCH_ATTEMPT: ' + sellSymbol + ' sell=$' + sellPrice.toFixed(2) + ' candidates=' + candidates.length + (candidates.length > 0 ? ' first_entry_price=$' + candidates[0].entry_price : ''), 'info');
 
