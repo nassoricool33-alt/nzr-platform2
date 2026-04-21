@@ -3182,6 +3182,36 @@ async function manageOpenPositions(prefetchedPositions, prefetchedAccount) {
 
   pushLog('POS_MGMT_START: ' + positions.length + ' open positions, unrealized=' + (totalUnrealizedPct * 100).toFixed(2) + '%', 'info');
 
+  // ── 1b. Resolve entry dates from Alpaca filled BUY orders ──────────────────
+  // Alpaca's /v2/positions does NOT return created_at — only orders have timestamps.
+  // We fetch recent filled buy orders and take the most recent filled_at per symbol
+  // as the authoritative entry date for the currently-open position.
+  // Uses 2.5s race timeout so a slow orders API call never blocks position mgmt.
+  const entryDateMap = {};
+  if (positions.length > 0) {
+    try {
+      const ordersResp = await Promise.race([
+        fetch(`${ALPACA_BASE}/v2/orders?status=closed&direction=desc&limit=500`, { headers: alpacaHeaders }).then(r => r.ok ? r.json() : null),
+        new Promise(resolve => setTimeout(() => resolve(null), 2500))
+      ]).catch(() => null);
+      if (Array.isArray(ordersResp)) {
+        // Alpaca returns orders in descending submission order. We filter to filled
+        // buys only, then for each symbol keep the FIRST encountered (= most recent).
+        const positionSymbols = new Set(positions.map(p => p.symbol));
+        for (const o of ordersResp) {
+          if (!o || o.side !== 'buy' || o.status !== 'filled' || !o.filled_at || !o.symbol) continue;
+          if (!positionSymbols.has(o.symbol)) continue;
+          if (!entryDateMap[o.symbol]) entryDateMap[o.symbol] = o.filled_at;
+        }
+        pushLog('ENTRY_DATE_MAP: resolved ' + Object.keys(entryDateMap).length + '/' + positions.length + ' position entry dates from Alpaca orders', 'info');
+      } else {
+        pushLog('ENTRY_DATE_MAP_SKIP: orders fetch timed out or returned non-array, falling back to "new" treatment', 'warn');
+      }
+    } catch (e) {
+      pushLog('ENTRY_DATE_MAP_ERR: ' + e.message + ' — falling back to "new" treatment', 'warn');
+    }
+  }
+
   // ── 2. Load position tracking states from Supabase (only for positions held >=1d) ──
   const posTrackMap = {};
   if (positions.length > 0) {
@@ -3191,7 +3221,9 @@ async function manageOpenPositions(prefetchedPositions, prefetchedAccount) {
       if (sbUrl && sbHdrs) {
         const oneDayAgo = Date.now() - 86400000;
         const oldPositions = positions.filter(p => {
-          const created = p.created_at ? new Date(p.created_at).getTime() : Date.now();
+          // Use entryDateMap (resolved from Alpaca orders above). Missing entry = "new" treatment.
+          const entryIso = entryDateMap[p.symbol];
+          const created = entryIso ? new Date(entryIso).getTime() : Date.now();
           return created < oneDayAgo;
         });
         pushLog('POS_STATE_FETCH: ' + oldPositions.length + '/' + positions.length + ' positions held >=1d, fetching state', 'info');
@@ -3229,9 +3261,10 @@ async function manageOpenPositions(prefetchedPositions, prefetchedAccount) {
     const side         = pos.side;
     const stateKey     = 'position_' + symbol;
     const posTrack     = posTrackMap[stateKey] || null;
-    // Use posTrack entryDate first, then Alpaca's created_at, then today as last resort
+    // Priority: posTrack.entryDate → entryDateMap (from Alpaca filled buys) → today (new)
+    // Alpaca's /v2/positions does NOT return created_at, so entryDateMap is authoritative.
     const entryDate    = posTrack?.entryDate
-      || (pos.created_at ? pos.created_at.split('T')[0] : null)
+      || (entryDateMap[symbol] ? entryDateMap[symbol].split('T')[0] : null)
       || new Date().toISOString().split('T')[0];
     const daysHeld     = Math.max(0, Math.floor((Date.now() - new Date(entryDate).getTime()) / 86400000));
 
