@@ -3261,10 +3261,11 @@ async function manageOpenPositions(prefetchedPositions, prefetchedAccount) {
     const side         = pos.side;
     const stateKey     = 'position_' + symbol;
     const posTrack     = posTrackMap[stateKey] || null;
-    // Priority: posTrack.entryDate → entryDateMap (from Alpaca filled buys) → today (new)
-    // Alpaca's /v2/positions does NOT return created_at, so entryDateMap is authoritative.
-    const entryDate    = posTrack?.entryDate
-      || (entryDateMap[symbol] ? entryDateMap[symbol].split('T')[0] : null)
+    // Priority: entryDateMap (authoritative, from Alpaca filled buys) → posTrack.entryDate (may be stale) → today
+    // entryDateMap is always the source of truth when available — it comes from Alpaca's filled_at timestamp
+    // on the actual buy order, which cannot be poisoned by bad prior writes.
+    const entryDate    = (entryDateMap[symbol] ? entryDateMap[symbol].split('T')[0] : null)
+      || posTrack?.entryDate
       || new Date().toISOString().split('T')[0];
     const daysHeld     = Math.max(0, Math.floor((Date.now() - new Date(entryDate).getTime()) / 86400000));
 
