@@ -1544,7 +1544,7 @@ async function runFullScan(testMode = false) {
     // Step D: Flash news detection
     if (Array.isArray(breakingNews.flashNewsItems) && breakingNews.flashNewsItems.length > 0) {
       const flash = breakingNews.flashNewsItems[0];
-      const haltUntil = Date.now() + 20 * 60 * 1000;
+      const haltUntil = Date.now() + 60 * 60 * 1000;  // 60 min for major events
       flashHaltExpiry = haltUntil;
       writeBotState('flash_news_halt', String(haltUntil));
       newsHalt = true;
