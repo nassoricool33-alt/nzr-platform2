@@ -337,7 +337,7 @@ async function getCapital() {
     const hdrs = _sbHeaders();
     if (!url || !hdrs) return 10000;
     const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), 3000);
+    const t = setTimeout(() => ctrl.abort(), 8000);
     let r;
     try { r = await fetch(`${url}/rest/v1/bot_state?key=eq.capital_amount&select=value`, { headers: hdrs, signal: ctrl.signal }); }
     finally { clearTimeout(t); }
@@ -4764,6 +4764,24 @@ module.exports = async function handler(req, res) {
     } catch(e) {
       console.log('[BOT] Capital load failed:', e.message);
     }
+  }
+
+  // ── CAPITAL SANITY CHECK — refuse risky operations if capital looks wrong ──
+  // Prevents $10K fallback (when Supabase read times out) from producing garbage
+  // exposure calculations (1134%) and potentially wrong position sizing.
+  // Only blocks TRADING routes — read-only routes (ping/log/weights/etc) still work.
+  const MIN_CAPITAL_FLOOR = 50000;
+  const isTradingRoute = (type === 'scan' || type === 'emergency');
+  if (isTradingRoute && (!capitalAmount || capitalAmount < MIN_CAPITAL_FLOOR)) {
+    const cap = capitalAmount || 0;
+    pushLog('CAPITAL_SANITY_FAIL: capital=$' + cap + ' below floor $' + MIN_CAPITAL_FLOOR + ' — refusing ' + type + ' (likely Supabase read failed, hit /api/bot?type=setcapital&amount=101000 to force reset)', 'block');
+    console.error('[BOT] CAPITAL SANITY FAIL: capital=' + cap + ', refusing ' + type);
+    return res.status(200).json({
+      success: false,
+      error: 'capital_sanity_fail',
+      message: 'Capital $' + cap + ' below safety floor $' + MIN_CAPITAL_FLOOR + '. Likely Supabase read failed. Hit /api/bot?type=setcapital&amount=101000 to force reset.',
+      capitalAmount: cap
+    });
   }
 
   // ══════════════════════════════════════════════════════════════════════════════
