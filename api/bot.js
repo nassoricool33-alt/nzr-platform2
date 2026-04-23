@@ -5497,8 +5497,8 @@ module.exports = async function handler(req, res) {
     console.log('[BOT] LOG route matched');
     try {
       const since = req.query.since;
-      // Fetch from Supabase: ascending order so frontend can append chronologically
-      let query = supabase.from('bot_logs').select('*').order('created_at', { ascending: true }).limit(200);
+      // Fetch NEWEST 200 rows (descending), we'll reverse for display
+      let query = supabase.from('bot_logs').select('*').order('created_at', { ascending: false }).limit(200);
       if (since) query = query.gt('created_at', since);
       const { data: logs, error } = await query;
       if (error) throw error;
