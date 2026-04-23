@@ -1329,6 +1329,12 @@ Headlines:\n${headlineList}`;
 
   breakingNewsBotCache = { ts: Date.now(), result };
   console.log(`[bot/news] breaking: ${headlines.length} headlines, ${highImpact.length} high-impact, pause=${marketPauseRecommended}`);
+  // Visibility log — write to bot_logs so we can audit what Claude analyzes every cycle
+  try {
+    const bullishList = Object.entries(sectorB).sort((a,b)=>b[1]-a[1]).slice(0,3).map(([s,n])=>`${s}(${n})`).join(',') || 'none';
+    const bearishList = Object.entries(sectorBear).sort((a,b)=>b[1]-a[1]).slice(0,3).map(([s,n])=>`${s}(${n})`).join(',') || 'none';
+    pushLog(`NEWS_SCAN: ${headlines.length} headlines, ${highImpact.length} high-impact, pause=${marketPauseRecommended}, bullish=${bullishList}, bearish=${bearishList}`, 'info');
+  } catch (e) { /* swallow — visibility only */ }
   return result;
 }
 
